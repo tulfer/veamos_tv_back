@@ -280,8 +280,19 @@ export async function syncPopularSeriesHandler(_request: FastifyRequest, reply: 
   }
 }
 
+async function validateBatchBatched(channels: LiveChannel[], batchSize = 30): Promise<LiveChannel[]> {
+  const valid: LiveChannel[] = [];
+  for (let i = 0; i < channels.length; i += batchSize) {
+    const batch = channels.slice(i, i + batchSize);
+    const result = await validateBatch(batch);
+    valid.push(...result);
+  }
+  logger.info({ total: valid.length }, 'Import batch validation complete');
+  return valid;
+}
+
 export async function importM3UHandler(request: FastifyRequest, reply: FastifyReply) {
-  const body = request.body as { url?: string; content?: string; country?: string } | undefined;
+  const body = request.body as { url?: string; content?: string; country?: string; skipValidation?: boolean } | undefined;
   if (!body?.url && !body?.content) {
     return reply.status(400).send({ error: 'Provide "url" or "content" with .m3u data' });
   }
@@ -301,7 +312,7 @@ export async function importM3UHandler(request: FastifyRequest, reply: FastifyRe
       return reply.status(400).send({ error: 'No channels found in the provided .m3u data' });
     }
 
-    const toValidate: LiveChannel[] = parsed.map((ch, idx) => ({
+    const channels: LiveChannel[] = parsed.map((ch, idx) => ({
       id: `import_${idx + 1}`,
       title: ch.title,
       logo: ch.logo,
@@ -309,14 +320,12 @@ export async function importM3UHandler(request: FastifyRequest, reply: FastifyRe
       url: ch.url,
       country: ch.country?.toUpperCase(),
       type: 'live' as const,
-      online: false,
+      online: true,
     }));
 
-    logger.info({ total: toValidate.length }, 'Validating imported channels...');
-    const valid = await validateBatch(toValidate);
-    logger.info({ valid: valid.length }, 'Import validation complete');
+    const toAdd = body.skipValidation ? channels : await validateBatchBatched(channels);
 
-    if (valid.length === 0) {
+    if (toAdd.length === 0) {
       return reply.send({ ok: true, imported: 0, skipped: 0, message: 'No valid channels found in the provided list' });
     }
 
@@ -326,7 +335,7 @@ export async function importM3UHandler(request: FastifyRequest, reply: FastifyRe
 
     const newChannels: LiveChannel[] = [];
     let skipped = 0;
-    for (const ch of valid) {
+    for (const ch of toAdd) {
       if (existingTitles.has(ch.title.toLowerCase().trim())) {
         skipped++;
       } else {
