@@ -23,6 +23,8 @@ export function loadSyncData(): SyncData | null {
     if (!Array.isArray(data.channels)) data.channels = [];
     if (!Array.isArray(data.popularMovies)) data.popularMovies = [];
     if (!Array.isArray(data.popularSeries)) data.popularSeries = [];
+    if (!Array.isArray(data.estrenoMovies)) data.estrenoMovies = [];
+    if (!Array.isArray(data.estrenoSeries)) data.estrenoSeries = [];
     return data;
   } catch (error) {
     logger.error({ error }, 'Failed to load sync data');

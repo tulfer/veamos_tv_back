@@ -176,6 +176,8 @@ export interface SyncData {
   channels: LiveChannel[];
   popularMovies: MediaItem[];
   popularSeries: MediaItem[];
+  estrenoMovies: SyncMovie[];
+  estrenoSeries: SyncSeries[];
   updatedAt: number;
 }
 

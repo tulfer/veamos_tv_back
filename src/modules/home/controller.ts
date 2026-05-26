@@ -17,10 +17,10 @@ export async function getHomeHandler(_request: FastifyRequest, reply: FastifyRep
       let series: MediaItem[] = [];
 
       if (synced) {
-        movies = (synced.popularMovies?.length ? synced.popularMovies : synced.movies).slice(0, PREVIEW_LIMIT).map((m) => ({
+        movies = (synced.estrenoMovies?.length ? synced.estrenoMovies : synced.movies).slice(0, PREVIEW_LIMIT).map((m) => ({
           id: m.id, title: m.title, poster: m.poster, rating: m.rating, year: m.year, type: 'movie' as const,
         }));
-        series = (synced.popularSeries?.length ? synced.popularSeries : synced.series).slice(0, PREVIEW_LIMIT).map((s) => ({
+        series = (synced.estrenoSeries?.length ? synced.estrenoSeries : synced.series).slice(0, PREVIEW_LIMIT).map((s) => ({
           id: s.id, title: s.title, poster: s.poster, rating: s.rating, year: s.year, type: 'series' as const,
         }));
       } else {

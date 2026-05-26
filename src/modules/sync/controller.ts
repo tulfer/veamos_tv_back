@@ -168,6 +168,8 @@ export async function syncMoviesHandler(request: FastifyRequest, reply: FastifyR
       channels: existing?.channels || [],
       popularMovies: existing?.popularMovies || [],
       popularSeries: existing?.popularSeries || [],
+      estrenoMovies: existing?.estrenoMovies || [],
+      estrenoSeries: existing?.estrenoSeries || [],
       updatedAt: Date.now(),
     });
     await closeBrowser();
@@ -198,6 +200,8 @@ export async function syncSeriesHandler(request: FastifyRequest, reply: FastifyR
       channels: existing?.channels || [],
       popularMovies: existing?.popularMovies || [],
       popularSeries: existing?.popularSeries || [],
+      estrenoMovies: existing?.estrenoMovies || [],
+      estrenoSeries: existing?.estrenoSeries || [],
       updatedAt: Date.now(),
     });
     await closeBrowser();
@@ -233,12 +237,78 @@ export async function syncAllHandler(request: FastifyRequest, reply: FastifyRepl
       channels: existing?.channels || [],
       popularMovies: existing?.popularMovies || [],
       popularSeries: existing?.popularSeries || [],
+      estrenoMovies: existing?.estrenoMovies || [],
+      estrenoSeries: existing?.estrenoSeries || [],
       updatedAt: Date.now(),
     });
     await closeBrowser();
     return reply.send({ ok: true, movies: finalMovies.length, series: finalSeries.length, replaced: shouldReplace });
   } catch (error) {
     logger.error({ error }, 'Full sync failed');
+    return reply.status(500).send({ error: 'Sync failed' });
+  }
+}
+
+export async function syncEstrenoMoviesHandler(request: FastifyRequest, reply: FastifyReply) {
+  memoryCache.flush();
+  const body = request.body as { pages?: string; replace?: boolean } | undefined;
+  const pages = parsePages(body?.pages);
+  if (pages.length === 0) {
+    return reply.status(400).send({ error: 'Provide pages in body, e.g. { "pages": "1-20" }' });
+  }
+  logger.info({ pages }, 'Starting estreno movies sync');
+
+  try {
+    const movies = await syncMovies(pages);
+    const existing = loadSyncData();
+    const shouldReplace = body?.replace === true;
+    const finalEstrenoMovies = shouldReplace ? movies : mergeByIdGeneric(movies, existing?.estrenoMovies || []);
+    saveSyncData({
+      movies: existing?.movies || [],
+      series: existing?.series || [],
+      channels: existing?.channels || [],
+      popularMovies: existing?.popularMovies || [],
+      popularSeries: existing?.popularSeries || [],
+      estrenoMovies: finalEstrenoMovies,
+      estrenoSeries: existing?.estrenoSeries || [],
+      updatedAt: Date.now(),
+    });
+    await closeBrowser();
+    return reply.send({ ok: true, estrenoMovies: finalEstrenoMovies.length, replaced: shouldReplace });
+  } catch (error) {
+    logger.error({ error }, 'Estreno movies sync failed');
+    return reply.status(500).send({ error: 'Sync failed' });
+  }
+}
+
+export async function syncEstrenoSeriesHandler(request: FastifyRequest, reply: FastifyReply) {
+  memoryCache.flush();
+  const body = request.body as { pages?: string; replace?: boolean } | undefined;
+  const pages = parsePages(body?.pages);
+  if (pages.length === 0) {
+    return reply.status(400).send({ error: 'Provide pages in body, e.g. { "pages": "1-20" }' });
+  }
+  logger.info({ pages }, 'Starting estreno series sync');
+
+  try {
+    const series = await syncSeries(pages);
+    const existing = loadSyncData();
+    const shouldReplace = body?.replace === true;
+    const finalEstrenoSeries = shouldReplace ? series : mergeByIdGeneric(series, existing?.estrenoSeries || []);
+    saveSyncData({
+      movies: existing?.movies || [],
+      series: existing?.series || [],
+      channels: existing?.channels || [],
+      popularMovies: existing?.popularMovies || [],
+      popularSeries: existing?.popularSeries || [],
+      estrenoMovies: existing?.estrenoMovies || [],
+      estrenoSeries: finalEstrenoSeries,
+      updatedAt: Date.now(),
+    });
+    await closeBrowser();
+    return reply.send({ ok: true, estrenoSeries: finalEstrenoSeries.length, replaced: shouldReplace });
+  } catch (error) {
+    logger.error({ error }, 'Estreno series sync failed');
     return reply.status(500).send({ error: 'Sync failed' });
   }
 }
@@ -259,6 +329,8 @@ export async function syncLiveHandler(request: FastifyRequest, reply: FastifyRep
       channels: finalChannels,
       popularMovies: existing?.popularMovies || [],
       popularSeries: existing?.popularSeries || [],
+      estrenoMovies: existing?.estrenoMovies || [],
+      estrenoSeries: existing?.estrenoSeries || [],
       updatedAt: Date.now(),
     });
     return reply.send({ ok: true, channels: finalChannels.length, replaced: shouldReplace });
@@ -284,6 +356,8 @@ export async function syncPopularMoviesHandler(request: FastifyRequest, reply: F
       channels: existing?.channels || [],
       popularMovies: finalPopularMovies,
       popularSeries: existing?.popularSeries || [],
+      estrenoMovies: existing?.estrenoMovies || [],
+      estrenoSeries: existing?.estrenoSeries || [],
       updatedAt: Date.now(),
     });
     return reply.send({ ok: true, popularMovies: finalPopularMovies.length, replaced: shouldReplace });
@@ -309,6 +383,8 @@ export async function syncPopularSeriesHandler(request: FastifyRequest, reply: F
       channels: existing?.channels || [],
       popularMovies: existing?.popularMovies || [],
       popularSeries: finalPopularSeries,
+      estrenoMovies: existing?.estrenoMovies || [],
+      estrenoSeries: existing?.estrenoSeries || [],
       updatedAt: Date.now(),
     });
     return reply.send({ ok: true, popularSeries: finalPopularSeries.length, replaced: shouldReplace });
@@ -388,6 +464,8 @@ export async function importM3UHandler(request: FastifyRequest, reply: FastifyRe
       channels: [...existingChannels, ...newChannels],
       popularMovies: existing?.popularMovies || [],
       popularSeries: existing?.popularSeries || [],
+      estrenoMovies: existing?.estrenoMovies || [],
+      estrenoSeries: existing?.estrenoSeries || [],
       updatedAt: Date.now(),
     });
 

@@ -28,7 +28,7 @@ export async function getMoviesHandler(request: FastifyRequest, reply: FastifyRe
       type: 'movie' as const,
     }));
 
-    return reply.send({ page: pageNum, totalPages, total: items.length, items });
+    return reply.send({ page: pageNum, totalPages, total: synced.length, items });
   }
 
   const result = await getCachedOrFetch(
