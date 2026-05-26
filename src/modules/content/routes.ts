@@ -72,8 +72,21 @@ export async function contentRoutes(app: FastifyInstance) {
     }
 
     if (id.startsWith('live_')) {
-      const channels = await getCachedOrFetch('live:channels', () => fetchLiveChannels(), 300);
-      const channel = channels.find((ch: LiveChannel) => ch.id === id);
+      // Intentar obtener el canal desde los datos sincronizados primero
+      const synced = loadSyncData();
+      const syncedChannels = synced?.channels;
+      let channel: LiveChannel | undefined;
+
+      if (syncedChannels && syncedChannels.length > 0) {
+        channel = syncedChannels.find((ch) => ch.id === id);
+      }
+
+      // Si no se encuentra en los datos sincronizados, buscar en el proveedor (caché)
+      if (!channel) {
+        const channels = await getCachedOrFetch('live:channels', () => fetchLiveChannels(), 300);
+        channel = channels.find((ch: LiveChannel) => ch.id === id);
+      }
+
       if (!channel) {
         return reply.status(404).send({ error: 'Channel not found', id });
       }

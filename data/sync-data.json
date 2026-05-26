@@ -91881,6 +91881,23 @@
   ],
   "channels": [
     {
+      "id": "chatytv_canal-caracol-hd-en-vivo",
+      "title": "Canal Caracol TV En Vivo",
+      "group": "Canales TV",
+      "url": "https://jetpack.wordpress.com/jetpack-comment/?blogid=125011703&postid=12908&comment_registration=0&require_name_email=1&stc_enabled=0&stb_enabled=0&show_avatars=1&avatar_default=mystery&greeting=Deja+un+comentario&jetpack_comments_nonce=440428d2a5&greeting_reply=Responder+a+%25s&color_scheme=light&lang=es_ES&jetpack_version=15.8&iframe_unique_id=1&show_cookie_consent=0&has_cookie_consent=0&is_current_user_subscribed=0&token_key=%3Bnormal%3B&sig=f7570dbaa4cf8aee4f41dec86939bc89ef1ed7be#parent=https%3A%2F%2Fwww.chatytvgratis.net%2Fcanal-caracol-tv-en-vivo%2F",
+      "type": "live",
+      "online": true
+    },
+    {
+      "id": "live_1",
+      "title": "Canal Caracol Mix",
+      "group": "Canales TV",
+      "url": "https://jmp2.uk/rok-c5c6a54fbd0328b108453e2537b7eee1.m3u8",
+      "country": "CO",
+      "type": "live",
+      "online": true
+    },
+    {
       "id": "live_2",
       "title": "Avivamiento TV (1080p) [Not 24/7]",
       "logo": "https://i.imgur.com/ydoBp3b.png",
@@ -105588,5 +105605,5 @@
       ]
     }
   ],
-  "updatedAt": 1779821447577
+  "updatedAt": 1779833134977
 }
