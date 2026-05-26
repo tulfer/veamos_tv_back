@@ -1,0 +1,29 @@
+# Firebase App Hosting configuration
+runtime: nodejs20
+
+env:
+  - variable: NODE_ENV
+    value: production
+  - variable: PORT
+    value: "8080"
+  - variable: FIREBASE_PROJECT_ID
+    value: veamos-tv
+  - variable: JWT_EXPIRES_IN
+    value: 7d
+  - variable: JWT_REFRESH_EXPIRES_IN
+    value: 30d
+  - variable: SCRAPE_INTERVAL_MINUTES
+    value: "30"
+
+# Secret environment variables (set in Firebase Console)
+# - JWT_SECRET
+# - FIREBASE_CLIENT_EMAIL
+# - FIREBASE_PRIVATE_KEY
+# - FIREBASE_DATABASE_URL
+# - REDIS_URL
+
+scaling:
+  minInstances: 1
+  maxInstances: 10
+  targetCPUUtilization: 0.7
+  targetMemoryUtilization: 0.75
