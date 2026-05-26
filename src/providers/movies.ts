@@ -6,7 +6,7 @@ import { MediaItem, ContentDetail, CastMember, VideoLanguage, VideoServer } from
 import { resolveVideoUrl } from '../services/video-resolver';
 
 const BASE_URL = 'https://www.pelisplushd.la';
-const MOVIES_URL = `${BASE_URL}/peliculas`;
+const MOVIES_URL = `${BASE_URL}/peliculas/estrenos`;
 
 function extractIdFromUrl(url: string): string {
   const parts = url.replace(BASE_URL, '').split('/').filter(Boolean);
