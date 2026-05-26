@@ -157,7 +157,7 @@ export async function scrapeSeriesDetail(id: string): Promise<ContentDetail | nu
     }
 
     const description = $('.description, .sinopsis, [class*="sinopsis"]').first().text().trim() || 'Description not available';
-    const poster = $('.poster img, .cover img, .Poster img, [class*="poster"] img').first().attr('src') || '';
+    const poster = $('img[src*="/poster/"]').first().attr('src') || '';
     const backdrop = $('.backdrop img, .background img').first().attr('src') || poster;
 
     const genres: string[] = [];

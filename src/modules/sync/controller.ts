@@ -54,8 +54,8 @@ async function syncMovies(pages: number[]): Promise<SyncMovie[]> {
         results.push({
           id: detail.id,
           title: detail.title,
-          poster: detail.poster,
-          backdrop: detail.backdrop,
+          poster: detail.poster || item.poster,
+          backdrop: detail.backdrop || item.poster,
           rating: detail.rating,
           year: detail.year,
           description: detail.description,
@@ -100,8 +100,8 @@ async function syncSeries(pages: number[]): Promise<SyncSeries[]> {
         results.push({
           id: detail.id,
           title: detail.title,
-          poster: detail.poster,
-          backdrop: detail.backdrop,
+          poster: detail.poster || item.poster,
+          backdrop: detail.backdrop || item.poster,
           rating: detail.rating,
           year: detail.year,
           description: detail.description,
