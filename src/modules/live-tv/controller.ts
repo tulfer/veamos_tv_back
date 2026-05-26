@@ -147,6 +147,50 @@ export async function getChatytvChannelHandler(request: FastifyRequest, reply: F
   }
 }
 
+export async function getTvPorInternet2Handler(request: FastifyRequest, reply: FastifyReply) {
+  const { slug } = request.params as any;
+
+  if (!slug || typeof slug !== 'string') {
+    return reply.status(400).send({ error: 'Slug parameter is required (e.g., caracol-en-vivo-por-internet)' });
+  }
+
+  try {
+    const result = await getChannelStream('tvporinternet2', slug);
+    if (!result) {
+      return reply.status(404).send({ error: 'Channel not found or unavailable' });
+    }
+
+    // Agregar a la lista de canales sincronizados
+    const existing = loadSyncData();
+    const channels = existing?.channels || [];
+
+    // Buscar si ya existe
+    const existingIndex = channels.findIndex((ch) => ch.id === result.id);
+    if (existingIndex !== -1) {
+      // Mover al inicio
+      channels.splice(existingIndex, 1);
+    }
+    // Agregar al inicio
+    channels.unshift(result);
+
+    saveSyncData({
+      movies: existing?.movies || [],
+      series: existing?.series || [],
+      channels,
+      popularMovies: existing?.popularMovies || [],
+      popularSeries: existing?.popularSeries || [],
+      estrenoMovies: existing?.estrenoMovies || [],
+      estrenoSeries: existing?.estrenoSeries || [],
+      updatedAt: Date.now(),
+    });
+
+    memoryCache.del('live:channels');
+    return reply.send({ ok: true, channel: result, message: 'Channel added at the beginning of the list' });
+  } catch (error) {
+    return reply.status(500).send({ error: 'Failed to add channel' });
+  }
+}
+
 export async function getWsDeportesChannelHandler(request: FastifyRequest, reply: FastifyReply) {
   const { parameter } = request.params as any;
 

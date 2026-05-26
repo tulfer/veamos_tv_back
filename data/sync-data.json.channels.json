@@ -1,15 +1,18 @@
 [
   {
-    "id": "live_canal-caracol-hd-en-vivo",
-    "title": "Canal Caracol TV En Vivo",
+    "id": "live_caracol-en-vivo-por-internet",
+    "title": "Caracol TV HD",
+    "logo": "https://upload.wikimedia.org/wikipedia/commons/2/29/Caracol_Televisi%C3%B3n_logo_2023.png",
     "group": "Canales TV",
-    "url": "https://cdn.tdtcloud.xyz/embed.php?id=caracol",
+    "url": "https://regionales.saohgdasregions.fun:9092/MTgxLjUxLjg5LjQ0/17_.m3u8?token=eIBhk0wf9aAIG1_d6WpB2A&expires=1779879110",
+    "country": "CO",
     "type": "live",
     "online": true
   },
   {
     "id": "live_1",
     "title": "Canal Caracol Mix",
+    "logo": "https://www.caracoltvcorporativo.com/sites/default/files/styles/corporativo_16_9_1366_768_r/public/mix_partnerassets2_1920x1080.png.webp?itok=yuWLkAn2",
     "group": "Canales TV",
     "url": "https://jmp2.uk/rok-c5c6a54fbd0328b108453e2537b7eee1.m3u8",
     "country": "CO",

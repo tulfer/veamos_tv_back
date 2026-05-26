@@ -7,6 +7,7 @@ import {
   getValidationStatusHandler,
   getChatytvChannelHandler,
   getWsDeportesChannelHandler,
+  getTvPorInternet2Handler,
 } from './controller';
 
 export async function liveTVRoutes(app: FastifyInstance) {
@@ -17,4 +18,5 @@ export async function liveTVRoutes(app: FastifyInstance) {
   app.get('/live/validation-status', getValidationStatusHandler);
   app.post('/live/channels/add/chatytv/:channel', getChatytvChannelHandler);
   app.post('/live/channels/add/wsdeportes/:parameter', getWsDeportesChannelHandler);
+  app.post('/live/channels/add/tvporinternet2/:slug', getTvPorInternet2Handler);
 }
