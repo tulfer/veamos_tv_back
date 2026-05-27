@@ -155,13 +155,21 @@ function extractRefreshSource(refreshUrl?: string): 'tvporinternet2' | 'cablevis
   return null;
 }
 
-function extractSlugFromUrl(refreshUrl?: string): string | null {
+function extractSlugFromUrl(refreshUrl?: string, proveedor?: string): string | null {
   if (!refreshUrl) return null;
   try {
     const urlObj = new URL(refreshUrl);
+
+    // Para wsdeportes, el slug está en el query param "v"
+    if (proveedor === 'wsdeportes') {
+      const v = urlObj.searchParams.get('v');
+      if (v) return v;
+    }
+
+    // Para cablevisionhd y tvporinternet2, el slug está en el path
     const pathname = urlObj.pathname.replace(/^\//, '');
     const slug = pathname.replace(/\.\w+$/, ''); // remove .html or .php
-    return slug;
+    return slug || null;
   } catch {
     return null;
   }
@@ -188,7 +196,7 @@ export async function refreshExpiredChannelsHandler(_request: FastifyRequest, re
       continue;
     }
 
-    const slug = extractSlugFromUrl(ch.refreshUrl);
+    const slug = extractSlugFromUrl(ch.refreshUrl, source);
     if (!slug) {
       continue;
     }
@@ -259,11 +267,11 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
       continue;
     }
 
-    // Extraer slug de la refreshUrl
-    const slug = extractSlugFromUrl(ch.refreshUrl);
+    // Extraer slug de la refreshUrl según el proveedor
+    const slug = extractSlugFromUrl(ch.refreshUrl, source);
     if (!slug) {
       failedChannels.push({ id: ch.id, error: 'No se pudo extraer slug de refreshUrl' });
-      logger.warn({ id: ch.id, refreshUrl: ch.refreshUrl }, 'No se pudo extraer slug');
+      logger.warn({ id: ch.id, refreshUrl: ch.refreshUrl, proveedor: source }, 'No se pudo extraer slug');
       continue;
     }
 
@@ -334,6 +342,7 @@ export async function getTvPorInternet2Handler(request: FastifyRequest, reply: F
       online: true,
       refreshUrl: result.refreshUrl,
       refreshOption: option || undefined,
+      proveedor: 'tvporinternet2',
     };
 
     // Agregar a la lista de canales sincronizados
@@ -397,6 +406,7 @@ export async function getCablevisionHdHandler(request: FastifyRequest, reply: Fa
       online: true,
       refreshUrl: result.refreshUrl,
       refreshOption: option || undefined,
+      proveedor: 'cablevisionhd',
     };
 
     // Agregar a la lista de canales sincronizados
@@ -459,6 +469,7 @@ export async function getWsDeportesChannelHandler(request: FastifyRequest, reply
       type: 'live',
       online: true,
       refreshUrl: result.refreshUrl,
+      proveedor: 'wsdeportes',
     };
 
     // Agregar a la lista de canales sincronizados
