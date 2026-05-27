@@ -8,7 +8,7 @@ build:
 
 run:
   commands:
-    - node dist/main.js
+    - npm start
 
 env:
   - variable: NODE_ENV

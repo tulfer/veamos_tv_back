@@ -15,6 +15,13 @@ import { homeRoutes } from './modules/home/routes';
 import { contentRoutes } from './modules/content/routes';
 import { syncRoutes } from './modules/sync/routes';
 
+process.on('uncaughtException', (err) => {
+  process.stderr.write(`UNCAUGHT EXCEPTION: ${err.message}\n${err.stack}\n`);
+});
+process.on('unhandledRejection', (err: any) => {
+  process.stderr.write(`UNHANDLED REJECTION: ${err?.message || err}\n`);
+});
+
 async function buildServer() {
   const app = Fastify({
     logger: false,
