@@ -91881,6 +91881,26 @@
   ],
   "channels": [
     {
+      "id": "live_directv-sports-en-vivo-por-internet",
+      "title": "DirecTV Sports",
+      "logo": "https://images.seeklogo.com/logo-png/39/1/directv-sports-logo-png_seeklogo-396503.png",
+      "group": "Canales TV",
+      "country": "CO",
+      "url": "https://deportes.ksdjugfsddeports.com:9092/MTgxLjUxLjg5LjQ0/3_.m3u8?token=tXujq-x8yRoR6nVF_U5wxw&expires=1779870509",
+      "type": "live",
+      "online": true
+    },
+    {
+      "id": "live_rcn-en-vivo-por-internet",
+      "title": "Canal RCN",
+      "logo": "https://imagenes.portafolio.co/files/image_1200_600/uploads/2024/10/16/67102ae198e0c.png",
+      "group": "Canales TV",
+      "country": "CO",
+      "url": "https://regionales.saohgdasregions.fun:9092/MTgxLjUxLjg5LjQ0/18_.m3u8?token=VqamS-NxM_5tPrv_SJaiRw&expires=1779880420",
+      "type": "live",
+      "online": true
+    },
+    {
       "id": "live_caracol-en-vivo-por-internet",
       "title": "Caracol TV HD",
       "logo": "https://upload.wikimedia.org/wikipedia/commons/2/29/Caracol_Televisi%C3%B3n_logo_2023.png",
@@ -91893,7 +91913,7 @@
     {
       "id": "live_1",
       "title": "Canal Caracol Mix",
-      "logo": "https://www.caracoltvcorporativo.com/sites/default/files/styles/corporativo_16_9_1366_768_r/public/mix_partnerassets2_1920x1080.png.webp?itok=yuWLkAn2",
+      "logo": "https://tkt1957.com/wp-content/uploads/2024/08/caracol_website-1.jpg",
       "group": "Canales TV",
       "url": "https://jmp2.uk/rok-c5c6a54fbd0328b108453e2537b7eee1.m3u8",
       "country": "CO",
@@ -91983,6 +92003,7 @@
     {
       "id": "live_10",
       "title": "Noticias RCN",
+      "logo": "https://upload.wikimedia.org/wikipedia/commons/6/6a/Noticias_RCN_%28Colombia%29_logo.png",
       "group": "Canales TV",
       "url": "https://jmp2.uk/rok-a9aae4e62e6fd8e401033cd14ceeaaa2.m3u8",
       "country": "CO",
@@ -105617,5 +105638,5 @@
       ]
     }
   ],
-  "updatedAt": 1779835939962
+  "updatedAt": 1779838122981
 }
