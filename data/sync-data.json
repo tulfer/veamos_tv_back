@@ -91881,6 +91881,30 @@
   ],
   "channels": [
     {
+      "id": "live_espn-4-en-vivo",
+      "title": "ESPN 4",
+      "logo": "https://pbs.twimg.com/media/FFgbMMcXwAAXWYX.jpg",
+      "group": "Canales TV",
+      "country": "CO",
+      "url": "https://deportes.ksdjugfsddeports.com:9092/MTgxLjUxLjg5LjQ0/23_.m3u8?token=xm-2cEVpgex7Ri0dvIsbYg&expires=1779879710",
+      "type": "live",
+      "online": true,
+      "refreshUrl": "https://www.cablevisionhd.com/espn-4-en-vivo.php",
+      "refreshOption": "Opción 3"
+    },
+    {
+      "id": "live_espn-3-en-vivo",
+      "title": "ESPN 3",
+      "logo": "https://espnpressroom.com/us/files/2011/10/ESPN3_Logo_Resize2.jpg",
+      "group": "Canales TV",
+      "country": "CO",
+      "url": "https://deportes.ksdjugfsddeports.com:9092/MTgxLjUxLjg5LjQ0/15_.m3u8?token=M7do04o2j9CTJ1VyhcJuTA&expires=1779879405",
+      "type": "live",
+      "online": true,
+      "refreshUrl": "https://www.cablevisionhd.com/espn-3-en-vivo.php",
+      "refreshOption": "Opción 1"
+    },
+    {
       "id": "live_espn-premium-en-vivo",
       "title": "ESPN Premium",
       "logo": "https://images.seeklogo.com/logo-png/22/1/espn-deportes-logo-png_seeklogo-226943.png",
@@ -105770,5 +105794,5 @@
       ]
     }
   ],
-  "updatedAt": 1779846809138
+  "updatedAt": 1779853218647
 }

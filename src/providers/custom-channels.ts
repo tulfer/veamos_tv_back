@@ -248,35 +248,172 @@ export async function getWsDeportes(parameter: string): Promise<LiveChannel | nu
   const cached = memoryCache.get<LiveChannel>(cacheKey);
   if (cached) return cached;
 
+  let browser: any = null;
   try {
     const url = `${WSDEPORTES_BASE}/?v=${parameter}`;
-    const html = await fetchHTML(url);
-    const $ = cheerio.load(html);
+    logger.info({ parameter, url }, 'Fetching channel from wsdeportes with Playwright');
 
-    // Buscar la URL del stream HLS del reproductor
-    let streamUrl: string | undefined;
+    browser = await chromium.launch({ headless: true });
+    const context = await browser.newContext({
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    });
+    const page = await context.newPage();
 
-    // Buscar en etiquetas script por la configuración del reproductor
-    const scripts = $('script').toArray();
-    for (const script of scripts) {
-      const content = $(script).html() || '';
-      // Buscar URL HLS en el contenido del script
-      const hlsMatch = content.match(/https?:\/\/[^\s"'<>]+\.m3u8/);
-      if (hlsMatch) {
-        streamUrl = hlsMatch[0];
-        break;
+    // Interceptar peticiones de red para capturar URLs de streaming
+    const capturedUrls: string[] = [];
+    page.on('request', (request: any) => {
+      const reqUrl = request.url();
+      if (reqUrl.includes('.m3u8') || reqUrl.includes('.m3u') || reqUrl.includes('.ts') ||
+          reqUrl.includes('mywebtv') || reqUrl.includes('tdtcloud') || reqUrl.includes('hls')) {
+        capturedUrls.push(reqUrl);
+        logger.info({ url: reqUrl.substring(0, 250) }, 'Captured streaming request from wsdeportes');
       }
-      // Buscar también URLs de streaming genéricas
-      const streamMatch = content.match(/https?:\/\/[^\s"'<>]*mywebtv[^\s"'<>]+/);
-      if (streamMatch) {
-        streamUrl = streamMatch[0];
-        break;
+    });
+
+    page.on('response', (response: any) => {
+      const respUrl = response.url();
+      if (respUrl.includes('.m3u8') || respUrl.includes('.m3u') || respUrl.includes('mywebtv') ||
+          respUrl.includes('tdtcloud') || respUrl.includes('hls')) {
+        if (!capturedUrls.includes(respUrl)) {
+          capturedUrls.push(respUrl);
+          logger.info({ url: respUrl.substring(0, 250) }, 'Captured streaming response from wsdeportes');
+        }
+      }
+    });
+
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.waitForTimeout(5000);
+
+    // Intentar hacer clic en elementos que puedan iniciar el video/reproductor
+    const clickSelectors = [
+      'button',
+      'a[href]',
+      '[onclick]',
+      '[class*="play"]',
+      '[class*="repro"]',
+      '[class*="ver"]',
+      '.player',
+      '#player',
+      '.video-container',
+      '.embed-responsive',
+      '.entry-content a',
+      '.post-content a',
+      '.main a',
+      '[class*="btn"]',
+    ];
+
+    for (const selector of clickSelectors) {
+      try {
+        const elements = await page.$$(selector);
+        for (const el of elements) {
+          const text = await el.textContent().catch(() => '');
+          if (text && (text.toLowerCase().includes('ver') || text.toLowerCase().includes('repro') ||
+              text.toLowerCase().includes('play') || text.toLowerCase().includes('online') ||
+              text.toLowerCase().includes('canal') || text.toLowerCase().includes('aqui') ||
+              text.toLowerCase().includes('accede') || text.toLowerCase().includes('ingresa'))) {
+            logger.info({ selector, text: text.substring(0, 100) }, 'Clicking element with play-related text');
+            await el.click().catch(() => {});
+            await page.waitForTimeout(2000);
+            break;
+          }
+        }
+      } catch (e) {
+        // ignore
       }
     }
 
-    // Si no encontramos URL en scripts, construir la URL conocida
+    // Esperar más tiempo para que carguen los iframes dinámicos
+    await page.waitForTimeout(5000);
+
+    const html = await page.content();
+    const $ = cheerio.load(html);
+
+    await page.close();
+
+    // Log todos los iframes para debug
+    const allIframes = $('iframe');
+    logger.info({ parameter, iframeCount: allIframes.length }, 'All iframes found on wsdeportes');
+    allIframes.each((i, el) => {
+      const src = $(el).attr('src') || 'no-src';
+      const id = $(el).attr('id') || 'no-id';
+      logger.info({ index: i, src: src.substring(0, 250), id }, `Iframe ${i}`);
+    });
+
+    let streamUrl: string | undefined;
+
+    // Estrategia 1: URLs capturadas por red
+    if (capturedUrls.length > 0) {
+      const m3u8Url = capturedUrls.find((u) => u.includes('.m3u8') || u.includes('.m3u'));
+      const streamingUrl = capturedUrls.find((u) => u.includes('mywebtv') || u.includes('tdtcloud') || u.includes('hls'));
+      streamUrl = m3u8Url || streamingUrl || capturedUrls[0];
+      logger.info({ url: streamUrl.substring(0, 250), total: capturedUrls.length }, 'Using captured network URL from wsdeportes');
+    }
+
+    // Estrategia 2: Buscar iframe de video real
     if (!streamUrl) {
-      streamUrl = `https://w1327.mywebtv.cloud/hls/${parameter}/`;
+      for (let i = 0; i < allIframes.length; i++) {
+        const src = $(allIframes[i]).attr('src');
+        if (!src || src === 'about:blank' || src.includes('jetpack') || src.includes('wordpress') ||
+            src.includes('comment') || src.includes('disqus') || src.includes('facebook') ||
+            src.includes('googleads') || src.includes('doubleclick') || src.includes('ads')) continue;
+
+        const allow = $(allIframes[i]).attr('allow') || '';
+        const allowfullscreen = $(allIframes[i]).attr('allowfullscreen') !== undefined;
+        const hasVideoFeatures = allowfullscreen ||
+          allow.includes('autoplay') ||
+          allow.includes('encrypted-media') ||
+          allow.includes('picture-in-picture');
+
+        if (src.startsWith('http') && src.length > 10 && (hasVideoFeatures || src.includes('embed') || src.includes('player') || src.includes('tv'))) {
+          streamUrl = src;
+          logger.info({ src: src.substring(0, 250), allow }, 'Found video iframe on wsdeportes');
+          break;
+        }
+      }
+    }
+
+    // Estrategia 3: Cualquier iframe no-blacklisted
+    if (!streamUrl) {
+      for (let i = 0; i < allIframes.length; i++) {
+        const src = $(allIframes[i]).attr('src');
+        if (src && src.startsWith('http') && src.length > 10 && !src.includes('jetpack') &&
+            !src.includes('wordpress') && !src.includes('comment') && !src.includes('googleads')) {
+          streamUrl = src;
+          logger.info({ src: src.substring(0, 250) }, 'Found fallback iframe on wsdeportes');
+          break;
+        }
+      }
+    }
+
+    // Estrategia 4: Buscar URLs m3u8 en el HTML completo
+    if (!streamUrl) {
+      const bodyHtml = $.html();
+      const m3u8Matches = bodyHtml.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|m3u)[^\s"'<>]*/gi);
+      if (m3u8Matches && m3u8Matches.length > 0) {
+        streamUrl = m3u8Matches[0];
+        logger.info({ url: streamUrl.substring(0, 250) }, 'Found m3u8 URL in page HTML on wsdeportes');
+      }
+    }
+
+    // Estrategia 5: Buscar en scripts por URLs de streaming
+    if (!streamUrl) {
+      const scripts = $('script').toArray();
+      for (const script of scripts) {
+        const content = $(script).html() || '';
+        if (content.length < 200000) {
+          const urlMatch = content.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|ts|mp4|m3u)[^\s"'<>]*/i);
+          if (urlMatch) {
+            streamUrl = urlMatch[0];
+            logger.info({ url: streamUrl.substring(0, 250) }, 'Found stream URL in script on wsdeportes');
+            break;
+          }
+        }
+      }
+    }
+
+    if (!streamUrl) {
+      logger.warn({ parameter, url, capturedUrls }, 'No valid stream source found on wsdeportes');
+      return null;
     }
 
     // Extraer título
@@ -292,13 +429,18 @@ export async function getWsDeportes(parameter: string): Promise<LiveChannel | nu
       url: streamUrl,
       type: 'live',
       online: true,
+      refreshUrl: url,
     };
 
     memoryCache.set(cacheKey, result, 3600000);
     return result;
-  } catch (error) {
-    logger.error({ error, parameter }, 'Failed to fetch from wsdeportes');
+  } catch (error: any) {
+    logger.error({ error: error.message, parameter }, 'Failed to fetch from wsdeportes with Playwright');
     return null;
+  } finally {
+    if (browser) {
+      await browser.close().catch(() => {});
+    }
   }
 }
 

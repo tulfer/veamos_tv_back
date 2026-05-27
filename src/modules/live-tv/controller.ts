@@ -358,29 +358,47 @@ export async function getCablevisionHdHandler(request: FastifyRequest, reply: Fa
 
 export async function getWsDeportesChannelHandler(request: FastifyRequest, reply: FastifyReply) {
   const { parameter } = request.params as any;
+  const { title, logo, country } = request.body as any;
 
   if (!parameter || typeof parameter !== 'string') {
     return reply.status(400).send({ error: 'Parameter is required (winsports, winsportsmas, etc.)' });
   }
 
+  if (!title || typeof title !== 'string') {
+    return reply.status(400).send({ error: 'title is required in body' });
+  }
+
   try {
     const result = await getChannelStream('wsdeportes', parameter);
-    if (!result) {
+    if (!result || !result.url) {
       return reply.status(404).send({ error: 'Channel not found or unavailable' });
     }
+
+    // Construir el canal con los datos personalizados del body
+    const channelData: LiveChannel = {
+      id: result.id,
+      title: title,
+      logo: logo || undefined,
+      group: 'Canales Deportivos',
+      country: country || undefined,
+      url: result.url,
+      type: 'live',
+      online: true,
+      refreshUrl: result.refreshUrl,
+    };
 
     // Agregar a la lista de canales sincronizados
     const existing = loadSyncData();
     const channels = existing?.channels || [];
 
     // Buscar si ya existe
-    const existingIndex = channels.findIndex((ch) => ch.id === result.id);
+    const existingIndex = channels.findIndex((ch) => ch.id === channelData.id);
     if (existingIndex !== -1) {
       // Mover al inicio
       channels.splice(existingIndex, 1);
     }
     // Agregar al inicio
-    channels.unshift(result);
+    channels.unshift(channelData);
 
     saveSyncData({
       movies: existing?.movies || [],
@@ -394,7 +412,7 @@ export async function getWsDeportesChannelHandler(request: FastifyRequest, reply
     });
 
     memoryCache.del('live:channels');
-    return reply.send({ ok: true, channel: result, message: 'Channel added at the beginning of the list' });
+    return reply.send({ ok: true, channel: channelData, message: 'Channel added at the beginning of the list' });
   } catch (error) {
     return reply.status(500).send({ error: 'Failed to add channel' });
   }
