@@ -1,5 +1,25 @@
 [
   {
+    "id": "live_tyc-sports-en-vivo-por-internet",
+    "title": "TyC Sports",
+    "logo": "https://images.seeklogo.com/logo-png/34/1/tyc-sports-logo-png_seeklogo-340604.png",
+    "group": "Canales TV",
+    "country": "CO",
+    "url": "https://deportes.ksdjugfsddeports.com:9092/MTgxLjUxLjg5LjQ0/6_.m3u8?token=D0X4ykPX77P6bMHPHXXttg&expires=1779873175",
+    "type": "live",
+    "online": true
+  },
+  {
+    "id": "live_espn-en-vivo-por-internet",
+    "title": "ESPN",
+    "logo": "https://images.seeklogo.com/logo-png/28/1/espn-logo-png_seeklogo-283139.png",
+    "group": "Canales TV",
+    "country": "CO",
+    "url": "https://deportes.ksdjugfsddeports.com:9092/MTgxLjUxLjg5LjQ0/13_.m3u8?token=JRXEEc5r_uQdo76o1T-gbw&expires=1779872991",
+    "type": "live",
+    "online": true
+  },
+  {
     "id": "live_directv-sports-en-vivo-por-internet",
     "title": "DirecTV Sports",
     "logo": "https://images.seeklogo.com/logo-png/39/1/directv-sports-logo-png_seeklogo-396503.png",

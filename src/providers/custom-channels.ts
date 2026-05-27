@@ -62,11 +62,11 @@ export async function getChatytv(channel: string): Promise<LiveChannel | null> {
       }
     });
 
-    // Navegar a la página con timeout más largo
-    await page.goto(url, { waitUntil: 'networkidle', timeout: 45000 });
+    // Navegar a la página - usar domcontentloaded para evitar timeout por networkidle
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
-    // Esperar a que cargue el contenido
-    await page.waitForTimeout(3000);
+    // Esperar un poco para que el JS renderice el contenido
+    await page.waitForTimeout(5000);
 
     // Buscar cualquier tipo de contenedor de video/reproductor y hacer clic
     const clickTargets = [
@@ -339,8 +339,8 @@ export async function getTvPorInternet2(slug: string): Promise<LiveChannel | nul
       }
     });
 
-    await page.goto(url, { waitUntil: 'networkidle', timeout: 45000 });
-    await page.waitForTimeout(3000);
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.waitForTimeout(5000);
 
     // Intentar hacer clic en botones o enlaces relacionados con reproducción
     const clickSelectors = [
