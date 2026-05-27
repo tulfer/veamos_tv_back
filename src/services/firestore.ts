@@ -1,11 +1,18 @@
 import { getFirestore } from '../config/firebase';
 
-const db = getFirestore();
+let db: ReturnType<typeof getFirestore> | null = null;
+
+function getDb() {
+  if (!db) {
+    db = getFirestore();
+  }
+  return db;
+}
 
 export const collections = {
-  users: () => db.collection('users'),
-  cache: () => db.collection('cache'),
-  recommendations: () => db.collection('recommendations'),
+  users: () => getDb().collection('users'),
+  cache: () => getDb().collection('cache'),
+  recommendations: () => getDb().collection('recommendations'),
 };
 
 export async function getUserDoc(uid: string) {

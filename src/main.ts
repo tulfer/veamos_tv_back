@@ -15,6 +15,8 @@ import { homeRoutes } from './modules/home/routes';
 import { contentRoutes } from './modules/content/routes';
 import { syncRoutes } from './modules/sync/routes';
 
+process.stderr.write('Starting Veamos TV API initialization...\n');
+
 process.on('uncaughtException', (err) => {
   process.stderr.write(`UNCAUGHT EXCEPTION: ${err.message}\n${err.stack}\n`);
 });
