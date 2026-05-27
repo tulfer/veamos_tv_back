@@ -1,28 +1,26 @@
 # Firebase App Hosting configuration
-runConfig:
-  # Increase this value if you'd like to automatically spin up
-  # more instances in response to increased traffic.
-  maxInstances: 1
-#runtime: nodejs20
+runtime: nodejs20
 
-#build:
-#  commands:
-#    - npm install
-#    - npm run build
+build:
+  commands:
+    - npm install
+    - npm run build
 
-#env:
-#  - variable: NODE_ENV
-#    value: production
-#    availability:
-#      - RUNTIME
-#  - variable: FIREBASE_PROJECT_ID
-#    value: veamos-tv
-#  - variable: JWT_EXPIRES_IN
-#    value: 7d
-#  - variable: JWT_REFRESH_EXPIRES_IN
-#    value: 30d
-#  - variable: SCRAPE_INTERVAL_MINUTES
-#    value: "30"
+env:
+  - variable: NODE_ENV
+    value: production
+    availability:
+      - RUNTIME
+  - variable: PORT
+    value: "8080"
+  - variable: FIREBASE_PROJECT_ID
+    value: veamos-tv
+  - variable: JWT_EXPIRES_IN
+    value: 7d
+  - variable: JWT_REFRESH_EXPIRES_IN
+    value: 30d
+  - variable: SCRAPE_INTERVAL_MINUTES
+    value: "30"
 
 # Secret environment variables (set in Firebase Console)
 # - JWT_SECRET
@@ -31,8 +29,8 @@ runConfig:
 # - FIREBASE_DATABASE_URL
 # - REDIS_URL
 
-#scaling:
-#  minInstances: 1
-#  maxInstances: 10
-#  targetCPUUtilization: 0.7
-#  targetMemoryUtilization: 0.75
+scaling:
+  minInstances: 1
+  maxInstances: 10
+  targetCPUUtilization: 0.7
+  targetMemoryUtilization: 0.75
