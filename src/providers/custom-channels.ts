@@ -1,5 +1,4 @@
 import * as cheerio from 'cheerio';
-import { chromium } from 'playwright';
 import { fetchHTML } from '../utils/http';
 import { logger } from '../utils/logger';
 import { memoryCache } from '../cache/memory';
@@ -33,7 +32,8 @@ export async function getChatytv(channel: string): Promise<LiveChannel | null> {
     logger.info({ channel, url }, 'Fetching channel from chatytvgratis');
 
     // Usar Playwright para renderizar JavaScript
-    browser = await chromium.launch({ headless: true });
+    const { chromium: playwrightChromium } = await import('playwright');
+browser = await playwrightChromium.launch({ headless: true });
     const context = await browser.newContext({
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     });
@@ -253,7 +253,8 @@ export async function getWsDeportes(parameter: string): Promise<LiveChannel | nu
     const url = `${WSDEPORTES_BASE}/?v=${parameter}`;
     logger.info({ parameter, url }, 'Fetching channel from wsdeportes with Playwright');
 
-    browser = await chromium.launch({ headless: true });
+    const { chromium: playwrightChromium } = await import('playwright');
+browser = await playwrightChromium.launch({ headless: true });
     const context = await browser.newContext({
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     });
@@ -454,7 +455,8 @@ export async function getTvPorInternet2(slug: string, option?: string): Promise<
     const url = `${TVPORINTERNET2_BASE}/${slug}.html`;
     logger.info({ slug, url, option }, 'Fetching channel from tvporinternet2');
 
-    browser = await chromium.launch({ headless: true });
+    const { chromium: playwrightChromium } = await import('playwright');
+browser = await playwrightChromium.launch({ headless: true });
     const context = await browser.newContext({
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     });
@@ -684,7 +686,8 @@ export async function getCablevisionHd(slug: string, option?: string): Promise<L
     const url = `${CABLEVISIONHD_BASE}/${slug}.php`;
     logger.info({ slug, url, option }, 'Fetching channel from cablevisionhd');
 
-    browser = await chromium.launch({ headless: true });
+    const { chromium: playwrightChromium } = await import('playwright');
+browser = await playwrightChromium.launch({ headless: true });
     const context = await browser.newContext({
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     });
