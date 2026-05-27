@@ -8,7 +8,8 @@
     "url": "https://ag9wzq.fubohd.com/winplus/mono.m3u8?token=04952e98e7407f7c9f730f44d8f151f854b6ffd9-10-1779872429-1779854429",
     "type": "live",
     "online": true,
-    "refreshUrl": "https://wsdeportes.net/?v=winsportsmas&op=2"
+    "refreshUrl": "https://wsdeportes.net/?v=winsportsmas&op=2",
+    "proveedor": "wsdeportes"
   },
   {
     "id": "live_espn7&op=2",
@@ -19,7 +20,8 @@
     "url": "https://dw5pdgvk.fubohd.com/espn7/mono.m3u8?token=be61affb1c3f2edc4f0322b2aeb5bb58895985d8-94-1779872136-1779854136",
     "type": "live",
     "online": true,
-    "refreshUrl": "https://wsdeportes.net/?v=espn7&op=2"
+    "refreshUrl": "https://wsdeportes.net/?v=espn7&op=2",
+    "proveedor": "wsdeportes"
   },
   {
     "id": "live_espn6&op=2",
@@ -30,7 +32,8 @@
     "url": "https://qzv4jmsc.fubohd.com/espn6/mono.m3u8?token=32461f8d89ce2f795d852fdf1827ce81349c950d-2a-1779872093-1779854093",
     "type": "live",
     "online": true,
-    "refreshUrl": "https://wsdeportes.net/?v=espn6&op=2"
+    "refreshUrl": "https://wsdeportes.net/?v=espn6&op=2",
+    "proveedor": "wsdeportes"
   },
   {
     "id": "live_espn5&op=2",
@@ -41,7 +44,8 @@
     "url": "https://ym9yzq.fubohd.com/espn5/mono.m3u8?token=ac77da84ab4dc928a377e849baaca683b2abc533-5b-1779872039-1779854039",
     "type": "live",
     "online": true,
-    "refreshUrl": "https://wsdeportes.net/?v=espn5&op=2"
+    "refreshUrl": "https://wsdeportes.net/?v=espn5&op=2",
+    "proveedor": "wsdeportes"
   },
   {
     "id": "live_espn2&op=2",
@@ -52,7 +56,8 @@
     "url": "https://dw5pdgvk.fubohd.com/espn2/mono.m3u8?token=d93de3a6bf7f8e48677978afc41eb579bd300485-f3-1779871942-1779853942",
     "type": "live",
     "online": true,
-    "refreshUrl": "https://wsdeportes.net/?v=espn2&op=2"
+    "refreshUrl": "https://wsdeportes.net/?v=espn2&op=2",
+    "proveedor": "wsdeportes"
   },
   {
     "id": "live_dsportsmas&op=2",
@@ -63,7 +68,8 @@
     "url": "https://bgfuzq.fubohd.com/dsportsplus/mono.m3u8?token=20ef3bfec5c718397cd5536ff168670de95af1c8-c0-1779871820-1779853820",
     "type": "live",
     "online": true,
-    "refreshUrl": "https://wsdeportes.net/?v=dsportsmas&op=2"
+    "refreshUrl": "https://wsdeportes.net/?v=dsportsmas&op=2",
+    "proveedor": "wsdeportes"
   },
   {
     "id": "live_dsports2&op=4",
@@ -74,7 +80,8 @@
     "url": "https://8c51.streameasthd.net/global/dsports2/index.m3u8?token=1247dfb804aca86de50683392b33d7212983125f-52-1779899556-1779845556&ip=181.51.89.44",
     "type": "live",
     "online": true,
-    "refreshUrl": "https://wsdeportes.net/?v=dsports2&op=4"
+    "refreshUrl": "https://wsdeportes.net/?v=dsports2&op=4",
+    "proveedor": "wsdeportes"
   },
   {
     "id": "live_winsports&op=3",
@@ -85,7 +92,8 @@
     "url": "https://anvtcax.fubohd.com/winsports/mono.m3u8?token=23d3b5b91cca8bce2d1b88452d0fa5b3ec1b5502-14-1779871340-1779853340",
     "type": "live",
     "online": true,
-    "refreshUrl": "https://wsdeportes.net/?v=winsports&op=3"
+    "refreshUrl": "https://wsdeportes.net/?v=winsports&op=3",
+    "proveedor": "wsdeportes"
   },
   {
     "id": "live_espn-4-en-vivo",
@@ -97,7 +105,8 @@
     "type": "live",
     "online": true,
     "refreshUrl": "https://www.cablevisionhd.com/espn-4-en-vivo.php",
-    "refreshOption": "Opción 3"
+    "refreshOption": "Opción 3",
+    "proveedor": "cablevisionhd"
   },
   {
     "id": "live_espn-3-en-vivo",
@@ -109,7 +118,8 @@
     "type": "live",
     "online": true,
     "refreshUrl": "https://www.cablevisionhd.com/espn-3-en-vivo.php",
-    "refreshOption": "Opción 1"
+    "refreshOption": "Opción 1",
+    "proveedor": "cablevisionhd"
   },
   {
     "id": "live_espn-premium-en-vivo",
@@ -121,7 +131,8 @@
     "type": "live",
     "online": true,
     "refreshUrl": "https://www.cablevisionhd.com/espn-premium-en-vivo.php",
-    "refreshOption": "Opción 1"
+    "refreshOption": "Opción 1",
+    "proveedor": "cablevisionhd"
   },
   {
     "id": "live_directv-sports-plus-en-vivo",
