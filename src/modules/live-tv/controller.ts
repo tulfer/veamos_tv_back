@@ -149,7 +149,7 @@ export async function getChatytvChannelHandler(request: FastifyRequest, reply: F
 
 export async function getTvPorInternet2Handler(request: FastifyRequest, reply: FastifyReply) {
   const { slug } = request.params as any;
-  const { title, logo, country } = request.body as any;
+  const { title, logo, country, option } = request.body as any;
 
   if (!slug || typeof slug !== 'string') {
     return reply.status(400).send({ error: 'Slug parameter is required (e.g., caracol-en-vivo-por-internet)' });
@@ -160,7 +160,7 @@ export async function getTvPorInternet2Handler(request: FastifyRequest, reply: F
   }
 
   try {
-    const result = await getChannelStream('tvporinternet2', slug);
+    const result = await getChannelStream('tvporinternet2', slug, option || undefined);
     if (!result || !result.url) {
       return reply.status(404).send({ error: 'Channel not found or unavailable' });
     }

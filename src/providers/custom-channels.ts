@@ -62,10 +62,10 @@ export async function getChatytv(channel: string): Promise<LiveChannel | null> {
       }
     });
 
-    // Navegar a la página - usar domcontentloaded para evitar timeout por networkidle
+    // Navegar a la página con timeout más largo
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
-    // Esperar un poco para que el JS renderice el contenido
+    // Esperar a que cargue el contenido
     await page.waitForTimeout(5000);
 
     // Buscar cualquier tipo de contenedor de video/reproductor y hacer clic
@@ -92,8 +92,6 @@ export async function getChatytv(channel: string): Promise<LiveChannel | null> {
         const elements = await page.$$(selector);
         for (const el of elements) {
           const text = await el.textContent().catch(() => '');
-          const href = await el.getAttribute('href').catch(() => '');
-          const innerHtml = await el.innerHTML().catch(() => '');
           
           // Buscar elementos que contengan texto relacionado con ver/reproducir
           if (text && (text.toLowerCase().includes('ver') || text.toLowerCase().includes('repro') || 
@@ -304,15 +302,15 @@ export async function getWsDeportes(parameter: string): Promise<LiveChannel | nu
   }
 }
 
-export async function getTvPorInternet2(slug: string): Promise<LiveChannel | null> {
-  const cacheKey = `tvporinternet2:${slug}`;
+export async function getTvPorInternet2(slug: string, option?: string): Promise<LiveChannel | null> {
+  const cacheKey = `tvporinternet2:${slug}:${option || 'default'}`;
   const cached = memoryCache.get<LiveChannel>(cacheKey);
   if (cached) return cached;
 
   let browser: any = null;
   try {
     const url = `${TVPORINTERNET2_BASE}/${slug}.html`;
-    logger.info({ slug, url }, 'Fetching channel from tvporinternet2');
+    logger.info({ slug, url, option }, 'Fetching channel from tvporinternet2');
 
     browser = await chromium.launch({ headless: true });
     const context = await browser.newContext({
@@ -342,39 +340,75 @@ export async function getTvPorInternet2(slug: string): Promise<LiveChannel | nul
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.waitForTimeout(5000);
 
-    // Intentar hacer clic en botones o enlaces relacionados con reproducción
-    const clickSelectors = [
-      'button',
-      'a[href]',
-      '[onclick]',
-      '[class*="play"]',
-      '[class*="repro"]',
-      '[class*="ver"]',
-      '.player',
-      '#player',
-      '.video-container',
-      '.embed-responsive',
-      '.entry-content a',
-      '.post-content a',
-    ];
-    for (const selector of clickSelectors) {
-      try {
-        const elements = await page.$$(selector);
-        for (const el of elements) {
+    // Si se especificó una opción, buscar el botón exacto por su texto
+    if (option) {
+      const optionLower = option.toLowerCase();
+      logger.info({ option }, 'Looking for option button');
+
+      // Intentar encontrar el botón que contenga el texto de la opción
+      const allButtons = await page.$$('button, a, [role="button"], .option-btn, [class*="opcion"], [class*="option"], [class*="tab"], [class*="btn"]');
+      let clicked = false;
+      for (const btn of allButtons) {
+        const text = await btn.textContent().catch(() => '');
+        if (text && text.toLowerCase().includes(optionLower)) {
+          logger.info({ text: text.substring(0, 100) }, 'Found matching option button, clicking');
+          await btn.click().catch(() => {});
+          await page.waitForTimeout(3000);
+          clicked = true;
+          break;
+        }
+      }
+
+      // Si no se encontró con selectores generales, buscar en todos los elementos
+      if (!clicked) {
+        const allElements = await page.$$('*');
+        for (const el of allElements) {
           const text = await el.textContent().catch(() => '');
-          if (text && (text.toLowerCase().includes('ver') || text.toLowerCase().includes('repro') ||
-              text.toLowerCase().includes('play') || text.toLowerCase().includes('online') ||
-              text.toLowerCase().includes('canal') || text.toLowerCase().includes('aqui'))) {
+          if (text && text.toLowerCase().includes(optionLower)) {
+            const tagName = await el.evaluate((node: any) => node.tagName).catch(() => '');
+            logger.info({ tagName, text: text.substring(0, 100) }, 'Found matching element, clicking');
             await el.click().catch(() => {});
-            await page.waitForTimeout(2000);
+            await page.waitForTimeout(3000);
             break;
           }
         }
-      } catch (e) {
-        // ignore
+      }
+    } else {
+      // Intentar hacer clic en botones o enlaces relacionados con reproducción (default)
+      const clickSelectors = [
+        'button',
+        'a[href]',
+        '[onclick]',
+        '[class*="play"]',
+        '[class*="repro"]',
+        '[class*="ver"]',
+        '.player',
+        '#player',
+        '.video-container',
+        '.embed-responsive',
+        '.entry-content a',
+        '.post-content a',
+      ];
+      for (const selector of clickSelectors) {
+        try {
+          const elements = await page.$$(selector);
+          for (const el of elements) {
+            const text = await el.textContent().catch(() => '');
+            if (text && (text.toLowerCase().includes('ver') || text.toLowerCase().includes('repro') ||
+                text.toLowerCase().includes('play') || text.toLowerCase().includes('online') ||
+                text.toLowerCase().includes('canal') || text.toLowerCase().includes('aqui'))) {
+              await el.click().catch(() => {});
+              await page.waitForTimeout(2000);
+              break;
+            }
+          }
+        } catch (e) {
+          // ignore
+        }
       }
     }
 
+    // Esperar a que se cargue el nuevo contenido después del click
     await page.waitForTimeout(3000);
 
     const html = await page.content();
@@ -468,7 +502,7 @@ export async function getTvPorInternet2(slug: string): Promise<LiveChannel | nul
       return null;
     }
 
-    // Extraer título
+    // Extraer título (opcional, se usará el del body)
     const title = $('h1').first().text().trim() ||
                  $('title').text().trim() ||
                  slug.replace(/-/g, ' ').replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
@@ -495,13 +529,13 @@ export async function getTvPorInternet2(slug: string): Promise<LiveChannel | nul
   }
 }
 
-export async function getChannelStream(source: 'chatytv' | 'wsdeportes' | 'tvporinternet2', parameter: string): Promise<LiveChannel | null> {
+export async function getChannelStream(source: 'chatytv' | 'wsdeportes' | 'tvporinternet2', parameter: string, option?: string): Promise<LiveChannel | null> {
   if (source === 'chatytv') {
     return getChatytv(parameter);
   } else if (source === 'wsdeportes') {
     return getWsDeportes(parameter);
   } else if (source === 'tvporinternet2') {
-    return getTvPorInternet2(parameter);
+    return getTvPorInternet2(parameter, option);
   }
   return null;
 }

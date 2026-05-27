@@ -91881,6 +91881,36 @@
   ],
   "channels": [
     {
+      "id": "live_las-estrellas-en-vivo-por-internet",
+      "title": "Canal de Las Estrellas",
+      "logo": "https://images.seeklogo.com/logo-png/31/1/canalde-las-estrellas-logo-png_seeklogo-314649.png",
+      "group": "Canales TV",
+      "country": "CO",
+      "url": "https://regionales.saohgdasregions.fun:9092/MTgxLjUxLjg5LjQ0/13_.m3u8?token=KvB0dY9xrBrK3QC2kRJykg&expires=1779885507",
+      "type": "live",
+      "online": true
+    },
+    {
+      "id": "live_cartoon-network-en-vivo-por-internet",
+      "title": "Cartoon Network",
+      "logo": "https://images.seeklogo.com/logo-png/2/1/cartoon-network-logo-png_seeklogo-26677.png",
+      "group": "Canales TV",
+      "country": "CO",
+      "url": "https://regionales.saohgdasregions.fun:9092/MTgxLjUxLjg5LjQ0/31_.m3u8?token=lG-u7ugla4YZFBkqzayB_w&expires=1779885122",
+      "type": "live",
+      "online": true
+    },
+    {
+      "id": "live_win-sports-plus-en-vivo-por-internet",
+      "title": "Win Sports +",
+      "logo": "https://images.seeklogo.com/logo-png/37/1/win-sport-logo-png_seeklogo-371670.png",
+      "group": "Canales TV",
+      "country": "CO",
+      "url": "https://deportes.ksdjugfsddeports.com:9092/MTgxLjUxLjg5LjQ0/30_.m3u8?token=_eQuwaTBXcuRQ2wQmYHUEw&expires=1779873636",
+      "type": "live",
+      "online": true
+    },
+    {
       "id": "live_tyc-sports-en-vivo-por-internet",
       "title": "TyC Sports",
       "logo": "https://images.seeklogo.com/logo-png/34/1/tyc-sports-logo-png_seeklogo-340604.png",
@@ -105658,5 +105688,5 @@
       ]
     }
   ],
-  "updatedAt": 1779840846070
+  "updatedAt": 1779842347984
 }
