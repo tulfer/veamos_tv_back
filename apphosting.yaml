@@ -9,8 +9,8 @@ build:
 env:
   - variable: NODE_ENV
     value: production
-  - variable: PORT
-    value: "8080"
+    availability:
+      - RUNTIME
   - variable: FIREBASE_PROJECT_ID
     value: veamos-tv
   - variable: JWT_EXPIRES_IN
