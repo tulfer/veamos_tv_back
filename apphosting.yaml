@@ -10,6 +10,12 @@ run:
   commands:
     - npm start
 
+runConfig:
+  minInstances: 1
+  maxInstances: 10
+  cpu: 1
+  memoryMiB: 512
+
 env:
   - variable: NODE_ENV
     value: production
@@ -42,9 +48,3 @@ env:
 # - FIREBASE_PRIVATE_KEY
 # - FIREBASE_DATABASE_URL
 # - REDIS_URL
-
-scaling:
-  minInstances: 1
-  maxInstances: 10
-  targetCPUUtilization: 0.7
-  targetMemoryUtilization: 0.75
