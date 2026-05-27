@@ -8,6 +8,7 @@ import {
   getChatytvChannelHandler,
   getWsDeportesChannelHandler,
   getTvPorInternet2Handler,
+  getCablevisionHdHandler,
 } from './controller';
 
 export async function liveTVRoutes(app: FastifyInstance) {
@@ -19,4 +20,5 @@ export async function liveTVRoutes(app: FastifyInstance) {
   app.post('/live/channels/add/chatytv/:channel', getChatytvChannelHandler);
   app.post('/live/channels/add/wsdeportes/:parameter', getWsDeportesChannelHandler);
   app.post('/live/channels/add/tvporinternet2/:slug', getTvPorInternet2Handler);
+  app.post('/live/channels/add/cablevisionhd/:slug', getCablevisionHdHandler);
 }

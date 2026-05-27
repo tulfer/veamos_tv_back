@@ -92,6 +92,8 @@ export interface LiveChannel {
   country?: string;
   type: 'live';
   online: boolean;
+  /** URL del proveedor para refrescar cuando la url del video expire */
+  refreshUrl?: string;
 }
 
 export interface UserProfile {

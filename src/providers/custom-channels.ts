@@ -515,6 +515,7 @@ export async function getTvPorInternet2(slug: string, option?: string): Promise<
       url: streamUrl,
       type: 'live',
       online: true,
+      refreshUrl: url,
     };
 
     memoryCache.set(cacheKey, result, 3600000);
@@ -529,13 +530,244 @@ export async function getTvPorInternet2(slug: string, option?: string): Promise<
   }
 }
 
-export async function getChannelStream(source: 'chatytv' | 'wsdeportes' | 'tvporinternet2', parameter: string, option?: string): Promise<LiveChannel | null> {
+const CABLEVISIONHD_BASE = 'https://www.cablevisionhd.com';
+
+export async function getCablevisionHd(slug: string, option?: string): Promise<LiveChannel | null> {
+  const cacheKey = `cablevisionhd:${slug}:${option || 'default'}`;
+  const cached = memoryCache.get<LiveChannel>(cacheKey);
+  if (cached) return cached;
+
+  let browser: any = null;
+  try {
+    const url = `${CABLEVISIONHD_BASE}/${slug}.php`;
+    logger.info({ slug, url, option }, 'Fetching channel from cablevisionhd');
+
+    browser = await chromium.launch({ headless: true });
+    const context = await browser.newContext({
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    });
+    const page = await context.newPage();
+
+    // Interceptar peticiones de red para capturar URLs de streaming
+    const capturedUrls: string[] = [];
+    page.on('request', (request: any) => {
+      const reqUrl = request.url();
+      if (reqUrl.includes('.m3u8') || reqUrl.includes('.m3u') || reqUrl.includes('.ts') ||
+          reqUrl.includes('mywebtv') || reqUrl.includes('tdtcloud') || reqUrl.includes('hls')) {
+        capturedUrls.push(reqUrl);
+      }
+    });
+    page.on('response', (response: any) => {
+      const respUrl = response.url();
+      if (respUrl.includes('.m3u8') || respUrl.includes('.m3u') || respUrl.includes('mywebtv') ||
+          respUrl.includes('tdtcloud') || respUrl.includes('hls')) {
+        if (!capturedUrls.includes(respUrl)) {
+          capturedUrls.push(respUrl);
+        }
+      }
+    });
+
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.waitForTimeout(5000);
+
+    // Si se especificó una opción, buscar el botón exacto por su texto
+    if (option) {
+      const optionLower = option.toLowerCase();
+      logger.info({ option }, 'Looking for option button on cablevisionhd');
+
+      const allButtons = await page.$$('button, a, [role="button"], .option-btn, [class*="opcion"], [class*="option"], [class*="tab"], [class*="btn"], li, span, div');
+      let clicked = false;
+      for (const btn of allButtons) {
+        const text = await btn.textContent().catch(() => '');
+        if (text && text.toLowerCase().includes(optionLower)) {
+          logger.info({ text: text.substring(0, 100) }, 'Found matching option button, clicking');
+          await btn.click().catch(() => {});
+          await page.waitForTimeout(3000);
+          clicked = true;
+          break;
+        }
+      }
+
+      // Si no se encontró, buscar en todos los elementos
+      if (!clicked) {
+        const allElements = await page.$$('*');
+        for (const el of allElements) {
+          const text = await el.textContent().catch(() => '');
+          if (text && text.toLowerCase().includes(optionLower)) {
+            const tagName = await el.evaluate((node: any) => node.tagName).catch(() => '');
+            logger.info({ tagName, text: text.substring(0, 100) }, 'Found matching element, clicking');
+            await el.click().catch(() => {});
+            await page.waitForTimeout(3000);
+            break;
+          }
+        }
+      }
+    } else {
+      // Intentar hacer clic en botones o enlaces relacionados con reproducción (default)
+      const clickSelectors = [
+        'button',
+        'a[href]',
+        '[onclick]',
+        '[class*="play"]',
+        '[class*="repro"]',
+        '[class*="ver"]',
+        '.player',
+        '#player',
+        '.video-container',
+        '.embed-responsive',
+        '.entry-content a',
+        '.post-content a',
+      ];
+      for (const selector of clickSelectors) {
+        try {
+          const elements = await page.$$(selector);
+          for (const el of elements) {
+            const text = await el.textContent().catch(() => '');
+            if (text && (text.toLowerCase().includes('ver') || text.toLowerCase().includes('repro') ||
+                text.toLowerCase().includes('play') || text.toLowerCase().includes('online') ||
+                text.toLowerCase().includes('canal') || text.toLowerCase().includes('aqui'))) {
+              await el.click().catch(() => {});
+              await page.waitForTimeout(2000);
+              break;
+            }
+          }
+        } catch (e) {
+          // ignore
+        }
+      }
+    }
+
+    // Esperar a que se cargue el nuevo contenido después del click
+    await page.waitForTimeout(3000);
+
+    const html = await page.content();
+    const $ = cheerio.load(html);
+
+    await page.close();
+
+    // Log all iframes
+    const allIframes = $('iframe');
+    logger.info({ slug, iframeCount: allIframes.length }, 'All iframes found on cablevisionhd');
+    allIframes.each((i, el) => {
+      const src = $(el).attr('src') || 'no-src';
+      const id = $(el).attr('id') || 'no-id';
+      logger.info({ index: i, src: src.substring(0, 250), id }, `Iframe ${i}`);
+    });
+
+    let streamUrl: string | undefined;
+
+    // Estrategia 1: URLs capturadas por red
+    if (capturedUrls.length > 0) {
+      const m3u8Url = capturedUrls.find((u) => u.includes('.m3u8') || u.includes('.m3u'));
+      const streamingUrl = capturedUrls.find((u) => u.includes('mywebtv') || u.includes('tdtcloud') || u.includes('hls'));
+      streamUrl = m3u8Url || streamingUrl || capturedUrls[0];
+      logger.info({ url: streamUrl.substring(0, 250), total: capturedUrls.length }, 'Using captured network URL');
+    }
+
+    // Estrategia 2: Buscar iframe de video real
+    if (!streamUrl) {
+      for (let i = 0; i < allIframes.length; i++) {
+        const src = $(allIframes[i]).attr('src');
+        if (!src || src === 'about:blank' || src.includes('jetpack') || src.includes('wordpress') ||
+            src.includes('comment') || src.includes('disqus') || src.includes('facebook') ||
+            src.includes('googleads') || src.includes('doubleclick') || src.includes('ads')) continue;
+
+        const allow = $(allIframes[i]).attr('allow') || '';
+        const allowfullscreen = $(allIframes[i]).attr('allowfullscreen') !== undefined;
+        const hasVideoFeatures = allowfullscreen ||
+          allow.includes('autoplay') ||
+          allow.includes('encrypted-media') ||
+          allow.includes('picture-in-picture');
+
+        if (src.startsWith('http') && src.length > 10 && (hasVideoFeatures || src.includes('embed') || src.includes('player') || src.includes('tv'))) {
+          streamUrl = src;
+          logger.info({ src: src.substring(0, 250), allow }, 'Found video iframe');
+          break;
+        }
+      }
+    }
+
+    // Estrategia 3: Cualquier iframe no-blacklisted
+    if (!streamUrl) {
+      for (let i = 0; i < allIframes.length; i++) {
+        const src = $(allIframes[i]).attr('src');
+        if (src && src.startsWith('http') && src.length > 10 && !src.includes('jetpack') &&
+            !src.includes('wordpress') && !src.includes('comment') && !src.includes('googleads')) {
+          streamUrl = src;
+          logger.info({ src: src.substring(0, 250) }, 'Found fallback iframe');
+          break;
+        }
+      }
+    }
+
+    // Estrategia 4: Buscar URLs m3u8 en el HTML
+    if (!streamUrl) {
+      const bodyHtml = $.html();
+      const m3u8Matches = bodyHtml.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|m3u)[^\s"'<>]*/gi);
+      if (m3u8Matches && m3u8Matches.length > 0) {
+        streamUrl = m3u8Matches[0];
+        logger.info({ url: streamUrl.substring(0, 250) }, 'Found m3u8 URL in page HTML');
+      }
+    }
+
+    // Estrategia 5: Buscar en scripts
+    if (!streamUrl) {
+      const scripts = $('script').toArray();
+      for (const script of scripts) {
+        const content = $(script).html() || '';
+        if (content.length < 200000) {
+          const urlMatch = content.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|ts|mp4|m3u)[^\s"'<>]*/i);
+          if (urlMatch) {
+            streamUrl = urlMatch[0];
+            logger.info({ url: streamUrl.substring(0, 250) }, 'Found stream URL in script');
+            break;
+          }
+        }
+      }
+    }
+
+    if (!streamUrl) {
+      logger.warn({ slug, url, capturedUrls }, 'No valid stream source found on cablevisionhd');
+      return null;
+    }
+
+    // Extraer título (opcional)
+    const title = $('h1').first().text().trim() ||
+                 $('title').text().trim() ||
+                 slug.replace(/-/g, ' ').replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
+
+    const result: LiveChannel = {
+      id: `live_${slug}`,
+      title: title || slug,
+      logo: undefined,
+      group: 'Canales TV',
+      url: streamUrl,
+      type: 'live',
+      online: true,
+      refreshUrl: url,
+    };
+
+    memoryCache.set(cacheKey, result, 3600000);
+    return result;
+  } catch (error: any) {
+    logger.error({ error: error.message, slug }, 'Failed to fetch from cablevisionhd');
+    return null;
+  } finally {
+    if (browser) {
+      await browser.close().catch(() => {});
+    }
+  }
+}
+
+export async function getChannelStream(source: 'chatytv' | 'wsdeportes' | 'tvporinternet2' | 'cablevisionhd', parameter: string, option?: string): Promise<LiveChannel | null> {
   if (source === 'chatytv') {
     return getChatytv(parameter);
   } else if (source === 'wsdeportes') {
     return getWsDeportes(parameter);
   } else if (source === 'tvporinternet2') {
     return getTvPorInternet2(parameter, option);
+  } else if (source === 'cablevisionhd') {
+    return getCablevisionHd(parameter, option);
   }
   return null;
 }

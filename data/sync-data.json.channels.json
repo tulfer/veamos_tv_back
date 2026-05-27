@@ -1,5 +1,75 @@
 [
   {
+    "id": "live_directv-sports-plus-en-vivo",
+    "title": "DirecTV Plus",
+    "logo": "https://images.seeklogo.com/logo-png/32/1/directv-latin-america-2018-logo-png_seeklogo-328134.png",
+    "group": "Canales TV",
+    "country": "CO",
+    "url": "https://deportes.ksdjugfsddeports.com:9092/MTgxLjUxLjg5LjQ0/11_.m3u8?token=ZRHXsoQyxeqoleuaND9cOA&expires=1779878241",
+    "type": "live",
+    "online": true
+  },
+  {
+    "id": "live_tnt-sports-en-vivo",
+    "title": "TNT Sports",
+    "logo": "https://images.seeklogo.com/logo-png/51/1/tnt-sports-logo-png_seeklogo-519540.png",
+    "group": "Canales TV",
+    "country": "CO",
+    "url": "https://deportes.ksdjugfsddeports.com:9092/MTgxLjUxLjg5LjQ0/4_.m3u8?token=fNrh2rlsqHCofwjydS7FCQ&expires=1779877234",
+    "type": "live",
+    "online": true
+  },
+  {
+    "id": "live_fox-sports-premium-en-vivo",
+    "title": "FOX Sports Premium",
+    "logo": "https://upload.wikimedia.org/wikipedia/commons/f/f2/Fox_Sports_Premium_%28Argentina%29_-_2018_logo.png",
+    "group": "Canales TV",
+    "country": "CO",
+    "url": "https://deportes.ksdjugfsddeports.com:9092/MTgxLjUxLjg5LjQ0/12_.m3u8?token=Zlv-iHj4DU9G6CkxgPqNvw&expires=1779877101",
+    "type": "live",
+    "online": true
+  },
+  {
+    "id": "live_cinecanal-en-vivo",
+    "title": "CINECANAL",
+    "logo": "https://images.seeklogo.com/logo-png/3/1/cinecanal-logo-png_seeklogo-30450.png",
+    "group": "Canales TV",
+    "country": "CO",
+    "url": "https://regionales.saohgdasregions.fun:9092/MTgxLjUxLjg5LjQ0/59_.m3u8?token=iqE7gCHb0ZwAZxOQvIfogg&expires=1779887727",
+    "type": "live",
+    "online": true
+  },
+  {
+    "id": "live_tnt-en-vivo",
+    "title": "TNT",
+    "logo": "https://images.seeklogo.com/logo-png/29/1/tnt-latin-america-logo-png_seeklogo-298606.png",
+    "group": "Canales TV",
+    "country": "CO",
+    "url": "https://regionales.saohgdasregions.fun:9092/MTgxLjUxLjg5LjQ0/52_.m3u8?token=Ru8GIyykqxPZSN14yCFK4Q&expires=1779887404",
+    "type": "live",
+    "online": true
+  },
+  {
+    "id": "live_tooncast-en-vivo",
+    "title": "Tooncast",
+    "logo": "https://images.seeklogo.com/logo-png/33/1/tooncast-logo-png_seeklogo-332454.png",
+    "group": "Canales TV",
+    "country": "CO",
+    "url": "https://regionales.saohgdasregions.fun:9092/MTgxLjUxLjg5LjQ0/32_.m3u8?token=qsf5r-IzEgu-YsLQxBBqbw&expires=1779887292",
+    "type": "live",
+    "online": true
+  },
+  {
+    "id": "live_fox-sports-en-vivo",
+    "title": "FOX Sports",
+    "logo": "https://images.seeklogo.com/logo-png/19/1/fox-sports-logo-png_seeklogo-199724.png",
+    "group": "Canales TV",
+    "country": "CO",
+    "url": "https://deportes.ksdjugfsddeports.com:9092/MTgxLjUxLjg5LjQ0/8_.m3u8?token=WQo8daVwzMlzLV7CoWILcw&expires=1779875684",
+    "type": "live",
+    "online": true
+  },
+  {
     "id": "live_las-estrellas-en-vivo-por-internet",
     "title": "Canal de Las Estrellas",
     "logo": "https://images.seeklogo.com/logo-png/31/1/canalde-las-estrellas-logo-png_seeklogo-314649.png",
