@@ -15,7 +15,10 @@ import { homeRoutes } from './modules/home/routes';
 import { contentRoutes } from './modules/content/routes';
 import { syncRoutes } from './modules/sync/routes';
 
-process.stderr.write('Starting Veamos TV API initialization...\n');
+process.stderr.write('=== Veamos TV API starting ===\n');
+process.stderr.write(`Node version: ${process.version}\n`);
+process.stderr.write(`PORT env: ${process.env.PORT || '(unset)'}\n`);
+process.stderr.write(`HOST env: ${process.env.HOST || '(unset)'}\n`);
 
 process.on('uncaughtException', (err) => {
   process.stderr.write(`UNCAUGHT EXCEPTION: ${err.message}\n${err.stack}\n`);
@@ -25,6 +28,8 @@ process.on('unhandledRejection', (err: any) => {
 });
 
 async function buildServer() {
+  process.stderr.write('buildServer: creating Fastify instance...\n');
+
   const app = Fastify({
     logger: false,
     bodyLimit: 10 * 1024 * 1024,
@@ -33,27 +38,48 @@ async function buildServer() {
 
   app.setErrorHandler(errorHandler);
 
+  process.stderr.write('buildServer: registering cors...\n');
   await app.register(cors, {
     origin: true,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   });
 
+  process.stderr.write('buildServer: registering sensible...\n');
   try {
     await app.register(sensible);
   } catch (e) {
     process.stderr.write(`Warning: sensible plugin failed to register: ${e}\n`);
   }
 
+  process.stderr.write('buildServer: registering authRoutes...\n');
   await app.register(authRoutes);
+
+  process.stderr.write('buildServer: registering userRoutes...\n');
   await app.register(userRoutes);
+
+  process.stderr.write('buildServer: registering movieRoutes...\n');
   await app.register(movieRoutes);
+
+  process.stderr.write('buildServer: registering seriesRoutes...\n');
   await app.register(seriesRoutes);
+
+  process.stderr.write('buildServer: registering liveTVRoutes...\n');
   await app.register(liveTVRoutes);
+
+  process.stderr.write('buildServer: registering searchRoutes...\n');
   await app.register(searchRoutes);
+
+  process.stderr.write('buildServer: registering homeRoutes...\n');
   await app.register(homeRoutes);
+
+  process.stderr.write('buildServer: registering contentRoutes...\n');
   await app.register(contentRoutes);
+
+  process.stderr.write('buildServer: registering syncRoutes...\n');
   await app.register(syncRoutes);
+
+  process.stderr.write('buildServer: registering root routes...\n');
 
   app.get('/', async (_req, reply) => {
     reply.header('content-type', 'text/html; charset=utf-8');
@@ -119,16 +145,19 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
 
 async function start() {
   try {
+    process.stderr.write('start: building server...\n');
     const app = await buildServer();
     const port = parseInt(process.env.PORT || '8080', 10);
     const host = process.env.HOST || '0.0.0.0';
-    process.stderr.write(`Starting server on ${host}:${port}...\n`);
+    process.stderr.write(`start: listening on ${host}:${port}...\n`);
     await app.listen({ port, host });
-    process.stderr.write(`Server listening on ${host}:${port}\n`);
+    process.stderr.write(`start: server listening on ${host}:${port}\n`);
     logger.info({ port, host, env: env.NODE_ENV }, 'Veamos TV API started');
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     process.stderr.write(`FATAL: Failed to start server - ${msg}\n`);
+    const stack = error instanceof Error ? error.stack : '';
+    if (stack) process.stderr.write(`${stack}\n`);
     logger.fatal({ error }, 'Failed to start server');
     process.exit(1);
   }

@@ -8,7 +8,7 @@ build:
 
 run:
   commands:
-    - npm start
+    - node dist/main.js
 
 runConfig:
   minInstances: 1
