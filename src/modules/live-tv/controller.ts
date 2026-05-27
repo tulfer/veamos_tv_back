@@ -230,6 +230,80 @@ export async function refreshExpiredChannelsHandler(_request: FastifyRequest, re
   });
 }
 
+/**
+ * Actualiza la URL de los canales que tengan refreshUrl, usando el proveedor
+ * especificado en el campo "proveedor" del objeto del canal.
+ * Lee el archivo data/sync-data.json.channels.json y actualiza solo la url.
+ */
+export async function refreshAllChannelsHandler(_request: FastifyRequest, reply: FastifyReply) {
+  const synced = loadSyncData();
+  if (!synced || !Array.isArray(synced.channels)) {
+    return reply.status(400).send({ error: 'No sync data found' });
+  }
+
+  const channels = synced.channels;
+  const updatedChannels: LiveChannel[] = [];
+  const failedChannels: { id: string; error: string }[] = [];
+
+  for (const ch of channels) {
+    // Solo procesar canales que tengan refreshUrl y proveedor
+    if (!ch.refreshUrl || !ch.proveedor) {
+      continue;
+    }
+
+    const source = ch.proveedor as 'wsdeportes' | 'cablevisionhd' | 'tvporinternet2';
+    // Validar que el proveedor sea uno de los soportados
+    if (!['wsdeportes', 'cablevisionhd', 'tvporinternet2'].includes(source)) {
+      failedChannels.push({ id: ch.id, error: `Proveedor no soportado: ${source}` });
+      logger.warn({ id: ch.id, proveedor: source }, 'Proveedor no soportado');
+      continue;
+    }
+
+    // Extraer slug de la refreshUrl
+    const slug = extractSlugFromUrl(ch.refreshUrl);
+    if (!slug) {
+      failedChannels.push({ id: ch.id, error: 'No se pudo extraer slug de refreshUrl' });
+      logger.warn({ id: ch.id, refreshUrl: ch.refreshUrl }, 'No se pudo extraer slug');
+      continue;
+    }
+
+    try {
+      logger.info({ id: ch.id, proveedor: source, slug, option: ch.refreshOption }, 'Refrescando URL del canal');
+
+      const result = await getChannelStream(source, slug, ch.refreshOption || undefined);
+      if (result && result.url) {
+        // Actualizar solo la URL del canal existente
+        ch.url = result.url;
+        updatedChannels.push(ch);
+        logger.info({ id: ch.id, url: ch.url?.substring(0, 80) }, 'URL del canal actualizada exitosamente');
+      } else {
+        failedChannels.push({ id: ch.id, error: 'No se obtuvo URL del proveedor' });
+        logger.warn({ id: ch.id }, 'No se obtuvo URL del proveedor');
+      }
+    } catch (error: any) {
+      failedChannels.push({ id: ch.id, error: error.message });
+      logger.error({ id: ch.id, error: error.message }, 'Error al refrescar URL del canal');
+    }
+  }
+
+  // Guardar los cambios si se actualizó algún canal
+  if (updatedChannels.length > 0) {
+    saveSyncData({
+      ...synced,
+      channels,
+      updatedAt: Date.now(),
+    });
+    memoryCache.del('live:channels');
+  }
+
+  return reply.send({
+    ok: true,
+    message: `URLs actualizadas: ${updatedChannels.length}, fallos: ${failedChannels.length}`,
+    updated: updatedChannels.map((ch) => ({ id: ch.id, title: ch.title })),
+    failed: failedChannels,
+  });
+}
+
 export async function getTvPorInternet2Handler(request: FastifyRequest, reply: FastifyReply) {
   const { slug } = request.params as any;
   const { title, logo, country, option } = request.body as any;

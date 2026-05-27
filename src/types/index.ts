@@ -96,6 +96,8 @@ export interface LiveChannel {
   refreshUrl?: string;
   /** Opción seleccionada al agregar el canal (para refrescar con la misma opción) */
   refreshOption?: string;
+  /** Proveedor del canal: wsdeportes, cablevisionhd, tvporinternet2 */
+  proveedor?: string;
 }
 
 export interface UserProfile {
