@@ -91881,6 +91881,17 @@
   ],
   "channels": [
     {
+      "id": "live_winsports&op=3",
+      "title": "WinSports",
+      "logo": "https://images.seeklogo.com/logo-png/64/1/win-sports-logo-png_seeklogo-644046.png",
+      "group": "Canales Deportivos",
+      "country": "CO",
+      "url": "https://anvtcax.fubohd.com/winsports/mono.m3u8?token=23d3b5b91cca8bce2d1b88452d0fa5b3ec1b5502-14-1779871340-1779853340",
+      "type": "live",
+      "online": true,
+      "refreshUrl": "https://wsdeportes.net/?v=winsports&op=3"
+    },
+    {
       "id": "live_espn-4-en-vivo",
       "title": "ESPN 4",
       "logo": "https://pbs.twimg.com/media/FFgbMMcXwAAXWYX.jpg",
@@ -105794,5 +105805,5 @@
       ]
     }
   ],
-  "updatedAt": 1779853218647
+  "updatedAt": 1779854257098
 }
