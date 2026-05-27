@@ -30,7 +30,11 @@ async function buildServer() {
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   });
 
-  await app.register(sensible);
+  try {
+    await app.register(sensible);
+  } catch (e) {
+    process.stderr.write(`Warning: sensible plugin failed to register: ${e}\n`);
+  }
 
   await app.register(authRoutes);
   await app.register(userRoutes);
@@ -42,6 +46,7 @@ async function buildServer() {
   await app.register(contentRoutes);
   await app.register(syncRoutes);
 
+  app.get('/', async () => ({ status: 'ok', service: 'veamos-tv-api' }));
   app.get('/health', async () => ({
     status: 'ok',
     timestamp: Date.now(),
@@ -55,8 +60,12 @@ async function buildServer() {
 async function start() {
   try {
     const app = await buildServer();
-    await app.listen({ port: env.PORT, host: '0.0.0.0' });
-    logger.info({ port: env.PORT, env: env.NODE_ENV }, 'Veamos TV API started');
+    const port = parseInt(process.env.PORT || '8080', 10);
+    const host = process.env.HOST || '0.0.0.0';
+    process.stderr.write(`Starting server on ${host}:${port}...\n`);
+    await app.listen({ port, host });
+    process.stderr.write(`Server listening on ${host}:${port}\n`);
+    logger.info({ port, host, env: env.NODE_ENV }, 'Veamos TV API started');
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     process.stderr.write(`FATAL: Failed to start server - ${msg}\n`);
