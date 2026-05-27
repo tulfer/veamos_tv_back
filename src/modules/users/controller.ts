@@ -2,6 +2,7 @@ import { FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import * as userService from './service';
 import { logger } from '../../utils/logger';
+import { UserProfile, FavoriteItem, ContinueWatchingItem } from '../../types';
 
 const profileSchema = z.object({
   name: z.string().min(1).max(50),
@@ -44,9 +45,12 @@ export async function getProfilesHandler(request: FastifyRequest, reply: Fastify
 export async function createProfileHandler(request: FastifyRequest, reply: FastifyReply) {
   const { uid } = (request as any).user;
   const data = profileSchema.parse(request.body);
-  const profile = {
+  const profile: UserProfile = {
     id: `profile_${Date.now()}`,
-    ...data,
+    name: data.name,
+    avatar: data.avatar,
+    pin: data.pin,
+    isChild: data.isChild ?? false,
   };
   await userService.addProfile(uid, profile);
   return reply.status(201).send(profile);
@@ -63,7 +67,13 @@ export async function addFavoriteHandler(request: FastifyRequest, reply: Fastify
   const { uid } = (request as any).user;
   const { profileId } = request.params as any;
   const data = favoriteSchema.parse(request.body);
-  const item = { ...data, addedAt: Date.now() };
+  const item: FavoriteItem = {
+    id: data.id,
+    title: data.title,
+    poster: data.poster,
+    type: data.type,
+    addedAt: Date.now(),
+  };
   await userService.addFavorite(uid, profileId, item);
   return reply.status(201).send({ message: 'Favorite added' });
 }
@@ -86,7 +96,18 @@ export async function upsertContinueWatchingHandler(request: FastifyRequest, rep
   const { uid } = (request as any).user;
   const { profileId } = request.params as any;
   const data = continueSchema.parse(request.body);
-  const item = { ...data, updatedAt: Date.now() };
+  const item: ContinueWatchingItem = {
+    id: data.id,
+    title: data.title,
+    poster: data.poster,
+    type: data.type,
+    progress: data.progress,
+    duration: data.duration,
+    seasonNumber: data.seasonNumber,
+    episodeNumber: data.episodeNumber,
+    episodeTitle: data.episodeTitle,
+    updatedAt: Date.now(),
+  };
   await userService.upsertContinueWatching(uid, profileId, item);
   return reply.send({ message: 'Progress updated' });
 }
