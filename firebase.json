@@ -1,15 +1,6 @@
 {
-  "hosting": {
-    "source": ".",
-    "ignore": [
-      "firebase.json",
-      "**/.*",
-      "**/node_modules/**"
-    ],
-    "appHosting": {
-      "appId": "veamos-tv",
-      "region": "us-central1"
-    }
+  "apphosting": {
+    "location": "us-central1"
   },
   "functions": {
     "source": ".",

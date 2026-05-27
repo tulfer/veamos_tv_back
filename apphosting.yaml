@@ -1,6 +1,11 @@
 # Firebase App Hosting configuration
 runtime: nodejs20
 
+build:
+  commands:
+    - npm install
+    - npm run build
+
 env:
   - variable: NODE_ENV
     value: production
