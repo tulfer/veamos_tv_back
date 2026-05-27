@@ -55,9 +55,11 @@ async function buildServer() {
 async function start() {
   try {
     const app = await buildServer();
-    await app.listen({ port: env.PORT, host: env.HOST });
+    await app.listen({ port: env.PORT, host: '0.0.0.0' });
     logger.info({ port: env.PORT, env: env.NODE_ENV }, 'Veamos TV API started');
   } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`FATAL: Failed to start server - ${msg}\n`);
     logger.fatal({ error }, 'Failed to start server');
     process.exit(1);
   }
