@@ -148,8 +148,9 @@ export async function getChatytvChannelHandler(request: FastifyRequest, reply: F
   }
 }
 
-function extractRefreshSource(refreshUrl?: string): 'tvporinternet2' | 'cablevisionhd' | null {
+function extractRefreshSource(refreshUrl?: string): 'wsdeportes' | 'tvporinternet2' | 'cablevisionhd' | null {
   if (!refreshUrl) return null;
+  if (refreshUrl.includes('wsdeportes.net')) return 'wsdeportes';
   if (refreshUrl.includes('tvporinternet2.com')) return 'tvporinternet2';
   if (refreshUrl.includes('cablevisionhd.com')) return 'cablevisionhd';
   return null;
@@ -160,10 +161,16 @@ function extractSlugFromUrl(refreshUrl?: string, proveedor?: string): string | n
   try {
     const urlObj = new URL(refreshUrl);
 
-    // Para wsdeportes, el slug está en el query param "v"
     if (proveedor === 'wsdeportes') {
+      // La refreshUrl es https://wsdeportes.net/?v=winsportsmas&op=2
+      // Necesitamos reconstruir el parámetro original "winsportsmas&op=2"
       const v = urlObj.searchParams.get('v');
-      if (v) return v;
+      if (!v) return null;
+      const remaining: string[] = [];
+      urlObj.searchParams.forEach((val, key) => {
+        if (key !== 'v') remaining.push(`${key}=${val}`);
+      });
+      return remaining.length > 0 ? `${v}&${remaining.join('&')}` : v;
     }
 
     // Para cablevisionhd y tvporinternet2, el slug está en el path
@@ -254,18 +261,19 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
   const failedChannels: { id: string; error: string }[] = [];
 
   for (const ch of channels) {
-    // Solo procesar canales que tengan refreshUrl y proveedor
-    if (!ch.refreshUrl || !ch.proveedor) {
+    // Solo procesar canales que tengan refreshUrl
+    if (!ch.refreshUrl) {
       continue;
     }
 
-    const source = ch.proveedor as 'wsdeportes' | 'cablevisionhd' | 'tvporinternet2';
-    // Validar que el proveedor sea uno de los soportados
-    if (!['wsdeportes', 'cablevisionhd', 'tvporinternet2'].includes(source)) {
-      failedChannels.push({ id: ch.id, error: `Proveedor no soportado: ${source}` });
-      logger.warn({ id: ch.id, proveedor: source }, 'Proveedor no soportado');
+    // Inferir el proveedor desde el campo "proveedor" o desde la refreshUrl
+    const provedor = (ch.proveedor || extractRefreshSource(ch.refreshUrl)) as string;
+    if (provedor !== 'wsdeportes' && provedor !== 'cablevisionhd' && provedor !== 'tvporinternet2') {
+      failedChannels.push({ id: ch.id, error: `Proveedor no soportado: ${provedor || '(none)'}` });
+      logger.warn({ id: ch.id, refreshUrl: ch.refreshUrl, proveedor: ch.proveedor }, 'Proveedor no soportado');
       continue;
     }
+    const source: 'wsdeportes' | 'cablevisionhd' | 'tvporinternet2' = provedor;
 
     // Extraer slug de la refreshUrl según el proveedor
     const slug = extractSlugFromUrl(ch.refreshUrl, source);
@@ -278,6 +286,10 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
     try {
       logger.info({ id: ch.id, proveedor: source, slug, option: ch.refreshOption }, 'Refrescando URL del canal');
 
+      // Invalidar caché en memoria para forzar una consulta fresca
+      memoryCache.del(`${source}:${slug}`);
+      memoryCache.del(`${source}:${slug}:default`);
+      if (ch.refreshOption) memoryCache.del(`${source}:${slug}:${ch.refreshOption}`);
       const result = await getChannelStream(source, slug, ch.refreshOption || undefined);
       if (result && result.url) {
         // Actualizar solo la URL del canal existente

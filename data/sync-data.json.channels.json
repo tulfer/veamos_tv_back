@@ -5,11 +5,10 @@
     "logo": "https://images.seeklogo.com/logo-png/37/1/win-sport-logo-png_seeklogo-371670.png",
     "group": "Canales Deportivos",
     "country": "CO",
-    "url": "https://ag9wzq.fubohd.com/winplus/mono.m3u8?token=04952e98e7407f7c9f730f44d8f151f854b6ffd9-10-1779872429-1779854429",
+    "url": "https://dw5pdgvk.fubohd.com/winplus/mono.m3u8?token=3ab9870de6235a74c4c9eafa9c4f9951e5f9b627-77-1779942878-1779924878",
     "type": "live",
     "online": true,
-    "refreshUrl": "https://wsdeportes.net/?v=winsportsmas&op=2",
-    "proveedor": "wsdeportes"
+    "refreshUrl": "https://wsdeportes.net/?v=winsportsmas&op=2"
   },
   {
     "id": "live_espn7&op=2",
@@ -17,11 +16,10 @@
     "logo": "https://images.seeklogo.com/logo-png/52/1/espn-7-logo-png_seeklogo-522718.png",
     "group": "Canales Deportivos",
     "country": "CO",
-    "url": "https://dw5pdgvk.fubohd.com/espn7/mono.m3u8?token=be61affb1c3f2edc4f0322b2aeb5bb58895985d8-94-1779872136-1779854136",
+    "url": "https://ym9yzq.fubohd.com/espn7/mono.m3u8?token=6e039cc995a8313f1172173950f9650044d1a488-d-1779942894-1779924894",
     "type": "live",
     "online": true,
-    "refreshUrl": "https://wsdeportes.net/?v=espn7&op=2",
-    "proveedor": "wsdeportes"
+    "refreshUrl": "https://wsdeportes.net/?v=espn7&op=2"
   },
   {
     "id": "live_espn6&op=2",
@@ -29,11 +27,10 @@
     "logo": "https://images.seeklogo.com/logo-png/52/1/espn-6-logo-png_seeklogo-522717.png",
     "group": "Canales Deportivos",
     "country": "CO",
-    "url": "https://qzv4jmsc.fubohd.com/espn6/mono.m3u8?token=32461f8d89ce2f795d852fdf1827ce81349c950d-2a-1779872093-1779854093",
+    "url": "https://agvyby.fubohd.com/espn6/mono.m3u8?token=dbeeb3eb4f4133780bb943cc4c064d20c0c17112-48-1779942910-1779924910",
     "type": "live",
     "online": true,
-    "refreshUrl": "https://wsdeportes.net/?v=espn6&op=2",
-    "proveedor": "wsdeportes"
+    "refreshUrl": "https://wsdeportes.net/?v=espn6&op=2"
   },
   {
     "id": "live_espn5&op=2",
@@ -41,11 +38,10 @@
     "logo": "https://images.seeklogo.com/logo-png/52/1/espn-5-logo-png_seeklogo-522715.png",
     "group": "Canales Deportivos",
     "country": "CO",
-    "url": "https://ym9yzq.fubohd.com/espn5/mono.m3u8?token=ac77da84ab4dc928a377e849baaca683b2abc533-5b-1779872039-1779854039",
+    "url": "https://bgfuzq.fubohd.com/espn5/mono.m3u8?token=5c0b7fe0f9dfe5c24ccadd9c6da3a53ea37ff0f1-90-1779942927-1779924927",
     "type": "live",
     "online": true,
-    "refreshUrl": "https://wsdeportes.net/?v=espn5&op=2",
-    "proveedor": "wsdeportes"
+    "refreshUrl": "https://wsdeportes.net/?v=espn5&op=2"
   },
   {
     "id": "live_espn2&op=2",
@@ -53,11 +49,10 @@
     "logo": "https://images.seeklogo.com/logo-png/4/1/espn-2-logo-png_seeklogo-49202.png",
     "group": "Canales Deportivos",
     "country": "CO",
-    "url": "https://dw5pdgvk.fubohd.com/espn2/mono.m3u8?token=d93de3a6bf7f8e48677978afc41eb579bd300485-f3-1779871942-1779853942",
+    "url": "https://ym9yzq.fubohd.com/espn2/mono.m3u8?token=78f6e5847cf0312df7fefe714ba549cefb0fad80-7d-1779942944-1779924944",
     "type": "live",
     "online": true,
-    "refreshUrl": "https://wsdeportes.net/?v=espn2&op=2",
-    "proveedor": "wsdeportes"
+    "refreshUrl": "https://wsdeportes.net/?v=espn2&op=2"
   },
   {
     "id": "live_dsportsmas&op=2",
@@ -65,11 +60,10 @@
     "logo": "https://media.bss-prd.directvgo.com/media/catalog/product/cache/74c1057f7991b4edb2bc7bdaa94de933/d/s/dsports_.png",
     "group": "Canales Deportivos",
     "country": "CO",
-    "url": "https://bgfuzq.fubohd.com/dsportsplus/mono.m3u8?token=20ef3bfec5c718397cd5536ff168670de95af1c8-c0-1779871820-1779853820",
+    "url": "https://bgfuzq.fubohd.com/dsportsplus/mono.m3u8?token=31ec4424863dad7a2835a901b389f9e8807004ad-88-1779942960-1779924960",
     "type": "live",
     "online": true,
-    "refreshUrl": "https://wsdeportes.net/?v=dsportsmas&op=2",
-    "proveedor": "wsdeportes"
+    "refreshUrl": "https://wsdeportes.net/?v=dsportsmas&op=2"
   },
   {
     "id": "live_dsports2&op=4",
@@ -77,11 +71,10 @@
     "logo": "https://pelotalibre.com.ar/wp-content/uploads/2024/09/logo-directv-sports-2.png",
     "group": "Canales Deportivos",
     "country": "CO",
-    "url": "https://8c51.streameasthd.net/global/dsports2/index.m3u8?token=1247dfb804aca86de50683392b33d7212983125f-52-1779899556-1779845556&ip=181.51.89.44",
+    "url": "https://doc1.streameasthd.net/global/dsports2/index.m3u8?token=fff1836405d91d57090c6e1710b4ded0922866ba-86-1779970878-1779916878&ip=181.51.89.44",
     "type": "live",
     "online": true,
-    "refreshUrl": "https://wsdeportes.net/?v=dsports2&op=4",
-    "proveedor": "wsdeportes"
+    "refreshUrl": "https://wsdeportes.net/?v=dsports2&op=4"
   },
   {
     "id": "live_winsports&op=3",
@@ -89,11 +82,10 @@
     "logo": "https://images.seeklogo.com/logo-png/64/1/win-sports-logo-png_seeklogo-644046.png",
     "group": "Canales Deportivos",
     "country": "CO",
-    "url": "https://anvtcax.fubohd.com/winsports/mono.m3u8?token=23d3b5b91cca8bce2d1b88452d0fa5b3ec1b5502-14-1779871340-1779853340",
+    "url": "https://wp9xqedt.fubohd.com/winsports/mono.m3u8?token=814cc758af69bbfc1db21462ba7b468f3569577a-ae-1779942994-1779924994",
     "type": "live",
     "online": true,
-    "refreshUrl": "https://wsdeportes.net/?v=winsports&op=3",
-    "proveedor": "wsdeportes"
+    "refreshUrl": "https://wsdeportes.net/?v=winsports&op=3"
   },
   {
     "id": "live_espn-4-en-vivo",
@@ -101,12 +93,11 @@
     "logo": "https://pbs.twimg.com/media/FFgbMMcXwAAXWYX.jpg",
     "group": "Canales TV",
     "country": "CO",
-    "url": "https://deportes.ksdjugfsddeports.com:9092/MTgxLjUxLjg5LjQ0/23_.m3u8?token=xm-2cEVpgex7Ri0dvIsbYg&expires=1779879710",
+    "url": "https://deportes.ksdjugfsddeports.com:9092/MTgxLjUxLjg5LjQ0/23_.m3u8?token=9a9dsP6HMnwKkPCmgsGl8Q&expires=1779958313",
     "type": "live",
     "online": true,
     "refreshUrl": "https://www.cablevisionhd.com/espn-4-en-vivo.php",
-    "refreshOption": "Opción 3",
-    "proveedor": "cablevisionhd"
+    "refreshOption": "Opción 3"
   },
   {
     "id": "live_espn-3-en-vivo",
@@ -114,12 +105,11 @@
     "logo": "https://espnpressroom.com/us/files/2011/10/ESPN3_Logo_Resize2.jpg",
     "group": "Canales TV",
     "country": "CO",
-    "url": "https://deportes.ksdjugfsddeports.com:9092/MTgxLjUxLjg5LjQ0/15_.m3u8?token=M7do04o2j9CTJ1VyhcJuTA&expires=1779879405",
+    "url": "https://deportes.ksdjugfsddeports.com:9092/MTgxLjUxLjg5LjQ0/15_.m3u8?token=6PZxverAIETh03TgvGymgQ&expires=1779958356",
     "type": "live",
     "online": true,
     "refreshUrl": "https://www.cablevisionhd.com/espn-3-en-vivo.php",
-    "refreshOption": "Opción 1",
-    "proveedor": "cablevisionhd"
+    "refreshOption": "Opción 1"
   },
   {
     "id": "live_espn-premium-en-vivo",
@@ -127,12 +117,11 @@
     "logo": "https://images.seeklogo.com/logo-png/22/1/espn-deportes-logo-png_seeklogo-226943.png",
     "group": "Canales TV",
     "country": "CO",
-    "url": "https://deportes.ksdjugfsddeports.com:9092/MTgxLjUxLjg5LjQ0/5_.m3u8?token=TOeDpKRsoLRtxQLnipoNNw&expires=1779879168",
+    "url": "https://deportes.ksdjugfsddeports.com:9092/MTgxLjUxLjg5LjQ0/5_.m3u8?token=HyRSDkXx2D1Paa2rFKGTQg&expires=1779958403",
     "type": "live",
     "online": true,
     "refreshUrl": "https://www.cablevisionhd.com/espn-premium-en-vivo.php",
-    "refreshOption": "Opción 1",
-    "proveedor": "cablevisionhd"
+    "refreshOption": "Opción 1"
   },
   {
     "id": "live_directv-sports-plus-en-vivo",
