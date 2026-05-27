@@ -1,5 +1,17 @@
 [
   {
+    "id": "live_espn-premium-en-vivo",
+    "title": "ESPN Premium",
+    "logo": "https://images.seeklogo.com/logo-png/22/1/espn-deportes-logo-png_seeklogo-226943.png",
+    "group": "Canales TV",
+    "country": "CO",
+    "url": "https://deportes.ksdjugfsddeports.com:9092/MTgxLjUxLjg5LjQ0/5_.m3u8?token=TOeDpKRsoLRtxQLnipoNNw&expires=1779879168",
+    "type": "live",
+    "online": true,
+    "refreshUrl": "https://www.cablevisionhd.com/espn-premium-en-vivo.php",
+    "refreshOption": "Opción 1"
+  },
+  {
     "id": "live_directv-sports-plus-en-vivo",
     "title": "DirecTV Plus",
     "logo": "https://images.seeklogo.com/logo-png/32/1/directv-latin-america-2018-logo-png_seeklogo-328134.png",

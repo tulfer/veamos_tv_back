@@ -4,6 +4,7 @@ import { getChannelStream } from '../../providers/custom-channels';
 import { getCachedOrFetch, memoryCache } from '../../cache';
 import { loadSyncData, saveSyncData } from '../../services/data-store';
 import { LiveChannel } from '../../types';
+import { logger } from '../../utils/logger';
 
 const CACHE_KEY = 'live:channels';
 const PAGE_SIZE = 10;
@@ -147,6 +148,88 @@ export async function getChatytvChannelHandler(request: FastifyRequest, reply: F
   }
 }
 
+function extractRefreshSource(refreshUrl?: string): 'tvporinternet2' | 'cablevisionhd' | null {
+  if (!refreshUrl) return null;
+  if (refreshUrl.includes('tvporinternet2.com')) return 'tvporinternet2';
+  if (refreshUrl.includes('cablevisionhd.com')) return 'cablevisionhd';
+  return null;
+}
+
+function extractSlugFromUrl(refreshUrl?: string): string | null {
+  if (!refreshUrl) return null;
+  try {
+    const urlObj = new URL(refreshUrl);
+    const pathname = urlObj.pathname.replace(/^\//, '');
+    const slug = pathname.replace(/\.\w+$/, ''); // remove .html or .php
+    return slug;
+  } catch {
+    return null;
+  }
+}
+
+export async function refreshExpiredChannelsHandler(_request: FastifyRequest, reply: FastifyReply) {
+  const synced = loadSyncData();
+  if (!synced || !Array.isArray(synced.channels)) {
+    return reply.status(400).send({ error: 'No sync data found' });
+  }
+
+  const channels = synced.channels;
+  const updatedChannels: LiveChannel[] = [];
+  const failedChannels: { id: string; error: string }[] = [];
+
+  for (const ch of channels) {
+    // Verificar si la URL tiene "expires" y tiene refreshUrl
+    if (!ch.url || !ch.url.includes('expires=') || !ch.refreshUrl) {
+      continue;
+    }
+
+    const source = extractRefreshSource(ch.refreshUrl);
+    if (!source) {
+      continue;
+    }
+
+    const slug = extractSlugFromUrl(ch.refreshUrl);
+    if (!slug) {
+      continue;
+    }
+
+    try {
+      logger.info({ id: ch.id, source, slug, option: ch.refreshOption }, 'Refreshing channel URL');
+
+      const result = await getChannelStream(source, slug, ch.refreshOption || undefined);
+      if (result && result.url && !result.url.includes('expires=')) {
+        // Actualizar solo la URL
+        ch.url = result.url;
+        updatedChannels.push(ch);
+        logger.info({ id: ch.id, url: ch.url?.substring(0, 80) }, 'Channel URL refreshed successfully');
+      } else {
+        failedChannels.push({ id: ch.id, error: 'New URL still has expires or is empty' });
+        logger.warn({ id: ch.id }, 'New URL still has expires or is empty');
+      }
+    } catch (error: any) {
+      failedChannels.push({ id: ch.id, error: error.message });
+      logger.error({ id: ch.id, error: error.message }, 'Failed to refresh channel URL');
+    }
+  }
+
+  // Guardar los cambios si se actualizó algún canal
+  if (updatedChannels.length > 0) {
+    saveSyncData({
+      ...synced,
+      channels,
+      updatedAt: Date.now(),
+    });
+    memoryCache.del('live:channels');
+  }
+
+  return reply.send({
+    ok: true,
+    message: `Refreshed ${updatedChannels.length} channels, ${failedChannels.length} failed`,
+    updated: updatedChannels.map((ch) => ({ id: ch.id })),
+    failed: failedChannels,
+  });
+}
+
 export async function getTvPorInternet2Handler(request: FastifyRequest, reply: FastifyReply) {
   const { slug } = request.params as any;
   const { title, logo, country, option } = request.body as any;
@@ -175,6 +258,8 @@ export async function getTvPorInternet2Handler(request: FastifyRequest, reply: F
       url: result.url,
       type: 'live',
       online: true,
+      refreshUrl: result.refreshUrl,
+      refreshOption: option || undefined,
     };
 
     // Agregar a la lista de canales sincronizados
@@ -236,6 +321,8 @@ export async function getCablevisionHdHandler(request: FastifyRequest, reply: Fa
       url: result.url,
       type: 'live',
       online: true,
+      refreshUrl: result.refreshUrl,
+      refreshOption: option || undefined,
     };
 
     // Agregar a la lista de canales sincronizados

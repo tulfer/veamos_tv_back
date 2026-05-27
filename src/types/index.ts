@@ -94,6 +94,8 @@ export interface LiveChannel {
   online: boolean;
   /** URL del proveedor para refrescar cuando la url del video expire */
   refreshUrl?: string;
+  /** Opción seleccionada al agregar el canal (para refrescar con la misma opción) */
+  refreshOption?: string;
 }
 
 export interface UserProfile {
