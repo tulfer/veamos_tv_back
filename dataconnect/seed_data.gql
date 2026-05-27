@@ -1,0 +1,123 @@
+mutation CreateDemoData @transaction @auth(level: USER, insecureReason: "This is a seed mutation and should only be run by an authenticated user to populate the database.") {
+  user_insertMany(data: [
+    {
+      id: "550e8400-e29b-41d4-a716-446655440000",
+      displayName: "Alice Smith",
+      email: "alice.smith@example.com",
+      createdAt: "2023-01-01T10:00:00Z"
+    },
+    {
+      id: "550e8400-e29b-41d4-a716-446655440001",
+      displayName: "Bob Johnson",
+      email: "bob.johnson@example.com",
+      createdAt: "2023-01-02T11:30:00Z"
+    }
+  ])
+  channel_insertMany(data: [
+    {
+      id: "550e8400-e29b-41d4-a716-446655440002",
+      name: "Kids Learning Channel",
+      country: "US",
+      language: "English",
+      description: "Educational content for children.",
+      createdAt: "2023-01-03T09:15:00Z"
+    },
+    {
+      id: "550e8400-e29b-41d4-a716-446655440003",
+      name: "Science Explorers",
+      country: "GB",
+      language: "English",
+      description: "Exploring the wonders of science for all ages.",
+      createdAt: "2023-01-04T14:45:00Z"
+    }
+  ])
+  educationalShow_insertMany(data: [
+    {
+      id: "550e8400-e29b-41d4-a716-446655440004",
+      title: "Alphabet Adventures",
+      genre: "Animation",
+      summary: "Learning the alphabet with fun characters.",
+      producer: "EduKids Productions",
+      targetAudience: "Preschool",
+      createdAt: "2023-01-05T10:00:00Z",
+      channelId: "550e8400-e29b-41d4-a716-446655440002"
+    },
+    {
+      id: "550e8400-e29b-41d4-a716-446655440005",
+      title: "The Physics of Everyday Life",
+      genre: "Documentary",
+      summary: "Understanding physics concepts through daily examples.",
+      producer: "Discovery Science",
+      targetAudience: "Teenagers and Adults",
+      createdAt: "2023-01-06T12:00:00Z",
+      channelId: "550e8400-e29b-41d4-a716-446655440003"
+    }
+  ])
+  contentList_insertMany(data: [
+    {
+      id: "550e8400-e29b-41d4-a716-446655440006",
+      name: "My Favorite Educational Shows",
+      description: "A list of educational shows I love.",
+      isPublic: true,
+      createdAt: "2023-01-07T08:00:00Z",
+      updatedAt: "2023-01-07T08:00:00Z",
+      userId: "550e8400-e29b-41d4-a716-446655440000"
+    }
+  ])
+  contentListItem_insertMany(data: [
+    {
+      contentListId: "550e8400-e29b-41d4-a716-446655440006",
+      educationalShowId: "550e8400-e29b-41d4-a716-446655440004",
+      position: 1,
+      note: "Great for young kids!"
+    },
+    {
+      contentListId: "550e8400-e29b-41d4-a716-446655440006",
+      educationalShowId: "550e8400-e29b-41d4-a716-446655440005",
+      position: 2,
+      note: "Very informative."
+    }
+  ])
+  watch_insertMany(data: [
+    {
+      id: "550e8400-e29b-41d4-a716-446655440007",
+      createdAt: "2023-01-08T15:00:00Z",
+      watchDate: "2023-01-08",
+      notes: "Enjoyed this with my kids.",
+      userId: "550e8400-e29b-41d4-a716-446655440000",
+      educationalShowId: "550e8400-e29b-41d4-a716-446655440004",
+      channelId: "550e8400-e29b-41d4-a716-446655440002"
+    },
+    {
+      id: "550e8400-e29b-41d4-a716-446655440008",
+      createdAt: "2023-01-09T18:00:00Z",
+      watchDate: "2023-01-09",
+      notes: "Very thought-provoking.",
+      userId: "550e8400-e29b-41d4-a716-446655440001",
+      educationalShowId: "550e8400-e29b-41d4-a716-446655440005",
+      channelId: "550e8400-e29b-41d4-a716-446655440003"
+    }
+  ])
+  review_insertMany(data: [
+    {
+      id: "550e8400-e29b-41d4-a716-446655440009",
+      rating: 5,
+      reviewText: "Excellent show, highly recommend!",
+      createdAt: "2023-01-10T09:00:00Z",
+      updatedAt: "2023-01-10T09:00:00Z",
+      educationalShowId: "550e8400-e29b-41d4-a716-446655440004",
+      userId: "550e8400-e29b-41d4-a716-446655440000",
+      watchId: "550e8400-e29b-41d4-a716-446655440007"
+    },
+    {
+      id: "550e8400-e29b-41d4-a716-446655440010",
+      rating: 4,
+      reviewText: "Good content, but a bit complex for younger viewers.",
+      createdAt: "2023-01-11T14:00:00Z",
+      updatedAt: "2023-01-11T14:00:00Z",
+      educationalShowId: "550e8400-e29b-41d4-a716-446655440005",
+      userId: "550e8400-e29b-41d4-a716-446655440001",
+      watchId: "550e8400-e29b-41d4-a716-446655440008"
+    }
+  ])
+}

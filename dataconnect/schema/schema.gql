@@ -1,0 +1,59 @@
+type User @table {
+  displayName: String!
+  email: String
+  photoUrl: String
+  createdAt: Timestamp!
+}
+
+type Channel @table {
+  name: String!
+  country: String!
+  language: String
+  description: String
+  createdAt: Timestamp!
+}
+
+type EducationalShow @table {
+  title: String!
+  genre: String!
+  summary: String
+  producer: String
+  targetAudience: String
+  createdAt: Timestamp!
+  channel: Channel
+}
+
+type Watch @table {
+  createdAt: Timestamp!
+  watchDate: Date!
+  notes: String
+  user: User
+  educationalShow: EducationalShow
+  channel: Channel
+}
+
+type Review @table {
+  rating: Int!
+  reviewText: String
+  createdAt: Timestamp!
+  updatedAt: Timestamp!
+  educationalShow: EducationalShow
+  user: User
+  watch: Watch
+}
+
+type ContentList @table {
+  name: String!
+  description: String
+  isPublic: Boolean!
+  createdAt: Timestamp!
+  updatedAt: Timestamp!
+  user: User
+}
+
+type ContentListItem @table(key: ["contentList", "educationalShow"]) {
+  position: Int!
+  note: String
+  contentList: ContentList!
+  educationalShow: EducationalShow!
+}

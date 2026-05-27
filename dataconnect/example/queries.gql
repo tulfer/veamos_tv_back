@@ -1,0 +1,50 @@
+query EducationalShowsByGenre($genre: String!) @auth(level: PUBLIC, insecureReason: "This operation is safe to expose to the public as it only retrieves public information.") {
+  educationalShows(where: {genre: {eq: $genre}}) {
+    id
+    title
+    summary
+    producer
+    targetAudience
+    channel {
+      name
+      country
+    }
+  }
+}
+
+mutation CreateContentList($name: String!, $description: String, $isPublic: Boolean!) @auth(level: USER) {
+  contentList_insert(data: {
+    name: $name,
+    description: $description,
+    isPublic: $isPublic,
+    userId_expr: "auth.uid",
+    createdAt_expr: "request.time",
+    updatedAt_expr: "request.time"
+  }) {
+    id
+  }
+}
+
+mutation AddEducationalShowToContentList($contentListId: UUID!, $educationalShowId: UUID!, $position: Int!, $note: String) @auth(level: USER) {
+  contentListItem_insert(data: {
+    contentList: {id: $contentListId},
+    educationalShow: {id: $educationalShowId},
+    position: $position,
+    note: $note
+  }) {
+    contentListId
+    educationalShowId
+  }
+}
+
+mutation RecordWatchHistory($educationalShowId: UUID!, $channelId: UUID!, $watchDate: Date!) @auth(level: USER) {
+  watch_insert(data: {
+    educationalShow: {id: $educationalShowId},
+    channel: {id: $channelId},
+    user: {id_expr: "auth.uid"},
+    watchDate: $watchDate,
+    createdAt_expr: "request.time"
+  }) {
+    id
+  }
+}
