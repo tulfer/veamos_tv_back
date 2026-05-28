@@ -91953,7 +91953,7 @@
       "type": "live",
       "online": true,
       "refreshUrl": "https://www.cablevisionhd.com/fox-sports-en-vivo.php",
-      "proveedor":"cablevisionhd"
+      "proveedor": "cablevisionhd"
     },
     {
       "id": "live_foxsports3&op=2",
@@ -92025,7 +92025,7 @@
       "type": "live",
       "online": true,
       "refreshUrl": "https://wsdeportes.net/?v=espn",
-      "proveedor":"wsdeportes"
+      "proveedor": "wsdeportes"
     },
     {
       "id": "live_espn2&op=2",
@@ -92123,8 +92123,8 @@
       "url": "https://deportes.ksdjugfsddeports.com:9092/MTgxLjUxLjg5LjQ0/3_.m3u8?token=tXujq-x8yRoR6nVF_U5wxw&expires=1779870509",
       "type": "live",
       "online": true,
-      "refreshUrl":"https://wsdeportes.net/?v=dsports&op=2",
-      "proveedor":"wsdeportes"
+      "refreshUrl": "https://wsdeportes.net/?v=dsports&op=2",
+      "proveedor": "wsdeportes"
     },
     {
       "id": "live_directv-sports-plus-en-vivo",
@@ -92135,8 +92135,8 @@
       "url": "https://deportes.ksdjugfsddeports.com:9092/MTgxLjUxLjg5LjQ0/11_.m3u8?token=ZRHXsoQyxeqoleuaND9cOA&expires=1779878241",
       "type": "live",
       "online": true,
-      "refreshUrl":"https://wsdeportes.net/?v=dsportsmas&op=2",
-      "proveedor":"wsdeportes"
+      "refreshUrl": "https://wsdeportes.net/?v=dsportsmas&op=2",
+      "proveedor": "wsdeportes"
     },
     {
       "id": "live_tnt-sports-en-vivo",
@@ -92147,8 +92147,8 @@
       "url": "https://deportes.ksdjugfsddeports.com:9092/MTgxLjUxLjg5LjQ0/4_.m3u8?token=fNrh2rlsqHCofwjydS7FCQ&expires=1779877234",
       "type": "live",
       "online": true,
-      "refreshUrl":"https://wsdeportes.net/?v=tntsports&op=2",
-      "proveedor":"wsdeportes"
+      "refreshUrl": "https://wsdeportes.net/?v=tntsports&op=2",
+      "proveedor": "wsdeportes"
     },
     {
       "id": "live_fox-sports-premium-en-vivo",
@@ -92159,8 +92159,8 @@
       "url": "https://deportes.ksdjugfsddeports.com:9092/MTgxLjUxLjg5LjQ0/12_.m3u8?token=Zlv-iHj4DU9G6CkxgPqNvw&expires=1779877101",
       "type": "live",
       "online": true,
-      "refreshUrl":"https://www.tvporinternet2.com/fox-sports-premium-en-vivo-por-internet.php",
-      "proveedor":"tvporinternet2"
+      "refreshUrl": "https://www.tvporinternet2.com/fox-sports-premium-en-vivo-por-internet.php",
+      "proveedor": "tvporinternet2"
     },
     {
       "id": "live_cinecanal-en-vivo",
@@ -92171,8 +92171,8 @@
       "url": "https://regionales.saohgdasregions.fun:9092/MTgxLjUxLjg5LjQ0/59_.m3u8?token=iqE7gCHb0ZwAZxOQvIfogg&expires=1779887727",
       "type": "live",
       "online": true,
-      "refreshUrl":"https://www.cablevisionhd.com/cinecanal-en-vivo.php",
-      "proveedor":"cablevisionhd"
+      "refreshUrl": "https://www.cablevisionhd.com/cinecanal-en-vivo.php",
+      "proveedor": "cablevisionhd"
     },
     {
       "id": "live_tnt-en-vivo",
@@ -92184,7 +92184,7 @@
       "type": "live",
       "online": true,
       "refreshUrl": "https://www.cablevisionhd.com/tnt-en-vivo.php",
-      "proveedor":"cablevisionhd"
+      "proveedor": "cablevisionhd"
     },
     {
       "id": "live_tooncast-en-vivo",
@@ -92196,7 +92196,7 @@
       "type": "live",
       "online": true,
       "refreshUrl": "https://www.cablevisionhd.com/tooncast-en-vivo.php",
-      "proveedor":"cablevisionhd"
+      "proveedor": "cablevisionhd"
     },
     {
       "id": "live_cartoon-network-en-vivo-por-internet",
@@ -92207,8 +92207,8 @@
       "url": "https://regionales.saohgdasregions.fun:9092/MTgxLjUxLjg5LjQ0/31_.m3u8?token=lG-u7ugla4YZFBkqzayB_w&expires=1779885122",
       "type": "live",
       "online": true,
-      "refreshUrl":"https://www.cablevisionhd.com/cartoon-network-en-vivo.php",
-      "proveedor":"cablevisionhd"
+      "refreshUrl": "https://www.cablevisionhd.com/cartoon-network-en-vivo.php",
+      "proveedor": "cablevisionhd"
     },
     {
       "id": "live_las-estrellas-en-vivo-por-internet",
@@ -92220,7 +92220,7 @@
       "type": "live",
       "online": true,
       "refreshUrl": "https://www.cablevisionhd.com/las-estrellas-en-vivo.php",
-      "proveedor":"cablevisionhd"
+      "proveedor": "cablevisionhd"
     },
     {
       "id": "live_tyc-sports-en-vivo-por-internet",
@@ -92232,7 +92232,7 @@
       "type": "live",
       "online": true,
       "refreshUrl": "https://wsdeportes.net/?v=tycsports",
-      "proveedor":"wsdeportes"
+      "proveedor": "wsdeportes"
     },
     {
       "id": "live_rcn-en-vivo-por-internet",
@@ -92244,7 +92244,7 @@
       "type": "live",
       "online": true,
       "refreshUrl": "https://www.cablevisionhd.com/rcn-en-vivo.php",
-      "proveedor":"cablevisionhd"
+      "proveedor": "cablevisionhd"
     },
     {
       "id": "live_caracol-en-vivo-por-internet",
@@ -92256,7 +92256,20 @@
       "type": "live",
       "online": true,
       "refreshUrl": "https://www.cablevisionhd.com/caracol-en-vivo.php",
-      "proveedor":"cablevisionhd"
+      "proveedor": "cablevisionhd"
+    },
+    {
+      "id": "live_pasiones-en-vivo",
+      "title": "Pasiones",
+      "logo": "https://logowik.com/content/uploads/images/pasiones-tv1683.jpg",
+      "group": "Canales TV",
+      "country": "CO",
+      "url": "https://regionales.saohgdasregions.fun:9092/MTgxLjUxLjg5LjQ0/10_.m3u8?token=WKzQ8S7wiqPT-gOvo8aAQg&expires=1779979031",
+      "type": "live",
+      "online": true,
+      "refreshUrl": "https://www.cablevisionhd.com/pasiones-en-vivo.php",
+      "refreshOption": "Opción 1",
+      "proveedor": "cablevisionhd"
     },
     {
       "id": "live_1",
@@ -105986,5 +105999,5 @@
       ]
     }
   ],
-  "updatedAt": 1779934865365
+  "updatedAt": 1779935871929
 }
