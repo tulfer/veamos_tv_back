@@ -1,5 +1,17 @@
 [
   {
+    "id": "live_foxsports3&op=2",
+    "title": "FOX Sports 3",
+    "logo": "https://images.seeklogo.com/logo-png/47/1/fox-sports-3-argentina-2023-logo-png_seeklogo-471071.png",
+    "group": "Canales Deportivos",
+    "country": "CO",
+    "url": "https://tyg2mnl9.fubohd.com/foxsports3/mono.m3u8?token=3dc096b8c4cc39399ce4e08e9e7c7f871f494d8a-62-1779943804-1779925804",
+    "type": "live",
+    "online": true,
+    "refreshUrl": "https://wsdeportes.net/?v=foxsports3&op=2",
+    "proveedor": "wsdeportes"
+  },
+  {
     "id": "live_winsportsmas&op=2",
     "title": "WinSports +",
     "logo": "https://images.seeklogo.com/logo-png/37/1/win-sport-logo-png_seeklogo-371670.png",

@@ -292,8 +292,9 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
       if (ch.refreshOption) memoryCache.del(`${source}:${slug}:${ch.refreshOption}`);
       const result = await getChannelStream(source, slug, ch.refreshOption || undefined);
       if (result && result.url) {
-        // Actualizar solo la URL del canal existente
+        // Actualizar solo la URL y asegurar el proveedor en el canal
         ch.url = result.url;
+        if (!ch.proveedor) ch.proveedor = source;
         updatedChannels.push(ch);
         logger.info({ id: ch.id, url: ch.url?.substring(0, 80) }, 'URL del canal actualizada exitosamente');
       } else {
