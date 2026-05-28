@@ -1,7 +1,10 @@
+import path from 'path';
+import fs from 'fs';
 import { FastifyRequest, FastifyReply } from 'fastify';
 import { scrapeMovies, scrapeMovieDetail, scrapePopularMovies } from '../../providers/movies';
 import { scrapeSeries, scrapeSeriesDetail, scrapePopularSeries } from '../../providers/series';
 import { saveSyncData, loadSyncData } from '../../services/data-store';
+import { fetchItemDetails } from '../../providers/cineby';
 import { closeBrowser } from '../../services/video-resolver';
 import { fetchLiveChannels, parseM3U, validateBatch } from '../../providers/live-tv';
 import { fetchHTML } from '../../utils/http';
@@ -414,6 +417,73 @@ export async function syncHomeByscHandler(_request: FastifyRequest, reply: Fasti
   } catch (error: any) {
     logger.error({ error: error.message }, 'Failed to sync home from cineby.sc');
     return reply.status(500).send({ error: 'Failed to sync home data', detail: error.message });
+  }
+}
+
+function collectItems(obj: any, acc: { id: number; mediaType: string; slug: string; title: string }[]) {
+  if (!obj || typeof obj !== 'object') return;
+  if (Array.isArray(obj)) {
+    obj.forEach(item => collectItems(item, acc));
+  } else {
+    if (obj.id && obj.slug && obj.mediaType) {
+      acc.push({ id: obj.id, mediaType: obj.mediaType, slug: obj.slug, title: obj.title || '' });
+    }
+    for (const key of Object.keys(obj)) {
+      collectItems(obj[key], acc);
+    }
+  }
+}
+
+function enrichItem(obj: any, detailMap: Map<number, any>) {
+  if (!obj || typeof obj !== 'object') return;
+  if (Array.isArray(obj)) {
+    obj.forEach(item => enrichItem(item, detailMap));
+  } else {
+    if (obj.id && detailMap.has(obj.id)) {
+      const d = detailMap.get(obj.id)!;
+      obj.description = d.description || obj.description || '';
+      obj.videoUrl = d.videoUrl || obj.videoUrl || '';
+      obj.genres = d.genres || obj.genres || [];
+      obj.originalTitle = d.originalTitle || obj.originalTitle || '';
+      obj.imdbId = d.imdbId || obj.imdbId || '';
+    }
+    for (const key of Object.keys(obj)) {
+      enrichItem(obj[key], detailMap);
+    }
+  }
+}
+
+export async function fetchDetailsHandler(
+  request: FastifyRequest<{ Body: { file?: string } }>,
+  reply: FastifyReply
+) {
+  try {
+    const fileName = request.body?.file || 'sync-data.home.json';
+    const filePath = path.join(process.cwd(), 'data', fileName);
+    if (!fs.existsSync(filePath)) {
+      return reply.status(404).send({ error: `File ${fileName} not found` });
+    }
+    const raw = fs.readFileSync(filePath, 'utf-8');
+    const homeData: any = JSON.parse(raw);
+
+    const allItems: { id: number; mediaType: string; slug: string; title: string }[] = [];
+    collectItems(homeData, allItems);
+
+    const details = await fetchItemDetails(allItems);
+    const detailMap = new Map(details.map(d => [d.id, d]));
+    enrichItem(homeData, detailMap);
+
+    fs.writeFileSync(filePath, JSON.stringify(homeData, null, 2), 'utf-8');
+
+    return reply.send({
+      ok: true,
+      enriched: details.length,
+      file: fileName,
+      updatedAt: Date.now(),
+    });
+  } catch (error) {
+    logger.error({ error }, 'Fetch details failed');
+    return reply.status(500).send({ error: 'Failed to fetch details' });
   }
 }
 

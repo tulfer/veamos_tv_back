@@ -420,6 +420,92 @@ export async function scrapeCinebyHome(): Promise<CinebyHomeData> {
   }
 }
 
+export interface ItemDetail {
+  id: number;
+  title: string;
+  slug: string;
+  mediaType: 'movie' | 'tv';
+  description: string;
+  videoUrl: string;
+  genres: string[];
+  originalTitle: string;
+  imdbId: string;
+}
+
+export async function fetchItemDetails(items: { id: number; mediaType: string; slug: string; title: string }[]): Promise<ItemDetail[]> {
+  const results: ItemDetail[] = [];
+  const seen = new Set<number>();
+
+  for (const item of items) {
+    if (seen.has(item.id)) continue;
+    seen.add(item.id);
+
+    const type = item.mediaType === 'tv' ? 'tv' : 'movie';
+    const cleanSlug = item.slug.split('?')[0];
+    let data: any = null;
+
+    try {
+      const resp = await fetch(`https://db.videasy.net/3/${type}/${item.id}?language=es-ES`);
+      if (resp.ok) data = await resp.json();
+    } catch { /* continue */ }
+
+    const title = data?.title || data?.name || item.title;
+    const originalTitle = data?.original_title || data?.original_name || title;
+    const description = data?.overview || '';
+    const genres = data?.genres?.map((g: any) => g.name) || [];
+    const imdbId = data?.imdb_id || '';
+
+    let videoUrl = '';
+    try {
+      const { chromium: pw } = await import('playwright');
+      const browser = await pw.launch({ headless: true });
+      const ctx = await browser.newContext({
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+        viewport: { width: 1920, height: 1080 },
+      });
+      const pg = await ctx.newPage();
+      await pg.addInitScript(`Object.defineProperty(navigator, 'webdriver', { get: () => false });`);
+
+      const videoUrlCaptured = new Promise<string>(resolve => {
+        const timer = setTimeout(() => resolve(''), 15000);
+        pg.on('response', async resp => {
+          const url = resp.url();
+          if (url.includes('.mp4') || url.includes('.m3u8') || url.includes('embed/') || url.includes('player/')) {
+            clearTimeout(timer);
+            resolve(url);
+          }
+        });
+        pg.on('framenavigated', frame => {
+          const url = frame.url();
+          if (url.includes('.mp4') || url.includes('.m3u8') || url.includes('embed/') || url.includes('player/')) {
+            clearTimeout(timer);
+            resolve(url);
+          }
+        });
+      });
+
+      const pageSlug = cleanSlug.includes('?play=true') ? cleanSlug : `${cleanSlug}?play=true`;
+      await pg.goto(`https://www.cineby.sc${pageSlug}`, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      videoUrl = await videoUrlCaptured;
+      await browser.close().catch(() => {});
+    } catch { /* playwright not available */ }
+
+    results.push({
+      id: item.id,
+      title,
+      slug: item.slug,
+      mediaType: type as 'movie' | 'tv',
+      description,
+      videoUrl,
+      genres,
+      originalTitle,
+      imdbId,
+    });
+  }
+
+  return results;
+}
+
 export function saveCinebyHomeData(data: CinebyHomeData): void {
   const filePath = path.resolve(process.cwd(), 'data', 'sync-data.home.json');
   const dir = path.dirname(filePath);

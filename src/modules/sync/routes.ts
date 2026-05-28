@@ -10,6 +10,7 @@ import {
   syncEstrenoSeriesHandler,
   importM3UHandler,
   syncHomeByscHandler,
+  fetchDetailsHandler,
 } from './controller';
 
 export async function syncRoutes(app: FastifyInstance) {
@@ -23,4 +24,5 @@ export async function syncRoutes(app: FastifyInstance) {
   app.post('/sync/popular/series', syncPopularSeriesHandler);
   app.post('/sync/live/import', importM3UHandler);
   app.post('/sync/home-bysc', syncHomeByscHandler);
+  app.post('/sync/fetch-details', fetchDetailsHandler);
 }
