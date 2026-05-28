@@ -405,6 +405,18 @@ async function validateBatchBatched(channels: LiveChannel[], batchSize = 30): Pr
   return valid;
 }
 
+export async function syncHomeByscHandler(_request: FastifyRequest, reply: FastifyReply) {
+  try {
+    const { scrapeCinebyHome, saveCinebyHomeData } = await import('../../providers/cineby');
+    const data = await scrapeCinebyHome();
+    saveCinebyHomeData(data);
+    return reply.send({ ok: true, message: 'Home data synced from cineby.sc', sections: Object.keys(data).length });
+  } catch (error: any) {
+    logger.error({ error: error.message }, 'Failed to sync home from cineby.sc');
+    return reply.status(500).send({ error: 'Failed to sync home data', detail: error.message });
+  }
+}
+
 export async function importM3UHandler(request: FastifyRequest, reply: FastifyReply) {
   const body = request.body as { url?: string; content?: string; country?: string; skipValidation?: boolean } | undefined;
   if (!body?.url && !body?.content) {
