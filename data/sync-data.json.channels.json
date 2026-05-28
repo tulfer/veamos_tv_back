@@ -1,5 +1,30 @@
 [
   {
+    "id": "live_tnt-series-en-vivo",
+    "title": "TNT Series",
+    "logo": "https://images.seeklogo.com/logo-png/29/1/tnt-series-latin-america-logo-png_seeklogo-298607.png",
+    "group": "Canales TV",
+    "country": "CO",
+    "url": "https://regionales.saohgdasregions.fun:9092/MTgxLjUxLjg5LjQ0/53_.m3u8?token=5oawOlyzhWOLXQyhGIk79w&expires=1779978024",
+    "type": "live",
+    "online": true,
+    "refreshUrl": "https://www.cablevisionhd.com/tnt-series-en-vivo.php",
+    "refreshOption": "Opción 2",
+    "proveedor": "cablevisionhd"
+  },
+  {
+    "id": "live_fox-sports-en-vivo",
+    "title": "FOX Sports",
+    "logo": "https://images.seeklogo.com/logo-png/19/1/fox-sports-logo-png_seeklogo-199724.png",
+    "group": "Canales Deportivos",
+    "country": "CO",
+    "url": "https://deportes.ksdjugfsddeports.com:9092/MTgxLjUxLjg5LjQ0/8_.m3u8?token=WQo8daVwzMlzLV7CoWILcw&expires=1779875684",
+    "type": "live",
+    "online": true,
+    "refreshUrl": "https://www.cablevisionhd.com/fox-sports-en-vivo.php",
+    "proveedor":"cablevisionhd"
+  },
+  {
     "id": "live_foxsports3&op=2",
     "title": "FOX Sports 3",
     "logo": "https://images.seeklogo.com/logo-png/47/1/fox-sports-3-argentina-2023-logo-png_seeklogo-471071.png",
@@ -20,7 +45,8 @@
     "url": "https://dw5pdgvk.fubohd.com/winplus/mono.m3u8?token=3ab9870de6235a74c4c9eafa9c4f9951e5f9b627-77-1779942878-1779924878",
     "type": "live",
     "online": true,
-    "refreshUrl": "https://wsdeportes.net/?v=winsportsmas&op=2"
+    "refreshUrl": "https://wsdeportes.net/?v=winsportsmas&op=2",
+    "proveedor": "wsdeportes"
   },
   {
     "id": "live_espn7&op=2",
@@ -31,7 +57,8 @@
     "url": "https://ym9yzq.fubohd.com/espn7/mono.m3u8?token=6e039cc995a8313f1172173950f9650044d1a488-d-1779942894-1779924894",
     "type": "live",
     "online": true,
-    "refreshUrl": "https://wsdeportes.net/?v=espn7&op=2"
+    "refreshUrl": "https://wsdeportes.net/?v=espn7&op=2",
+    "proveedor": "wsdeportes"
   },
   {
     "id": "live_espn6&op=2",
@@ -42,7 +69,8 @@
     "url": "https://agvyby.fubohd.com/espn6/mono.m3u8?token=dbeeb3eb4f4133780bb943cc4c064d20c0c17112-48-1779942910-1779924910",
     "type": "live",
     "online": true,
-    "refreshUrl": "https://wsdeportes.net/?v=espn6&op=2"
+    "refreshUrl": "https://wsdeportes.net/?v=espn6&op=2",
+    "proveedor": "wsdeportes"
   },
   {
     "id": "live_espn5&op=2",
@@ -53,7 +81,20 @@
     "url": "https://bgfuzq.fubohd.com/espn5/mono.m3u8?token=5c0b7fe0f9dfe5c24ccadd9c6da3a53ea37ff0f1-90-1779942927-1779924927",
     "type": "live",
     "online": true,
-    "refreshUrl": "https://wsdeportes.net/?v=espn5&op=2"
+    "refreshUrl": "https://wsdeportes.net/?v=espn5&op=2",
+    "proveedor": "wsdeportes"
+  },
+  {
+    "id": "live_espn-en-vivo-por-internet",
+    "title": "ESPN",
+    "logo": "https://images.seeklogo.com/logo-png/28/1/espn-logo-png_seeklogo-283139.png",
+    "group": "Canales Deportivos",
+    "country": "CO",
+    "url": "https://deportes.ksdjugfsddeports.com:9092/MTgxLjUxLjg5LjQ0/13_.m3u8?token=JRXEEc5r_uQdo76o1T-gbw&expires=1779872991",
+    "type": "live",
+    "online": true,
+    "refreshUrl": "https://wsdeportes.net/?v=espn",
+    "proveedor":"wsdeportes"
   },
   {
     "id": "live_espn2&op=2",
@@ -64,7 +105,8 @@
     "url": "https://ym9yzq.fubohd.com/espn2/mono.m3u8?token=78f6e5847cf0312df7fefe714ba549cefb0fad80-7d-1779942944-1779924944",
     "type": "live",
     "online": true,
-    "refreshUrl": "https://wsdeportes.net/?v=espn2&op=2"
+    "refreshUrl": "https://wsdeportes.net/?v=espn2&op=2",
+    "proveedor": "wsdeportes"
   },
   {
     "id": "live_dsportsmas&op=2",
@@ -75,7 +117,8 @@
     "url": "https://bgfuzq.fubohd.com/dsportsplus/mono.m3u8?token=31ec4424863dad7a2835a901b389f9e8807004ad-88-1779942960-1779924960",
     "type": "live",
     "online": true,
-    "refreshUrl": "https://wsdeportes.net/?v=dsportsmas&op=2"
+    "refreshUrl": "https://wsdeportes.net/?v=dsportsmas&op=2",
+    "proveedor": "wsdeportes"
   },
   {
     "id": "live_dsports2&op=4",
@@ -86,7 +129,8 @@
     "url": "https://doc1.streameasthd.net/global/dsports2/index.m3u8?token=fff1836405d91d57090c6e1710b4ded0922866ba-86-1779970878-1779916878&ip=181.51.89.44",
     "type": "live",
     "online": true,
-    "refreshUrl": "https://wsdeportes.net/?v=dsports2&op=4"
+    "refreshUrl": "https://wsdeportes.net/?v=dsports2&op=4",
+    "proveedor": "wsdeportes"
   },
   {
     "id": "live_winsports&op=3",
@@ -97,73 +141,95 @@
     "url": "https://wp9xqedt.fubohd.com/winsports/mono.m3u8?token=814cc758af69bbfc1db21462ba7b468f3569577a-ae-1779942994-1779924994",
     "type": "live",
     "online": true,
-    "refreshUrl": "https://wsdeportes.net/?v=winsports&op=3"
+    "refreshUrl": "https://wsdeportes.net/?v=winsports&op=3",
+    "proveedor": "wsdeportes"
   },
   {
     "id": "live_espn-4-en-vivo",
     "title": "ESPN 4",
     "logo": "https://pbs.twimg.com/media/FFgbMMcXwAAXWYX.jpg",
-    "group": "Canales TV",
+    "group": "Canales Deportivos",
     "country": "CO",
     "url": "https://deportes.ksdjugfsddeports.com:9092/MTgxLjUxLjg5LjQ0/23_.m3u8?token=9a9dsP6HMnwKkPCmgsGl8Q&expires=1779958313",
     "type": "live",
     "online": true,
     "refreshUrl": "https://www.cablevisionhd.com/espn-4-en-vivo.php",
-    "refreshOption": "Opción 3"
+    "refreshOption": "Opción 3",
+    "proveedor": "cablevisionhd"
   },
   {
     "id": "live_espn-3-en-vivo",
     "title": "ESPN 3",
     "logo": "https://espnpressroom.com/us/files/2011/10/ESPN3_Logo_Resize2.jpg",
-    "group": "Canales TV",
+    "group": "Canales Deportivos",
     "country": "CO",
     "url": "https://deportes.ksdjugfsddeports.com:9092/MTgxLjUxLjg5LjQ0/15_.m3u8?token=6PZxverAIETh03TgvGymgQ&expires=1779958356",
     "type": "live",
     "online": true,
     "refreshUrl": "https://www.cablevisionhd.com/espn-3-en-vivo.php",
-    "refreshOption": "Opción 1"
+    "refreshOption": "Opción 1",
+    "proveedor": "cablevisionhd"
   },
   {
     "id": "live_espn-premium-en-vivo",
     "title": "ESPN Premium",
     "logo": "https://images.seeklogo.com/logo-png/22/1/espn-deportes-logo-png_seeklogo-226943.png",
-    "group": "Canales TV",
+    "group": "Canales Deportivos",
     "country": "CO",
     "url": "https://deportes.ksdjugfsddeports.com:9092/MTgxLjUxLjg5LjQ0/5_.m3u8?token=HyRSDkXx2D1Paa2rFKGTQg&expires=1779958403",
     "type": "live",
     "online": true,
     "refreshUrl": "https://www.cablevisionhd.com/espn-premium-en-vivo.php",
-    "refreshOption": "Opción 1"
+    "refreshOption": "Opción 1",
+    "proveedor": "cablevisionhd"
+  },
+  {
+    "id": "live_directv-sports-en-vivo-por-internet",
+    "title": "DirecTV Sports",
+    "logo": "https://images.seeklogo.com/logo-png/39/1/directv-sports-logo-png_seeklogo-396503.png",
+    "group": "Canales Deportivos",
+    "country": "CO",
+    "url": "https://deportes.ksdjugfsddeports.com:9092/MTgxLjUxLjg5LjQ0/3_.m3u8?token=tXujq-x8yRoR6nVF_U5wxw&expires=1779870509",
+    "type": "live",
+    "online": true,
+    "refreshUrl":"https://wsdeportes.net/?v=dsports&op=2",
+    "proveedor":"wsdeportes"
   },
   {
     "id": "live_directv-sports-plus-en-vivo",
     "title": "DirecTV Plus",
     "logo": "https://images.seeklogo.com/logo-png/32/1/directv-latin-america-2018-logo-png_seeklogo-328134.png",
-    "group": "Canales TV",
+    "group": "Canales Deportivos",
     "country": "CO",
     "url": "https://deportes.ksdjugfsddeports.com:9092/MTgxLjUxLjg5LjQ0/11_.m3u8?token=ZRHXsoQyxeqoleuaND9cOA&expires=1779878241",
     "type": "live",
-    "online": true
+    "online": true,
+    "refreshUrl":"https://wsdeportes.net/?v=dsportsmas&op=2",
+    "proveedor":"wsdeportes"
   },
   {
     "id": "live_tnt-sports-en-vivo",
-    "title": "TNT Sports",
+    "title": "TNT Sports Premium",
     "logo": "https://images.seeklogo.com/logo-png/51/1/tnt-sports-logo-png_seeklogo-519540.png",
-    "group": "Canales TV",
+    "group": "Canales Deportivos",
     "country": "CO",
     "url": "https://deportes.ksdjugfsddeports.com:9092/MTgxLjUxLjg5LjQ0/4_.m3u8?token=fNrh2rlsqHCofwjydS7FCQ&expires=1779877234",
     "type": "live",
-    "online": true
+    "online": true,
+    "refreshUrl":"https://wsdeportes.net/?v=tntsports&op=2",
+    "proveedor":"wsdeportes"
   },
   {
     "id": "live_fox-sports-premium-en-vivo",
     "title": "FOX Sports Premium",
     "logo": "https://upload.wikimedia.org/wikipedia/commons/f/f2/Fox_Sports_Premium_%28Argentina%29_-_2018_logo.png",
-    "group": "Canales TV",
+    "group": "Canales Deportivos",
     "country": "CO",
     "url": "https://deportes.ksdjugfsddeports.com:9092/MTgxLjUxLjg5LjQ0/12_.m3u8?token=Zlv-iHj4DU9G6CkxgPqNvw&expires=1779877101",
     "type": "live",
-    "online": true
+    "online": true,
+    "refreshUrl":"https://www.tvporinternet2.com/fox-sports-premium-en-vivo-por-internet.php",
+    "proveedor":"tvporinternet2"
   },
   {
     "id": "live_cinecanal-en-vivo",
@@ -173,7 +239,9 @@
     "country": "CO",
     "url": "https://regionales.saohgdasregions.fun:9092/MTgxLjUxLjg5LjQ0/59_.m3u8?token=iqE7gCHb0ZwAZxOQvIfogg&expires=1779887727",
     "type": "live",
-    "online": true
+    "online": true,
+    "refreshUrl":"https://www.cablevisionhd.com/cinecanal-en-vivo.php",
+    "proveedor":"cablevisionhd"
   },
   {
     "id": "live_tnt-en-vivo",
@@ -183,7 +251,9 @@
     "country": "CO",
     "url": "https://regionales.saohgdasregions.fun:9092/MTgxLjUxLjg5LjQ0/52_.m3u8?token=Ru8GIyykqxPZSN14yCFK4Q&expires=1779887404",
     "type": "live",
-    "online": true
+    "online": true,
+    "refreshUrl": "https://www.cablevisionhd.com/tnt-en-vivo.php",
+    "proveedor":"cablevisionhd"
   },
   {
     "id": "live_tooncast-en-vivo",
@@ -193,27 +263,9 @@
     "country": "CO",
     "url": "https://regionales.saohgdasregions.fun:9092/MTgxLjUxLjg5LjQ0/32_.m3u8?token=qsf5r-IzEgu-YsLQxBBqbw&expires=1779887292",
     "type": "live",
-    "online": true
-  },
-  {
-    "id": "live_fox-sports-en-vivo",
-    "title": "FOX Sports",
-    "logo": "https://images.seeklogo.com/logo-png/19/1/fox-sports-logo-png_seeklogo-199724.png",
-    "group": "Canales TV",
-    "country": "CO",
-    "url": "https://deportes.ksdjugfsddeports.com:9092/MTgxLjUxLjg5LjQ0/8_.m3u8?token=WQo8daVwzMlzLV7CoWILcw&expires=1779875684",
-    "type": "live",
-    "online": true
-  },
-  {
-    "id": "live_las-estrellas-en-vivo-por-internet",
-    "title": "Canal de Las Estrellas",
-    "logo": "https://images.seeklogo.com/logo-png/31/1/canalde-las-estrellas-logo-png_seeklogo-314649.png",
-    "group": "Canales TV",
-    "country": "CO",
-    "url": "https://regionales.saohgdasregions.fun:9092/MTgxLjUxLjg5LjQ0/13_.m3u8?token=KvB0dY9xrBrK3QC2kRJykg&expires=1779885507",
-    "type": "live",
-    "online": true
+    "online": true,
+    "refreshUrl": "https://www.cablevisionhd.com/tooncast-en-vivo.php",
+    "proveedor":"cablevisionhd"
   },
   {
     "id": "live_cartoon-network-en-vivo-por-internet",
@@ -223,37 +275,33 @@
     "country": "CO",
     "url": "https://regionales.saohgdasregions.fun:9092/MTgxLjUxLjg5LjQ0/31_.m3u8?token=lG-u7ugla4YZFBkqzayB_w&expires=1779885122",
     "type": "live",
-    "online": true
+    "online": true,
+    "refreshUrl":"https://www.cablevisionhd.com/cartoon-network-en-vivo.php",
+    "proveedor":"cablevisionhd"
+  },
+  {
+    "id": "live_las-estrellas-en-vivo-por-internet",
+    "title": "Canal de Las Estrellas",
+    "logo": "https://images.seeklogo.com/logo-png/31/1/canalde-las-estrellas-logo-png_seeklogo-314649.png",
+    "group": "Canales TV",
+    "country": "CO",
+    "url": "https://regionales.saohgdasregions.fun:9092/MTgxLjUxLjg5LjQ0/13_.m3u8?token=KvB0dY9xrBrK3QC2kRJykg&expires=1779885507",
+    "type": "live",
+    "online": true,
+    "refreshUrl": "https://www.cablevisionhd.com/las-estrellas-en-vivo.php",
+    "proveedor":"cablevisionhd"
   },
   {
     "id": "live_tyc-sports-en-vivo-por-internet",
     "title": "TyC Sports",
     "logo": "https://images.seeklogo.com/logo-png/34/1/tyc-sports-logo-png_seeklogo-340604.png",
-    "group": "Canales TV",
+    "group": "Canales Deportivos",
     "country": "CO",
     "url": "https://deportes.ksdjugfsddeports.com:9092/MTgxLjUxLjg5LjQ0/6_.m3u8?token=D0X4ykPX77P6bMHPHXXttg&expires=1779873175",
     "type": "live",
-    "online": true
-  },
-  {
-    "id": "live_espn-en-vivo-por-internet",
-    "title": "ESPN",
-    "logo": "https://images.seeklogo.com/logo-png/28/1/espn-logo-png_seeklogo-283139.png",
-    "group": "Canales TV",
-    "country": "CO",
-    "url": "https://deportes.ksdjugfsddeports.com:9092/MTgxLjUxLjg5LjQ0/13_.m3u8?token=JRXEEc5r_uQdo76o1T-gbw&expires=1779872991",
-    "type": "live",
-    "online": true
-  },
-  {
-    "id": "live_directv-sports-en-vivo-por-internet",
-    "title": "DirecTV Sports",
-    "logo": "https://images.seeklogo.com/logo-png/39/1/directv-sports-logo-png_seeklogo-396503.png",
-    "group": "Canales TV",
-    "country": "CO",
-    "url": "https://deportes.ksdjugfsddeports.com:9092/MTgxLjUxLjg5LjQ0/3_.m3u8?token=tXujq-x8yRoR6nVF_U5wxw&expires=1779870509",
-    "type": "live",
-    "online": true
+    "online": true,
+    "refreshUrl": "https://wsdeportes.net/?v=tycsports",
+    "proveedor":"wsdeportes"
   },
   {
     "id": "live_rcn-en-vivo-por-internet",
@@ -263,7 +311,9 @@
     "country": "CO",
     "url": "https://regionales.saohgdasregions.fun:9092/MTgxLjUxLjg5LjQ0/18_.m3u8?token=VqamS-NxM_5tPrv_SJaiRw&expires=1779880420",
     "type": "live",
-    "online": true
+    "online": true,
+    "refreshUrl": "https://www.cablevisionhd.com/rcn-en-vivo.php",
+    "proveedor":"cablevisionhd"
   },
   {
     "id": "live_caracol-en-vivo-por-internet",
@@ -273,7 +323,9 @@
     "url": "https://regionales.saohgdasregions.fun:9092/MTgxLjUxLjg5LjQ0/17_.m3u8?token=eIBhk0wf9aAIG1_d6WpB2A&expires=1779879110",
     "country": "CO",
     "type": "live",
-    "online": true
+    "online": true,
+    "refreshUrl": "https://www.cablevisionhd.com/caracol-en-vivo.php",
+    "proveedor":"cablevisionhd"
   },
   {
     "id": "live_1",
