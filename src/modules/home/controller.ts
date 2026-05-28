@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { FastifyRequest, FastifyReply } from 'fastify';
 import { scrapePopularMovies } from '../../providers/movies';
 import { scrapePopularSeries } from '../../providers/series';
@@ -72,4 +74,18 @@ export async function getHomeHandler(_request: FastifyRequest, reply: FastifyRep
   );
 
   return reply.send(homeData);
+}
+
+export async function getHomeNewHandler(_request: FastifyRequest, reply: FastifyReply) {
+  try {
+    const filePath = path.join(process.cwd(), 'data', 'sync-data.home.json');
+    if (!fs.existsSync(filePath)) {
+      return reply.status(404).send({ error: 'Home data not found. Run /sync/home-bysc first.' });
+    }
+    const raw = fs.readFileSync(filePath, 'utf-8');
+    const homeData = JSON.parse(raw);
+    return reply.send(homeData);
+  } catch (error) {
+    return reply.status(500).send({ error: 'Failed to load home data' });
+  }
 }
