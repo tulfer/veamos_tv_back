@@ -89,3 +89,77 @@ export async function getHomeNewHandler(_request: FastifyRequest, reply: Fastify
     return reply.status(500).send({ error: 'Failed to load home data' });
   }
 }
+
+function findItemInHome(id: number): { title: string; year?: string } | undefined {
+  try {
+    const filePath = path.join(process.cwd(), 'data', 'sync-data.home.json');
+    if (!fs.existsSync(filePath)) return undefined;
+    const raw = fs.readFileSync(filePath, 'utf-8');
+    const homeData = JSON.parse(raw);
+
+    function search(obj: any): { title: string; year?: string } | undefined {
+      if (!obj || typeof obj !== 'object') return undefined;
+      if (Array.isArray(obj)) {
+        for (const item of obj) {
+          const found = search(item);
+          if (found) return found;
+        }
+        return undefined;
+      }
+      if (obj.id === id) {
+        return { title: obj.title || '', year: obj.year ? String(obj.year) : undefined };
+      }
+      for (const key of Object.keys(obj)) {
+        const found = search(obj[key]);
+        if (found) return found;
+      }
+      return undefined;
+    }
+    return search(homeData);
+  } catch {
+    return undefined;
+  }
+}
+
+const SERVER_EMBEDS: Record<string, (type: string, id: number) => string> = {
+  peachify: (type, id) => `https://peachify.top/embed/${type}/${id}`,
+  vidcore: (type, id) => `https://vidcore.net/${type}/${id}?autoPlay=true`,
+  vidnest: (type, id) => `https://vidnest.net/${type}/${id}`,
+  netprime: (type, id) => `https://netprime.to/watch/${type}/${id}`,
+};
+
+export async function playerHandler(
+  request: FastifyRequest<{ Params: { mediaType: string; id: string }; Querystring: { server?: string } }>,
+  reply: FastifyReply
+) {
+  const { mediaType, id } = request.params;
+  const server = request.query.server || 'peachify';
+  const type = mediaType === 'tv' || mediaType === 'series' ? 'tv' : 'movie';
+
+  const item = findItemInHome(Number(id));
+  const title = item?.title || `${type === 'movie' ? 'Movie' : 'TV Show'} ${id}`;
+  const year = item?.year || '';
+
+  const embedFn = SERVER_EMBEDS[server] || SERVER_EMBEDS.peachify;
+  const embedUrl = embedFn(type, Number(id));
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${title}${year ? ` (${year})` : ''}</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #000; overflow: hidden; width: 100vw; height: 100vh; }
+    iframe { width: 100vw; height: 100vh; border: none; }
+  </style>
+</head>
+<body>
+  <iframe src="${embedUrl}" allowfullscreen allow="autoplay; encrypted-media"></iframe>
+</body>
+</html>`;
+
+  reply.header('Content-Type', 'text/html; charset=utf-8');
+  return reply.send(html);
+}
