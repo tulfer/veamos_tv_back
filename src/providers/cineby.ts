@@ -510,6 +510,7 @@ export function saveCinebyHomeData(data: CinebyHomeData): void {
   const filePath = path.resolve(process.cwd(), 'data', 'sync-data.home.json');
   const dir = path.dirname(filePath);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
+  const { sections, ...rest } = data;
+  fs.writeFileSync(filePath, JSON.stringify(rest, null, 2), 'utf-8');
   logger.info({ path: filePath }, 'Cineby home data saved');
 }
