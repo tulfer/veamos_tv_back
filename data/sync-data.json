@@ -153170,6 +153170,19 @@
   ],
   "channels": [
     {
+      "id": "live_espn-en-vivo",
+      "title": "ESPN (NUEVO)",
+      "logo": "https://images.seeklogo.com/logo-png/28/1/espn-logo-png_seeklogo-283139.png",
+      "group": "Canales TV",
+      "country": "CO",
+      "url": "https://deportes.ksdjugfsddeports.com:9092/MjAwLjExOC4xNDYuNTg=/13_.m3u8?token=2JsEYSalFZb6JEEZLwrobQ&expires=1780186094",
+      "type": "live",
+      "online": true,
+      "refreshUrl": "https://www.cablevisionhd.com/espn-en-vivo.php",
+      "refreshOption": "Opción 1",
+      "proveedor": "cablevisionhd"
+    },
+    {
       "id": "live_tnt-series-en-vivo",
       "title": "TNT Series",
       "logo": "https://images.seeklogo.com/logo-png/29/1/tnt-series-latin-america-logo-png_seeklogo-298607.png",
@@ -167238,5 +167251,5 @@
       ]
     }
   ],
-  "updatedAt": 1780151334861
+  "updatedAt": 1780153735613
 }
