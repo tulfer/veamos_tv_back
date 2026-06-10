@@ -1,7 +1,5 @@
 import { chromium } from 'playwright';
 import { logger } from '../utils/logger';
-import * as fs from 'fs';
-import * as path from 'path';
 
 export interface CinebyItem {
   id: number;
@@ -506,11 +504,9 @@ export async function fetchItemDetails(items: { id: number; mediaType: string; s
   return results;
 }
 
-export function saveCinebyHomeData(data: CinebyHomeData): void {
-  const filePath = path.resolve(process.cwd(), 'data', 'sync-data.home.json');
-  const dir = path.dirname(filePath);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+export async function saveCinebyHomeData(data: CinebyHomeData): Promise<void> {
+  const { saveHomeData } = await import('../services/data-store');
   const { sections, ...rest } = data;
-  fs.writeFileSync(filePath, JSON.stringify(rest, null, 2), 'utf-8');
-  logger.info({ path: filePath }, 'Cineby home data saved');
+  await saveHomeData(rest as unknown as Record<string, unknown>);
+  logger.info('Cineby home data saved to Firestore');
 }

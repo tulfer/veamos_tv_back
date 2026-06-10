@@ -6,8 +6,8 @@ import { SyncMovie, MediaItem } from '../../types';
 
 const PAGE_SIZE = 24;
 
-function getFromSync(): SyncMovie[] | null {
-  const data = loadSyncData();
+async function getFromSync(): Promise<SyncMovie[] | null> {
+  const data = await loadSyncData();
   return data?.movies || null;
 }
 
@@ -15,7 +15,7 @@ export async function getMoviesHandler(request: FastifyRequest, reply: FastifyRe
   const { page = '1' } = request.query as any;
   const pageNum = parseInt(page) || 1;
 
-  const synced = getFromSync();
+  const synced = await getFromSync();
   if (synced) {
     const totalPages = Math.ceil(synced.length / PAGE_SIZE) || 1;
     const start = (pageNum - 1) * PAGE_SIZE;
@@ -48,7 +48,7 @@ export async function getMoviesHandler(request: FastifyRequest, reply: FastifyRe
 export async function getMovieDetailHandler(request: FastifyRequest, reply: FastifyReply) {
   const { id } = request.params as any;
 
-  const synced = getFromSync();
+  const synced = await getFromSync();
   if (synced) {
     const movie = synced.find((m) => m.id === id);
     if (movie) {

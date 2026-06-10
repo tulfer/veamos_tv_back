@@ -14,7 +14,7 @@ export async function getChannelsHandler(request: FastifyRequest, reply: Fastify
   const pageNum = parseInt(page) || 1;
   const showAll = all === 'true' || all === '1';
 
-  const synced = loadSyncData();
+  const synced = await loadSyncData();
   const syncedChannels = synced?.channels;
 
   let channels: LiveChannel[];
@@ -56,7 +56,7 @@ export async function getChannelDetailHandler(request: FastifyRequest, reply: Fa
   const { id } = request.params as any;
 
   // Intentar obtener el canal desde los datos sincronizados primero
-  const synced = loadSyncData();
+  const synced = await loadSyncData();
   const syncedChannels = synced?.channels;
   let channel: LiveChannel | undefined;
 
@@ -118,7 +118,7 @@ export async function getChatytvChannelHandler(request: FastifyRequest, reply: F
     }
 
     // Agregar a la lista de canales sincronizados
-    const existing = loadSyncData();
+    const existing = await loadSyncData();
     const channels = existing?.channels || [];
 
     // Buscar si ya existe
@@ -130,7 +130,7 @@ export async function getChatytvChannelHandler(request: FastifyRequest, reply: F
     // Agregar al inicio
     channels.unshift(result);
 
-    saveSyncData({
+    await saveSyncData({
       movies: existing?.movies || [],
       series: existing?.series || [],
       channels,
@@ -183,7 +183,7 @@ function extractSlugFromUrl(refreshUrl?: string, proveedor?: string): string | n
 }
 
 export async function refreshExpiredChannelsHandler(_request: FastifyRequest, reply: FastifyReply) {
-  const synced = loadSyncData();
+  const synced = await loadSyncData();
   if (!synced || !Array.isArray(synced.channels)) {
     return reply.status(400).send({ error: 'No sync data found' });
   }
@@ -229,7 +229,7 @@ export async function refreshExpiredChannelsHandler(_request: FastifyRequest, re
 
   // Guardar los cambios si se actualizó algún canal
   if (updatedChannels.length > 0) {
-    saveSyncData({
+    await saveSyncData({
       ...synced,
       channels,
       updatedAt: Date.now(),
@@ -251,7 +251,7 @@ export async function refreshExpiredChannelsHandler(_request: FastifyRequest, re
  * Lee el archivo data/sync-data.json.channels.json y actualiza solo la url.
  */
 export async function refreshAllChannelsHandler(_request: FastifyRequest, reply: FastifyReply) {
-  const synced = loadSyncData();
+  const synced = await loadSyncData();
   if (!synced || !Array.isArray(synced.channels)) {
     return reply.status(400).send({ error: 'No sync data found' });
   }
@@ -309,7 +309,7 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
 
   // Guardar los cambios si se actualizó algún canal
   if (updatedChannels.length > 0) {
-    saveSyncData({
+    await saveSyncData({
       ...synced,
       channels,
       updatedAt: Date.now(),
@@ -359,7 +359,7 @@ export async function getTvPorInternet2Handler(request: FastifyRequest, reply: F
     };
 
     // Agregar a la lista de canales sincronizados
-    const existing = loadSyncData();
+    const existing = await loadSyncData();
     const channels = existing?.channels || [];
 
     // Buscar si ya existe
@@ -371,7 +371,7 @@ export async function getTvPorInternet2Handler(request: FastifyRequest, reply: F
     // Agregar al inicio
     channels.unshift(channelData);
 
-    saveSyncData({
+    await saveSyncData({
       movies: existing?.movies || [],
       series: existing?.series || [],
       channels,
@@ -423,7 +423,7 @@ export async function getCablevisionHdHandler(request: FastifyRequest, reply: Fa
     };
 
     // Agregar a la lista de canales sincronizados
-    const existing = loadSyncData();
+    const existing = await loadSyncData();
     const channels = existing?.channels || [];
 
     // Buscar si ya existe
@@ -435,7 +435,7 @@ export async function getCablevisionHdHandler(request: FastifyRequest, reply: Fa
     // Agregar al inicio
     channels.unshift(channelData);
 
-    saveSyncData({
+    await saveSyncData({
       movies: existing?.movies || [],
       series: existing?.series || [],
       channels,
@@ -486,7 +486,7 @@ export async function getWsDeportesChannelHandler(request: FastifyRequest, reply
     };
 
     // Agregar a la lista de canales sincronizados
-    const existing = loadSyncData();
+    const existing = await loadSyncData();
     const channels = existing?.channels || [];
 
     // Buscar si ya existe
@@ -498,7 +498,7 @@ export async function getWsDeportesChannelHandler(request: FastifyRequest, reply
     // Agregar al inicio
     channels.unshift(channelData);
 
-    saveSyncData({
+    await saveSyncData({
       movies: existing?.movies || [],
       series: existing?.series || [],
       channels,

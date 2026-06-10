@@ -73,7 +73,7 @@ export async function contentRoutes(app: FastifyInstance) {
 
     if (id.startsWith('live_')) {
       // Intentar obtener el canal desde los datos sincronizados primero
-      const synced = loadSyncData();
+      const synced = await loadSyncData();
       const syncedChannels = synced?.channels;
       let channel: LiveChannel | undefined;
 
@@ -101,7 +101,7 @@ export async function contentRoutes(app: FastifyInstance) {
       });
     }
 
-    const synced = loadSyncData();
+    const synced = await loadSyncData();
     if (synced) {
       if (type === 'movie') {
         const movie = synced.movies.find((m) => m.id === id);

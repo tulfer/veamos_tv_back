@@ -6,8 +6,8 @@ import { SyncSeries, MediaItem } from '../../types';
 
 const PAGE_SIZE = 24;
 
-function getFromSync(): SyncSeries[] | null {
-  const data = loadSyncData();
+async function getFromSync(): Promise<SyncSeries[] | null> {
+  const data = await loadSyncData();
   return data?.series || null;
 }
 
@@ -15,7 +15,7 @@ export async function getSeriesHandler(request: FastifyRequest, reply: FastifyRe
   const { page = '1' } = request.query as any;
   const pageNum = parseInt(page) || 1;
 
-  const synced = getFromSync();
+  const synced = await getFromSync();
   if (synced) {
     const totalPages = Math.ceil(synced.length / PAGE_SIZE) || 1;
     const start = (pageNum - 1) * PAGE_SIZE;
@@ -48,7 +48,7 @@ export async function getSeriesHandler(request: FastifyRequest, reply: FastifyRe
 export async function getSeriesDetailHandler(request: FastifyRequest, reply: FastifyReply) {
   const { id } = request.params as any;
 
-  const synced = getFromSync();
+  const synced = await getFromSync();
   if (synced) {
     const series = synced.find((s) => s.id === id);
     if (series) {
@@ -86,7 +86,7 @@ export async function getSeriesDetailHandler(request: FastifyRequest, reply: Fas
 export async function getSeasonEpisodesHandler(request: FastifyRequest, reply: FastifyReply) {
   const { id, seasonNumber } = request.params as any;
 
-  const synced = getFromSync();
+  const synced = await getFromSync();
   if (synced) {
     const series = synced.find((s) => s.id === id);
     if (!series) return reply.status(404).send({ error: 'Series not found' });

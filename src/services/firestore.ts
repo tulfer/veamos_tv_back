@@ -13,6 +13,15 @@ export const collections = {
   users: () => getDb().collection('users'),
   cache: () => getDb().collection('cache'),
   recommendations: () => getDb().collection('recommendations'),
+  movies: () => getDb().collection('movies'),
+  series: () => getDb().collection('series'),
+  channels: () => getDb().collection('channels'),
+  popularMovies: () => getDb().collection('popular-movies'),
+  popularSeries: () => getDb().collection('popular-series'),
+  estrenoMovies: () => getDb().collection('estreno-movies'),
+  estrenoSeries: () => getDb().collection('estreno-series'),
+  homeData: () => getDb().collection('home-data'),
+  syncMeta: () => getDb().collection('sync-meta'),
 };
 
 export async function getUserDoc(uid: string) {

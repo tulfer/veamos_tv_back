@@ -1,9 +1,7 @@
-import path from 'path';
-import fs from 'fs';
 import { FastifyRequest, FastifyReply } from 'fastify';
 import { scrapeMovies, scrapeMovieDetail, scrapePopularMovies } from '../../providers/movies';
 import { scrapeSeries, scrapeSeriesDetail, scrapePopularSeries } from '../../providers/series';
-import { saveSyncData, loadSyncData } from '../../services/data-store';
+import { saveSyncData, loadSyncData, saveHomeData, loadHomeData } from '../../services/data-store';
 import { fetchItemDetails } from '../../providers/cineby';
 import { closeBrowser } from '../../services/video-resolver';
 import { fetchLiveChannels, parseM3U, validateBatch } from '../../providers/live-tv';
@@ -162,10 +160,10 @@ export async function syncMoviesHandler(request: FastifyRequest, reply: FastifyR
 
   try {
     const movies = await syncMovies(pages);
-    const existing = loadSyncData();
+    const existing = await loadSyncData();
     const shouldReplace = body?.replace === true;
     const finalMovies = shouldReplace ? movies : mergeByIdGeneric(movies, existing?.movies || []);
-    saveSyncData({
+    await saveSyncData({
       movies: finalMovies,
       series: existing?.series || [],
       channels: existing?.channels || [],
@@ -194,10 +192,10 @@ export async function syncSeriesHandler(request: FastifyRequest, reply: FastifyR
 
   try {
     const series = await syncSeries(pages);
-    const existing = loadSyncData();
+    const existing = await loadSyncData();
     const shouldReplace = body?.replace === true;
     const finalSeries = shouldReplace ? series : mergeByIdGeneric(series, existing?.series || []);
-    saveSyncData({
+    await saveSyncData({
       movies: existing?.movies || [],
       series: finalSeries,
       channels: existing?.channels || [],
@@ -230,11 +228,11 @@ export async function syncAllHandler(request: FastifyRequest, reply: FastifyRepl
       moviePages.length > 0 ? syncMovies(moviePages) : Promise.resolve([]),
       seriesPages.length > 0 ? syncSeries(seriesPages) : Promise.resolve([]),
     ]);
-    const existing = loadSyncData();
+    const existing = await loadSyncData();
     const shouldReplace = body?.replace === true;
     const finalMovies = shouldReplace ? movies : mergeByIdGeneric(movies, existing?.movies || []);
     const finalSeries = shouldReplace ? series : mergeByIdGeneric(series, existing?.series || []);
-    saveSyncData({
+    await saveSyncData({
       movies: finalMovies,
       series: finalSeries,
       channels: existing?.channels || [],
@@ -263,10 +261,10 @@ export async function syncEstrenoMoviesHandler(request: FastifyRequest, reply: F
 
   try {
     const movies = await syncMovies(pages);
-    const existing = loadSyncData();
+    const existing = await loadSyncData();
     const shouldReplace = body?.replace === true;
     const finalEstrenoMovies = shouldReplace ? movies : mergeByIdGeneric(movies, existing?.estrenoMovies || []);
-    saveSyncData({
+    await saveSyncData({
       movies: existing?.movies || [],
       series: existing?.series || [],
       channels: existing?.channels || [],
@@ -295,10 +293,10 @@ export async function syncEstrenoSeriesHandler(request: FastifyRequest, reply: F
 
   try {
     const series = await syncSeries(pages);
-    const existing = loadSyncData();
+    const existing = await loadSyncData();
     const shouldReplace = body?.replace === true;
     const finalEstrenoSeries = shouldReplace ? series : mergeByIdGeneric(series, existing?.estrenoSeries || []);
-    saveSyncData({
+    await saveSyncData({
       movies: existing?.movies || [],
       series: existing?.series || [],
       channels: existing?.channels || [],
@@ -323,10 +321,10 @@ export async function syncLiveHandler(request: FastifyRequest, reply: FastifyRep
 
   try {
     const channels = await fetchLiveChannels();
-    const existing = loadSyncData();
+    const existing = await loadSyncData();
     const shouldReplace = body?.replace === true;
     const finalChannels = shouldReplace ? channels : mergeChannels(channels, existing?.channels || []);
-    saveSyncData({
+    await saveSyncData({
       movies: existing?.movies || [],
       series: existing?.series || [],
       channels: finalChannels,
@@ -350,10 +348,10 @@ export async function syncPopularMoviesHandler(request: FastifyRequest, reply: F
 
   try {
     const popularMovies = await scrapePopularMovies();
-    const existing = loadSyncData();
+    const existing = await loadSyncData();
     const shouldReplace = body?.replace === true;
     const finalPopularMovies = shouldReplace ? popularMovies : mergeByIdGeneric(popularMovies, existing?.popularMovies || []);
-    saveSyncData({
+    await saveSyncData({
       movies: existing?.movies || [],
       series: existing?.series || [],
       channels: existing?.channels || [],
@@ -377,10 +375,10 @@ export async function syncPopularSeriesHandler(request: FastifyRequest, reply: F
 
   try {
     const popularSeries = await scrapePopularSeries();
-    const existing = loadSyncData();
+    const existing = await loadSyncData();
     const shouldReplace = body?.replace === true;
     const finalPopularSeries = shouldReplace ? popularSeries : mergeByIdGeneric(popularSeries, existing?.popularSeries || []);
-    saveSyncData({
+    await saveSyncData({
       movies: existing?.movies || [],
       series: existing?.series || [],
       channels: existing?.channels || [],
@@ -412,7 +410,7 @@ export async function syncHomeByscHandler(_request: FastifyRequest, reply: Fasti
   try {
     const { scrapeCinebyHome, saveCinebyHomeData } = await import('../../providers/cineby');
     const data = await scrapeCinebyHome();
-    saveCinebyHomeData(data);
+    await saveCinebyHomeData(data);
     return reply.send({ ok: true, message: 'Home data synced from cineby.sc', sections: Object.keys(data).length });
   } catch (error: any) {
     logger.error({ error: error.message }, 'Failed to sync home from cineby.sc');
@@ -458,13 +456,10 @@ export async function fetchDetailsHandler(
   reply: FastifyReply
 ) {
   try {
-    const fileName = request.body?.file || 'sync-data.home.json';
-    const filePath = path.join(process.cwd(), 'data', fileName);
-    if (!fs.existsSync(filePath)) {
-      return reply.status(404).send({ error: `File ${fileName} not found` });
+    const homeData = await loadHomeData<any>();
+    if (!homeData) {
+      return reply.status(404).send({ error: 'Home data not found. Run /sync/home-bysc first.' });
     }
-    const raw = fs.readFileSync(filePath, 'utf-8');
-    const homeData: any = JSON.parse(raw);
 
     const allItems: { id: number; mediaType: string; slug: string; title: string }[] = [];
     collectItems(homeData, allItems);
@@ -473,12 +468,11 @@ export async function fetchDetailsHandler(
     const detailMap = new Map(details.map(d => [d.id, d]));
     enrichItem(homeData, detailMap);
 
-    fs.writeFileSync(filePath, JSON.stringify(homeData, null, 2), 'utf-8');
+    await saveHomeData(homeData);
 
     return reply.send({
       ok: true,
       enriched: details.length,
-      file: fileName,
       updatedAt: Date.now(),
     });
   } catch (error) {
@@ -525,7 +519,7 @@ export async function importM3UHandler(request: FastifyRequest, reply: FastifyRe
       return reply.send({ ok: true, imported: 0, skipped: 0, message: 'No valid channels found in the provided list' });
     }
 
-    const existing = loadSyncData();
+    const existing = await loadSyncData();
     const existingChannels = existing?.channels || [];
     const existingTitles = new Set(existingChannels.map((ch) => ch.title.toLowerCase().trim()));
 
@@ -540,7 +534,7 @@ export async function importM3UHandler(request: FastifyRequest, reply: FastifyRe
       }
     }
 
-    saveSyncData({
+    await saveSyncData({
       movies: existing?.movies || [],
       series: existing?.series || [],
       channels: [...existingChannels, ...newChannels],
