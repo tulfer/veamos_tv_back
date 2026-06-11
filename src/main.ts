@@ -89,24 +89,46 @@ async function buildServer() {
       const { getSyncStatus } = await import('./services/sync-status');
       const status = getSyncStatus();
       const fmt = (ts: number | null) => ts ? new Date(ts).toLocaleString('es-ES') : '—';
+      const fmtDur = (ms: number | undefined) => {
+        if (!ms) return '';
+        const s = Math.floor(ms / 1000);
+        if (s < 60) return `${s}s`;
+        return `${Math.floor(s / 60)}m ${s % 60}s`;
+      };
       const badge = (s: string) => {
         if (s === 'running') return '🔄 En curso';
         if (s === 'completed') return '✅ Completada';
         if (s === 'failed') return '❌ Fallida';
         return '⏸️ Pendiente';
       };
+      const syncRow = (label: string, st: any) => `
+<div class="sync-item">
+  <span class="sync-label">${label}</span>
+  <span class="sync-badge">${badge(st.status)}</span>
+  <span class="sync-count">${st.count != null ? `${st.count}` : ''}</span>
+  <span class="sync-dur">${fmtDur(st.duration)}</span>
+  <span class="sync-date">${fmt(st.lastRun)}</span>
+  ${st.error ? `<span class="sync-err" title="${st.error}">⚠️</span>` : ''}
+</div>`;
       syncHtml = `
 <div class="sync-section">
   <h3>Estado de Sincronización</h3>
+  <div class="sync-header">
+    <span class="sync-label">Tipo</span>
+    <span class="sync-badge">Estado</span>
+    <span class="sync-count">Items</span>
+    <span class="sync-dur">Duración</span>
+    <span class="sync-date">Última ejecución</span>
+  </div>
   <div class="sync-grid">
-    <div class="sync-item"><span class="sync-label">Películas</span><span class="sync-badge">${badge(status.movies.status)}</span><span class="sync-date">${fmt(status.movies.lastRun)}</span></div>
-    <div class="sync-item"><span class="sync-label">Series</span><span class="sync-badge">${badge(status.series.status)}</span><span class="sync-date">${fmt(status.series.lastRun)}</span></div>
-    <div class="sync-item"><span class="sync-label">Canales</span><span class="sync-badge">${badge(status.channels.status)}</span><span class="sync-date">${fmt(status.channels.lastRun)}</span></div>
-    <div class="sync-item"><span class="sync-label">Estrenos Películas</span><span class="sync-badge">${badge(status.estrenoMovies.status)}</span><span class="sync-date">${fmt(status.estrenoMovies.lastRun)}</span></div>
-    <div class="sync-item"><span class="sync-label">Estrenos Series</span><span class="sync-badge">${badge(status.estrenoSeries.status)}</span><span class="sync-date">${fmt(status.estrenoSeries.lastRun)}</span></div>
-    <div class="sync-item"><span class="sync-label">Populares Películas</span><span class="sync-badge">${badge(status.popularMovies.status)}</span><span class="sync-date">${fmt(status.popularMovies.lastRun)}</span></div>
-    <div class="sync-item"><span class="sync-label">Populares Series</span><span class="sync-badge">${badge(status.popularSeries.status)}</span><span class="sync-date">${fmt(status.popularSeries.lastRun)}</span></div>
-    <div class="sync-item"><span class="sync-label">Home</span><span class="sync-badge">${badge(status.home.status)}</span><span class="sync-date">${fmt(status.home.lastRun)}</span></div>
+    ${syncRow('Películas', status.movies)}
+    ${syncRow('Series', status.series)}
+    ${syncRow('Canales', status.channels)}
+    ${syncRow('Estrenos Películas', status.estrenoMovies)}
+    ${syncRow('Estrenos Series', status.estrenoSeries)}
+    ${syncRow('Populares Películas', status.popularMovies)}
+    ${syncRow('Populares Series', status.popularSeries)}
+    ${syncRow('Home', status.home)}
   </div>
 </div>`;
     } catch {}
@@ -141,11 +163,15 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
   backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.1)}
 .sync-section h3{font-size:1.1rem;font-weight:600;margin-bottom:1rem;color:#a0a0c0}
 .sync-grid{display:flex;flex-direction:column;gap:.5rem}
+.sync-header{display:flex;padding:.4rem .8rem;font-size:.75rem;color:#8080a0;font-weight:600}
 .sync-item{display:flex;justify-content:space-between;align-items:center;padding:.4rem .8rem;
   background:rgba(255,255,255,.03);border-radius:8px;font-size:.85rem}
-.sync-label{font-weight:500;text-align:left;flex:1}
-.sync-badge{text-align:center;flex:0 0 120px}
+.sync-label{font-weight:500;text-align:left;flex:2}
+.sync-badge{text-align:center;flex:0 0 110px}
+.sync-count{text-align:center;flex:0 0 50px;font-size:.8rem;color:#a0a0c0}
+.sync-dur{text-align:center;flex:0 0 60px;font-size:.8rem;color:#a0a0c0}
 .sync-date{text-align:right;flex:0 0 160px;font-size:.8rem;color:#8080a0}
+.sync-err{cursor:help;margin-left:.3rem}
 .footer{margin-top:2rem;font-size:.85rem;color:#606080}
 </style>
 </head>

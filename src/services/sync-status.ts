@@ -11,6 +11,8 @@ export type SyncType =
 export interface SyncJobStatus {
   status: 'idle' | 'running' | 'completed' | 'failed';
   lastRun: number | null;
+  duration?: number;
+  count?: number;
   error?: string;
 }
 
@@ -31,16 +33,30 @@ const state: SyncState = {
 
 export function startSync(type: SyncType): boolean {
   if (state[type].status === 'running') return false;
-  state[type] = { status: 'running', lastRun: Date.now() };
+  state[type] = { status: 'running', lastRun: Date.now(), duration: undefined, count: undefined, error: undefined };
   return true;
 }
 
-export function completeSync(type: SyncType): void {
-  state[type] = { status: 'completed', lastRun: Date.now() };
+export function completeSync(type: SyncType, count?: number): void {
+  const entry = state[type];
+  const started = entry.lastRun;
+  state[type] = {
+    status: 'completed',
+    lastRun: Date.now(),
+    duration: started ? Date.now() - started : undefined,
+    count,
+  };
 }
 
 export function failSync(type: SyncType, error: string): void {
-  state[type] = { status: 'failed', lastRun: Date.now(), error };
+  const entry = state[type];
+  const started = entry.lastRun;
+  state[type] = {
+    status: 'failed',
+    lastRun: Date.now(),
+    duration: started ? Date.now() - started : undefined,
+    error,
+  };
 }
 
 export function getSyncStatus(): SyncState {

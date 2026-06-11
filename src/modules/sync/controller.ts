@@ -154,12 +154,12 @@ async function syncSeries(pages: number[]): Promise<SyncSeries[]> {
 
 async function runBackgroundSync(
   type: SyncType,
-  fn: () => Promise<void>,
+  fn: () => Promise<number | undefined>,
 ): Promise<void> {
   memoryCache.flush();
   try {
-    await fn();
-    completeSync(type);
+    const count = await fn();
+    completeSync(type, count);
   } catch (error: any) {
     logger.error({ error, type }, `${type} sync failed`);
     failSync(type, error.message);
@@ -194,6 +194,7 @@ export async function syncMoviesHandler(request: FastifyRequest, reply: FastifyR
       updatedAt: Date.now(),
     });
     await closeBrowser();
+    return finalMovies.length;
   });
 }
 
@@ -225,6 +226,7 @@ export async function syncSeriesHandler(request: FastifyRequest, reply: FastifyR
       updatedAt: Date.now(),
     });
     await closeBrowser();
+    return finalSeries.length;
   });
 }
 
@@ -261,6 +263,7 @@ export async function syncAllHandler(request: FastifyRequest, reply: FastifyRepl
         updatedAt: Date.now(),
       });
       await closeBrowser();
+      return finalMovies.length;
     });
   }
   if (seriesPages.length > 0) {
@@ -280,6 +283,7 @@ export async function syncAllHandler(request: FastifyRequest, reply: FastifyRepl
         updatedAt: Date.now(),
       });
       await closeBrowser();
+      return finalSeries.length;
     });
   }
 }
@@ -312,6 +316,7 @@ export async function syncEstrenoMoviesHandler(request: FastifyRequest, reply: F
       updatedAt: Date.now(),
     });
     await closeBrowser();
+    return finalEstrenoMovies.length;
   });
 }
 
@@ -343,6 +348,7 @@ export async function syncEstrenoSeriesHandler(request: FastifyRequest, reply: F
       updatedAt: Date.now(),
     });
     await closeBrowser();
+    return finalEstrenoSeries.length;
   });
 }
 
@@ -392,7 +398,7 @@ export async function syncLiveHandler(request: FastifyRequest, reply: FastifyRep
       const migrated = await migrateChannelsFromJson();
       if (migrated > 0) {
         logger.info({ migrated }, 'Channels migrated from JSON');
-        return;
+        return migrated;
       }
     }
 
@@ -409,6 +415,7 @@ export async function syncLiveHandler(request: FastifyRequest, reply: FastifyRep
       estrenoSeries: existing?.estrenoSeries || [],
       updatedAt: Date.now(),
     });
+    return finalChannels.length;
   });
 }
 
@@ -435,6 +442,7 @@ export async function syncPopularMoviesHandler(request: FastifyRequest, reply: F
       estrenoSeries: existing?.estrenoSeries || [],
       updatedAt: Date.now(),
     });
+    return finalPopularMovies.length;
   });
 }
 
@@ -461,6 +469,7 @@ export async function syncPopularSeriesHandler(request: FastifyRequest, reply: F
       estrenoSeries: existing?.estrenoSeries || [],
       updatedAt: Date.now(),
     });
+    return finalPopularSeries.length;
   });
 }
 
@@ -486,6 +495,7 @@ export async function syncHomeByscHandler(_request: FastifyRequest, reply: Fasti
     const { scrapeCinebyHome, saveCinebyHomeData } = await import('../../providers/cineby');
     const data = await scrapeCinebyHome();
     await saveCinebyHomeData(data);
+    return Object.keys(data.sections || {}).length || data.banner?.length || 0;
   });
 }
 
@@ -576,7 +586,7 @@ export async function importM3UHandler(request: FastifyRequest, reply: FastifyRe
     const parsed = parseM3U(rawContent, sourceCountry);
     if (parsed.length === 0) {
       logger.warn('No channels found in M3U data');
-      return;
+      return 0;
     }
 
     const channels: LiveChannel[] = parsed.map((ch, idx) => ({
@@ -593,7 +603,7 @@ export async function importM3UHandler(request: FastifyRequest, reply: FastifyRe
     const toAdd = body.skipValidation ? channels : await validateBatchBatched(channels);
     if (toAdd.length === 0) {
       logger.info('No valid channels found in M3U data');
-      return;
+      return 0;
     }
 
     const existing = await loadSyncData();
@@ -623,6 +633,7 @@ export async function importM3UHandler(request: FastifyRequest, reply: FastifyRe
     });
 
     logger.info({ imported: newChannels.length, skipped }, 'M3U import completed');
+    return newChannels.length;
   });
 }
 
