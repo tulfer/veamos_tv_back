@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { FastifyRequest, FastifyReply } from 'fastify';
 import { scrapeMovies, scrapeMovieDetail, scrapePopularMovies } from '../../providers/movies';
 import { scrapeSeries, scrapeSeriesDetail, scrapePopularSeries } from '../../providers/series';
@@ -314,14 +316,52 @@ export async function syncEstrenoSeriesHandler(request: FastifyRequest, reply: F
   }
 }
 
+async function migrateChannelsFromJson(): Promise<number> {
+  const jsonPath = path.resolve(process.cwd(), 'data', 'sync-data.json');
+  if (!fs.existsSync(jsonPath)) return 0;
+
+  try {
+    const raw = fs.readFileSync(jsonPath, 'utf-8');
+    const data = JSON.parse(raw);
+    const channels: LiveChannel[] = data.channels || [];
+    if (channels.length === 0) return 0;
+
+    const existing = await loadSyncData();
+    await saveSyncData({
+      movies: existing?.movies || [],
+      series: existing?.series || [],
+      channels,
+      popularMovies: existing?.popularMovies || [],
+      popularSeries: existing?.popularSeries || [],
+      estrenoMovies: existing?.estrenoMovies || [],
+      estrenoSeries: existing?.estrenoSeries || [],
+      updatedAt: Date.now(),
+    });
+    logger.info({ channels: channels.length }, 'Channels migrated from JSON to Firestore');
+    return channels.length;
+  } catch (error) {
+    logger.error({ error }, 'Failed to migrate channels from JSON');
+    return 0;
+  }
+}
+
 export async function syncLiveHandler(request: FastifyRequest, reply: FastifyReply) {
   memoryCache.flush();
   const body = request.body as { replace?: boolean } | undefined;
   logger.info('Starting live channels sync');
 
   try {
-    const channels = await fetchLiveChannels();
     const existing = await loadSyncData();
+
+    // One-time migration: si hay JSON con canales y Firestore está vacío, migrar
+    if (!existing || existing.channels.length === 0) {
+      const migrated = await migrateChannelsFromJson();
+      if (migrated > 0) {
+        return reply.send({ ok: true, channels: migrated, migrated: true, message: 'Channels migrated from JSON to Firestore' });
+      }
+    }
+
+    const channels = await fetchLiveChannels();
     const shouldReplace = body?.replace === true;
     const finalChannels = shouldReplace ? channels : mergeChannels(channels, existing?.channels || []);
     await saveSyncData({
