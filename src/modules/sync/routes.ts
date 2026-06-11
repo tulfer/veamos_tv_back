@@ -11,6 +11,7 @@ import {
   importM3UHandler,
   syncHomeByscHandler,
   fetchDetailsHandler,
+  syncStatusHandler,
 } from './controller';
 
 export async function syncRoutes(app: FastifyInstance) {
@@ -25,4 +26,5 @@ export async function syncRoutes(app: FastifyInstance) {
   app.post('/sync/live/import', importM3UHandler);
   app.post('/sync/home-bysc', syncHomeByscHandler);
   app.post('/sync/fetch-details', fetchDetailsHandler);
+  app.get('/sync/status', syncStatusHandler);
 }

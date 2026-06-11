@@ -83,6 +83,34 @@ async function buildServer() {
 
   app.get('/', async (_req, reply) => {
     reply.header('content-type', 'text/html; charset=utf-8');
+
+    let syncHtml = '';
+    try {
+      const { getSyncStatus } = await import('./services/sync-status');
+      const status = getSyncStatus();
+      const fmt = (ts: number | null) => ts ? new Date(ts).toLocaleString('es-ES') : '—';
+      const badge = (s: string) => {
+        if (s === 'running') return '🔄 En curso';
+        if (s === 'completed') return '✅ Completada';
+        if (s === 'failed') return '❌ Fallida';
+        return '⏸️ Pendiente';
+      };
+      syncHtml = `
+<div class="sync-section">
+  <h3>Estado de Sincronización</h3>
+  <div class="sync-grid">
+    <div class="sync-item"><span class="sync-label">Películas</span><span class="sync-badge">${badge(status.movies.status)}</span><span class="sync-date">${fmt(status.movies.lastRun)}</span></div>
+    <div class="sync-item"><span class="sync-label">Series</span><span class="sync-badge">${badge(status.series.status)}</span><span class="sync-date">${fmt(status.series.lastRun)}</span></div>
+    <div class="sync-item"><span class="sync-label">Canales</span><span class="sync-badge">${badge(status.channels.status)}</span><span class="sync-date">${fmt(status.channels.lastRun)}</span></div>
+    <div class="sync-item"><span class="sync-label">Estrenos Películas</span><span class="sync-badge">${badge(status.estrenoMovies.status)}</span><span class="sync-date">${fmt(status.estrenoMovies.lastRun)}</span></div>
+    <div class="sync-item"><span class="sync-label">Estrenos Series</span><span class="sync-badge">${badge(status.estrenoSeries.status)}</span><span class="sync-date">${fmt(status.estrenoSeries.lastRun)}</span></div>
+    <div class="sync-item"><span class="sync-label">Populares Películas</span><span class="sync-badge">${badge(status.popularMovies.status)}</span><span class="sync-date">${fmt(status.popularMovies.lastRun)}</span></div>
+    <div class="sync-item"><span class="sync-label">Populares Series</span><span class="sync-badge">${badge(status.popularSeries.status)}</span><span class="sync-date">${fmt(status.popularSeries.lastRun)}</span></div>
+    <div class="sync-item"><span class="sync-label">Home</span><span class="sync-badge">${badge(status.home.status)}</span><span class="sync-date">${fmt(status.home.lastRun)}</span></div>
+  </div>
+</div>`;
+    } catch {}
+
     return `<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -94,7 +122,7 @@ async function buildServer() {
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
   background:linear-gradient(135deg,#0f0c29,#302b63,#24243e);
   min-height:100vh;display:flex;align-items:center;justify-content:center;color:#fff}
-.container{text-align:center;padding:2rem}
+.container{text-align:center;padding:2rem;width:100%;max-width:800px}
 .logo{font-size:4rem;font-weight:800;background:linear-gradient(135deg,#667eea,#764ba2);
   -webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:1rem}
 .tagline{font-size:1.3rem;color:#a0a0c0;margin-bottom:2.5rem}
@@ -109,7 +137,16 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
 .feature-icon{font-size:2rem;margin-bottom:.5rem}
 .feature-title{font-weight:600;margin-bottom:.3rem}
 .feature-desc{font-size:.85rem;color:#a0a0c0}
-.footer{margin-top:3rem;font-size:.85rem;color:#606080}
+.sync-section{margin-top:2rem;background:rgba(255,255,255,.05);border-radius:16px;padding:1.5rem;
+  backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.1)}
+.sync-section h3{font-size:1.1rem;font-weight:600;margin-bottom:1rem;color:#a0a0c0}
+.sync-grid{display:flex;flex-direction:column;gap:.5rem}
+.sync-item{display:flex;justify-content:space-between;align-items:center;padding:.4rem .8rem;
+  background:rgba(255,255,255,.03);border-radius:8px;font-size:.85rem}
+.sync-label{font-weight:500;text-align:left;flex:1}
+.sync-badge{text-align:center;flex:0 0 120px}
+.sync-date{text-align:right;flex:0 0 160px;font-size:.8rem;color:#8080a0}
+.footer{margin-top:2rem;font-size:.85rem;color:#606080}
 </style>
 </head>
 <body>
@@ -128,6 +165,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
 <div class="feature-title">Series</div>
 <div class="feature-desc">Temporadas completas</div></div>
 </div>
+${syncHtml}
 <div class="footer">Veamos TV &copy; 2026</div>
 </div>
 </body>

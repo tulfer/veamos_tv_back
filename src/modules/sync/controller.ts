@@ -11,6 +11,7 @@ import { fetchHTML } from '../../utils/http';
 import { logger } from '../../utils/logger';
 import { memoryCache } from '../../cache/memory';
 import { SyncMovie, SyncSeries, SyncData, LiveChannel } from '../../types';
+import { startSync, completeSync, failSync, SyncType } from '../../services/sync-status';
 
 const CONCURRENCY = 5;
 
@@ -151,16 +152,33 @@ async function syncSeries(pages: number[]): Promise<SyncSeries[]> {
   return results;
 }
 
-export async function syncMoviesHandler(request: FastifyRequest, reply: FastifyReply) {
+async function runBackgroundSync(
+  type: SyncType,
+  fn: () => Promise<void>,
+): Promise<void> {
   memoryCache.flush();
+  try {
+    await fn();
+    completeSync(type);
+  } catch (error: any) {
+    logger.error({ error, type }, `${type} sync failed`);
+    failSync(type, error.message);
+  }
+}
+
+export async function syncMoviesHandler(request: FastifyRequest, reply: FastifyReply) {
   const body = request.body as { pages?: string; replace?: boolean } | undefined;
   const pages = parsePages(body?.pages);
   if (pages.length === 0) {
     return reply.status(400).send({ error: 'Provide pages in body, e.g. { "pages": "1-20" }' });
   }
-  logger.info({ pages }, 'Starting movie sync');
+  if (!startSync('movies')) {
+    return reply.send({ ok: true, message: 'Movies sync already in progress' });
+  }
 
-  try {
+  reply.send({ ok: true, message: 'Movies sync started' });
+
+  runBackgroundSync('movies', async () => {
     const movies = await syncMovies(pages);
     const existing = await loadSyncData();
     const shouldReplace = body?.replace === true;
@@ -176,23 +194,22 @@ export async function syncMoviesHandler(request: FastifyRequest, reply: FastifyR
       updatedAt: Date.now(),
     });
     await closeBrowser();
-    return reply.send({ ok: true, movies: finalMovies.length, series: existing?.series.length || 0, replaced: shouldReplace });
-  } catch (error) {
-    logger.error({ error }, 'Movie sync failed');
-    return reply.status(500).send({ error: 'Sync failed' });
-  }
+  });
 }
 
 export async function syncSeriesHandler(request: FastifyRequest, reply: FastifyReply) {
-  memoryCache.flush();
   const body = request.body as { pages?: string; replace?: boolean } | undefined;
   const pages = parsePages(body?.pages);
   if (pages.length === 0) {
     return reply.status(400).send({ error: 'Provide pages in body, e.g. { "pages": "1-20" }' });
   }
-  logger.info({ pages }, 'Starting series sync');
+  if (!startSync('series')) {
+    return reply.send({ ok: true, message: 'Series sync already in progress' });
+  }
 
-  try {
+  reply.send({ ok: true, message: 'Series sync started' });
+
+  runBackgroundSync('series', async () => {
     const series = await syncSeries(pages);
     const existing = await loadSyncData();
     const shouldReplace = body?.replace === true;
@@ -208,60 +225,78 @@ export async function syncSeriesHandler(request: FastifyRequest, reply: FastifyR
       updatedAt: Date.now(),
     });
     await closeBrowser();
-    return reply.send({ ok: true, movies: existing?.movies.length || 0, series: finalSeries.length, replaced: shouldReplace });
-  } catch (error) {
-    logger.error({ error }, 'Series sync failed');
-    return reply.status(500).send({ error: 'Sync failed' });
-  }
+  });
 }
 
 export async function syncAllHandler(request: FastifyRequest, reply: FastifyReply) {
-  memoryCache.flush();
   const body = request.body as { pages?: string; movies?: string; series?: string; replace?: boolean } | undefined;
   const moviePages = parsePages(body?.movies ?? body?.pages);
   const seriesPages = parsePages(body?.series ?? body?.pages);
   if (moviePages.length === 0 && seriesPages.length === 0) {
     return reply.status(400).send({ error: 'Provide pages in body, e.g. { "pages": "1-20" }' });
   }
-  logger.info({ moviePages, seriesPages }, 'Starting full sync');
+  if (!startSync('movies') && moviePages.length > 0) {
+    return reply.send({ ok: true, message: 'Movies sync already in progress' });
+  }
+  if (!startSync('series') && seriesPages.length > 0) {
+    return reply.send({ ok: true, message: 'Series sync already in progress' });
+  }
 
-  try {
-    const [movies, series] = await Promise.all([
-      moviePages.length > 0 ? syncMovies(moviePages) : Promise.resolve([]),
-      seriesPages.length > 0 ? syncSeries(seriesPages) : Promise.resolve([]),
-    ]);
-    const existing = await loadSyncData();
-    const shouldReplace = body?.replace === true;
-    const finalMovies = shouldReplace ? movies : mergeByIdGeneric(movies, existing?.movies || []);
-    const finalSeries = shouldReplace ? series : mergeByIdGeneric(series, existing?.series || []);
-    await saveSyncData({
-      movies: finalMovies,
-      series: finalSeries,
-      channels: existing?.channels || [],
-      popularMovies: existing?.popularMovies || [],
-      popularSeries: existing?.popularSeries || [],
-      estrenoMovies: existing?.estrenoMovies || [],
-      estrenoSeries: existing?.estrenoSeries || [],
-      updatedAt: Date.now(),
+  reply.send({ ok: true, message: 'Full sync started' });
+
+  if (moviePages.length > 0) {
+    runBackgroundSync('movies', async () => {
+      const movies = await syncMovies(moviePages);
+      const existing = await loadSyncData();
+      const shouldReplace = body?.replace === true;
+      const finalMovies = shouldReplace ? movies : mergeByIdGeneric(movies, existing?.movies || []);
+      await saveSyncData({
+        movies: finalMovies,
+        series: existing?.series || [],
+        channels: existing?.channels || [],
+        popularMovies: existing?.popularMovies || [],
+        popularSeries: existing?.popularSeries || [],
+        estrenoMovies: existing?.estrenoMovies || [],
+        estrenoSeries: existing?.estrenoSeries || [],
+        updatedAt: Date.now(),
+      });
+      await closeBrowser();
     });
-    await closeBrowser();
-    return reply.send({ ok: true, movies: finalMovies.length, series: finalSeries.length, replaced: shouldReplace });
-  } catch (error) {
-    logger.error({ error }, 'Full sync failed');
-    return reply.status(500).send({ error: 'Sync failed' });
+  }
+  if (seriesPages.length > 0) {
+    runBackgroundSync('series', async () => {
+      const series = await syncSeries(seriesPages);
+      const existing = await loadSyncData();
+      const shouldReplace = body?.replace === true;
+      const finalSeries = shouldReplace ? series : mergeByIdGeneric(series, existing?.series || []);
+      await saveSyncData({
+        movies: existing?.movies || [],
+        series: finalSeries,
+        channels: existing?.channels || [],
+        popularMovies: existing?.popularMovies || [],
+        popularSeries: existing?.popularSeries || [],
+        estrenoMovies: existing?.estrenoMovies || [],
+        estrenoSeries: existing?.estrenoSeries || [],
+        updatedAt: Date.now(),
+      });
+      await closeBrowser();
+    });
   }
 }
 
 export async function syncEstrenoMoviesHandler(request: FastifyRequest, reply: FastifyReply) {
-  memoryCache.flush();
   const body = request.body as { pages?: string; replace?: boolean } | undefined;
   const pages = parsePages(body?.pages);
   if (pages.length === 0) {
     return reply.status(400).send({ error: 'Provide pages in body, e.g. { "pages": "1-20" }' });
   }
-  logger.info({ pages }, 'Starting estreno movies sync');
+  if (!startSync('estrenoMovies')) {
+    return reply.send({ ok: true, message: 'Estreno movies sync already in progress' });
+  }
 
-  try {
+  reply.send({ ok: true, message: 'Estreno movies sync started' });
+
+  runBackgroundSync('estrenoMovies', async () => {
     const movies = await syncMovies(pages);
     const existing = await loadSyncData();
     const shouldReplace = body?.replace === true;
@@ -277,23 +312,22 @@ export async function syncEstrenoMoviesHandler(request: FastifyRequest, reply: F
       updatedAt: Date.now(),
     });
     await closeBrowser();
-    return reply.send({ ok: true, estrenoMovies: finalEstrenoMovies.length, replaced: shouldReplace });
-  } catch (error) {
-    logger.error({ error }, 'Estreno movies sync failed');
-    return reply.status(500).send({ error: 'Sync failed' });
-  }
+  });
 }
 
 export async function syncEstrenoSeriesHandler(request: FastifyRequest, reply: FastifyReply) {
-  memoryCache.flush();
   const body = request.body as { pages?: string; replace?: boolean } | undefined;
   const pages = parsePages(body?.pages);
   if (pages.length === 0) {
     return reply.status(400).send({ error: 'Provide pages in body, e.g. { "pages": "1-20" }' });
   }
-  logger.info({ pages }, 'Starting estreno series sync');
+  if (!startSync('estrenoSeries')) {
+    return reply.send({ ok: true, message: 'Estreno series sync already in progress' });
+  }
 
-  try {
+  reply.send({ ok: true, message: 'Estreno series sync started' });
+
+  runBackgroundSync('estrenoSeries', async () => {
     const series = await syncSeries(pages);
     const existing = await loadSyncData();
     const shouldReplace = body?.replace === true;
@@ -309,11 +343,7 @@ export async function syncEstrenoSeriesHandler(request: FastifyRequest, reply: F
       updatedAt: Date.now(),
     });
     await closeBrowser();
-    return reply.send({ ok: true, estrenoSeries: finalEstrenoSeries.length, replaced: shouldReplace });
-  } catch (error) {
-    logger.error({ error }, 'Estreno series sync failed');
-    return reply.status(500).send({ error: 'Sync failed' });
-  }
+  });
 }
 
 async function migrateChannelsFromJson(): Promise<number> {
@@ -346,18 +376,23 @@ async function migrateChannelsFromJson(): Promise<number> {
 }
 
 export async function syncLiveHandler(request: FastifyRequest, reply: FastifyReply) {
-  memoryCache.flush();
   const body = request.body as { replace?: boolean } | undefined;
-  logger.info('Starting live channels sync');
 
-  try {
+  // Check if sync already running or if JSON migration needed
+  if (!startSync('channels')) {
+    return reply.send({ ok: true, message: 'Channels sync already in progress' });
+  }
+
+  reply.send({ ok: true, message: 'Channels sync started' });
+
+  runBackgroundSync('channels', async () => {
     const existing = await loadSyncData();
 
-    // One-time migration: si hay JSON con canales y Firestore está vacío, migrar
     if (!existing || existing.channels.length === 0) {
       const migrated = await migrateChannelsFromJson();
       if (migrated > 0) {
-        return reply.send({ ok: true, channels: migrated, migrated: true, message: 'Channels migrated from JSON to Firestore' });
+        logger.info({ migrated }, 'Channels migrated from JSON');
+        return;
       }
     }
 
@@ -374,19 +409,18 @@ export async function syncLiveHandler(request: FastifyRequest, reply: FastifyRep
       estrenoSeries: existing?.estrenoSeries || [],
       updatedAt: Date.now(),
     });
-    return reply.send({ ok: true, channels: finalChannels.length, replaced: shouldReplace });
-  } catch (error) {
-    logger.error({ error }, 'Live channels sync failed');
-    return reply.status(500).send({ error: 'Sync failed' });
-  }
+  });
 }
 
 export async function syncPopularMoviesHandler(request: FastifyRequest, reply: FastifyReply) {
-  memoryCache.flush();
   const body = request.body as { replace?: boolean } | undefined;
-  logger.info('Starting popular movies sync');
+  if (!startSync('popularMovies')) {
+    return reply.send({ ok: true, message: 'Popular movies sync already in progress' });
+  }
 
-  try {
+  reply.send({ ok: true, message: 'Popular movies sync started' });
+
+  runBackgroundSync('popularMovies', async () => {
     const popularMovies = await scrapePopularMovies();
     const existing = await loadSyncData();
     const shouldReplace = body?.replace === true;
@@ -401,19 +435,18 @@ export async function syncPopularMoviesHandler(request: FastifyRequest, reply: F
       estrenoSeries: existing?.estrenoSeries || [],
       updatedAt: Date.now(),
     });
-    return reply.send({ ok: true, popularMovies: finalPopularMovies.length, replaced: shouldReplace });
-  } catch (error) {
-    logger.error({ error }, 'Popular movies sync failed');
-    return reply.status(500).send({ error: 'Sync failed' });
-  }
+  });
 }
 
 export async function syncPopularSeriesHandler(request: FastifyRequest, reply: FastifyReply) {
-  memoryCache.flush();
   const body = request.body as { replace?: boolean } | undefined;
-  logger.info('Starting popular series sync');
+  if (!startSync('popularSeries')) {
+    return reply.send({ ok: true, message: 'Popular series sync already in progress' });
+  }
 
-  try {
+  reply.send({ ok: true, message: 'Popular series sync started' });
+
+  runBackgroundSync('popularSeries', async () => {
     const popularSeries = await scrapePopularSeries();
     const existing = await loadSyncData();
     const shouldReplace = body?.replace === true;
@@ -428,11 +461,7 @@ export async function syncPopularSeriesHandler(request: FastifyRequest, reply: F
       estrenoSeries: existing?.estrenoSeries || [],
       updatedAt: Date.now(),
     });
-    return reply.send({ ok: true, popularSeries: finalPopularSeries.length, replaced: shouldReplace });
-  } catch (error) {
-    logger.error({ error }, 'Popular series sync failed');
-    return reply.status(500).send({ error: 'Sync failed' });
-  }
+  });
 }
 
 async function validateBatchBatched(channels: LiveChannel[], batchSize = 30): Promise<LiveChannel[]> {
@@ -447,15 +476,17 @@ async function validateBatchBatched(channels: LiveChannel[], batchSize = 30): Pr
 }
 
 export async function syncHomeByscHandler(_request: FastifyRequest, reply: FastifyReply) {
-  try {
+  if (!startSync('home')) {
+    return reply.send({ ok: true, message: 'Home sync already in progress' });
+  }
+
+  reply.send({ ok: true, message: 'Home sync started' });
+
+  runBackgroundSync('home', async () => {
     const { scrapeCinebyHome, saveCinebyHomeData } = await import('../../providers/cineby');
     const data = await scrapeCinebyHome();
     await saveCinebyHomeData(data);
-    return reply.send({ ok: true, message: 'Home data synced from cineby.sc', sections: Object.keys(data).length });
-  } catch (error: any) {
-    logger.error({ error: error.message }, 'Failed to sync home from cineby.sc');
-    return reply.status(500).send({ error: 'Failed to sync home data', detail: error.message });
-  }
+  });
 }
 
 function collectItems(obj: any, acc: { id: number; mediaType: string; slug: string; title: string }[]) {
@@ -526,8 +557,13 @@ export async function importM3UHandler(request: FastifyRequest, reply: FastifyRe
   if (!body?.url && !body?.content) {
     return reply.status(400).send({ error: 'Provide "url" or "content" with .m3u data' });
   }
+  if (!startSync('channels')) {
+    return reply.send({ ok: true, message: 'Import already in progress' });
+  }
 
-  try {
+  reply.send({ ok: true, message: 'M3U import started' });
+
+  runBackgroundSync('channels', async () => {
     let rawContent: string;
     const sourceCountry: string | undefined = body.country;
 
@@ -539,7 +575,8 @@ export async function importM3UHandler(request: FastifyRequest, reply: FastifyRe
 
     const parsed = parseM3U(rawContent, sourceCountry);
     if (parsed.length === 0) {
-      return reply.status(400).send({ error: 'No channels found in the provided .m3u data' });
+      logger.warn('No channels found in M3U data');
+      return;
     }
 
     const channels: LiveChannel[] = parsed.map((ch, idx) => ({
@@ -554,9 +591,9 @@ export async function importM3UHandler(request: FastifyRequest, reply: FastifyRe
     }));
 
     const toAdd = body.skipValidation ? channels : await validateBatchBatched(channels);
-
     if (toAdd.length === 0) {
-      return reply.send({ ok: true, imported: 0, skipped: 0, message: 'No valid channels found in the provided list' });
+      logger.info('No valid channels found in M3U data');
+      return;
     }
 
     const existing = await loadSyncData();
@@ -585,9 +622,11 @@ export async function importM3UHandler(request: FastifyRequest, reply: FastifyRe
       updatedAt: Date.now(),
     });
 
-    return reply.send({ ok: true, imported: newChannels.length, skipped, total: existingChannels.length + newChannels.length });
-  } catch (error) {
-    logger.error({ error }, 'M3U import failed');
-    return reply.status(500).send({ error: 'Import failed' });
-  }
+    logger.info({ imported: newChannels.length, skipped }, 'M3U import completed');
+  });
+}
+
+export async function syncStatusHandler(_request: FastifyRequest, reply: FastifyReply) {
+  const { getSyncStatus } = await import('../../services/sync-status');
+  return reply.send(getSyncStatus());
 }
