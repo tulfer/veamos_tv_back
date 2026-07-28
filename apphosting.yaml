@@ -42,9 +42,9 @@ env:
     availability:
       - RUNTIME
 
-# Secret environment variables (set in Firebase Console)
-# - JWT_SECRET
-# - FIREBASE_CLIENT_EMAIL
-# - FIREBASE_PRIVATE_KEY
-# - FIREBASE_DATABASE_URL
-# - REDIS_URL
+  - variable: JWT_SECRET
+    secret: JWT_SECRET
+    availability:
+      - RUNTIME
+
+

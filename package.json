@@ -22,7 +22,7 @@
     "cheerio": "^1.0.0-rc.12",
     "dotenv": "^16.4.5",
     "fastify": "^4.28.1",
-    "firebase": "^12.13.0",
+    "firebase": "^12.14.0",
     "firebase-admin": "^12.1.1",
     "jsonwebtoken": "^9.0.2",
     "pino": "^9.2.0",

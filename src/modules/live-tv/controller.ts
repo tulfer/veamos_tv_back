@@ -248,7 +248,7 @@ export async function refreshExpiredChannelsHandler(_request: FastifyRequest, re
 /**
  * Actualiza la URL de los canales que tengan refreshUrl, usando el proveedor
  * especificado en el campo "proveedor" del objeto del canal.
- * Lee el archivo data/sync-data.json.channels.json y actualiza solo la url.
+ * Lee los canales desde Firestore y actualiza solo la url.
  */
 export async function refreshAllChannelsHandler(_request: FastifyRequest, reply: FastifyReply) {
   const synced = await loadSyncData();

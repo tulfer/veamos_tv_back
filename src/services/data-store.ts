@@ -1,50 +1,63 @@
+import admin from 'firebase-admin';
 import { getFirestore } from '../config/firebase';
+import { collections } from './firestore';
 import { logger } from '../utils/logger';
-import { SyncData } from '../types';
+import { SyncData, SyncMovie, SyncSeries, LiveChannel, MediaItem } from '../types';
 
-const SYNC_COLLECTION = 'syncData';
-
-function db() {
+function getDb() {
   return getFirestore();
 }
 
-async function getDoc<T>(docId: string): Promise<T | null> {
-  try {
-    const snap = await db().collection(SYNC_COLLECTION).doc(docId).get();
-    return snap.exists ? (snap.data() as T) : null;
-  } catch {
-    return null;
-  }
+async function getCollectionAsArray<T>(colRef: admin.firestore.CollectionReference): Promise<T[]> {
+  const snapshot = await colRef.get();
+  if (snapshot.empty) return [];
+  return snapshot.docs.map(doc => {
+    const data = doc.data() as Record<string, unknown>;
+    return { id: doc.id, ...data } as unknown as T;
+  });
 }
 
-async function setDoc(docId: string, data: unknown): Promise<void> {
-  await db().collection(SYNC_COLLECTION).doc(docId).set(data);
+async function replaceCollection<T extends { id: string }>(
+  colRef: admin.firestore.CollectionReference,
+  items: T[],
+): Promise<void> {
+  const existing = await colRef.get();
+  const batch = getDb().batch();
+  for (const doc of existing.docs) {
+    batch.delete(doc.ref);
+  }
+  for (const item of items) {
+    const { id, ...data } = item;
+    batch.set(colRef.doc(id), data);
+  }
+  await batch.commit();
 }
 
 export async function loadSyncData(): Promise<SyncData | null> {
   try {
-    const [moviesDoc, seriesDoc, channelsDoc, popularMoviesDoc, popularSeriesDoc, estrenoMoviesDoc, estrenoSeriesDoc, metadataDoc] = await Promise.all([
-      getDoc<{ items: SyncData['movies'] }>('movies'),
-      getDoc<{ items: SyncData['series'] }>('series'),
-      getDoc<{ items: SyncData['channels'] }>('channels'),
-      getDoc<{ items: SyncData['popularMovies'] }>('popularMovies'),
-      getDoc<{ items: SyncData['popularSeries'] }>('popularSeries'),
-      getDoc<{ items: SyncData['estrenoMovies'] }>('estrenoMovies'),
-      getDoc<{ items: SyncData['estrenoSeries'] }>('estrenoSeries'),
-      getDoc<{ updatedAt: number }>('_metadata'),
-    ]);
+    const [movies, series, channels, popularMovies, popularSeries, estrenoMovies, estrenoSeries, metaSnap] =
+      await Promise.all([
+        getCollectionAsArray<SyncMovie>(collections.movies()),
+        getCollectionAsArray<SyncSeries>(collections.series()),
+        getCollectionAsArray<LiveChannel>(collections.channels()),
+        getCollectionAsArray<MediaItem>(collections.popularMovies()),
+        getCollectionAsArray<MediaItem>(collections.popularSeries()),
+        getCollectionAsArray<SyncMovie>(collections.estrenoMovies()),
+        getCollectionAsArray<SyncSeries>(collections.estrenoSeries()),
+        collections.syncMeta().doc('data').get(),
+      ]);
 
-    if (!metadataDoc) return null;
+    const meta = metaSnap.exists ? (metaSnap.data() as { updatedAt?: number }) : null;
 
     return {
-      movies: moviesDoc?.items || [],
-      series: seriesDoc?.items || [],
-      channels: channelsDoc?.items || [],
-      popularMovies: popularMoviesDoc?.items || [],
-      popularSeries: popularSeriesDoc?.items || [],
-      estrenoMovies: estrenoMoviesDoc?.items || [],
-      estrenoSeries: estrenoSeriesDoc?.items || [],
-      updatedAt: metadataDoc.updatedAt || 0,
+      movies,
+      series,
+      channels,
+      popularMovies,
+      popularSeries,
+      estrenoMovies,
+      estrenoSeries,
+      updatedAt: meta?.updatedAt ?? Date.now(),
     };
   } catch (error) {
     logger.error({ error }, 'Failed to load sync data from Firestore');
@@ -55,45 +68,68 @@ export async function loadSyncData(): Promise<SyncData | null> {
 export async function saveSyncData(data: SyncData): Promise<void> {
   try {
     await Promise.all([
-      setDoc('movies', { items: data.movies }),
-      setDoc('series', { items: data.series }),
-      setDoc('channels', { items: data.channels }),
-      setDoc('popularMovies', { items: data.popularMovies }),
-      setDoc('popularSeries', { items: data.popularSeries }),
-      setDoc('estrenoMovies', { items: data.estrenoMovies }),
-      setDoc('estrenoSeries', { items: data.estrenoSeries }),
-      setDoc('_metadata', { updatedAt: data.updatedAt }),
+      replaceCollection(collections.movies(), data.movies),
+      replaceCollection(collections.series(), data.series),
+      replaceCollection(collections.channels(), data.channels),
+      replaceCollection(collections.popularMovies(), data.popularMovies),
+      replaceCollection(collections.popularSeries(), data.popularSeries),
+      replaceCollection(collections.estrenoMovies(), data.estrenoMovies),
+      replaceCollection(collections.estrenoSeries(), data.estrenoSeries),
+      collections.syncMeta().doc('data').set({ updatedAt: data.updatedAt }, { merge: true }),
     ]);
-    logger.info({
-      movies: data.movies.length,
-      series: data.series.length,
-      channels: data.channels.length,
-    }, 'Sync data saved to Firestore');
+    logger.info(
+      { movies: data.movies.length, series: data.series.length, channels: data.channels.length },
+      'Sync data saved to Firestore',
+    );
   } catch (error) {
     logger.error({ error }, 'Failed to save sync data to Firestore');
-    throw error;
   }
 }
 
-export async function getSyncStats(): Promise<{ movies: number; series: number; channels: number; updatedAt: number | null } | null> {
+export async function getSyncStats(): Promise<{
+  movies: number;
+  series: number;
+  channels: number;
+  updatedAt: number | null;
+} | null> {
   try {
-    const metadataDoc = await getDoc<{ updatedAt: number }>('_metadata');
-    if (!metadataDoc) return null;
-
-    const [moviesDoc, seriesDoc, channelsDoc] = await Promise.all([
-      getDoc<{ items: unknown[] }>('movies'),
-      getDoc<{ items: unknown[] }>('series'),
-      getDoc<{ items: unknown[] }>('channels'),
+    const [moviesSnap, seriesSnap, channelsSnap, metaSnap] = await Promise.all([
+      collections.movies().listDocuments(),
+      collections.series().listDocuments(),
+      collections.channels().listDocuments(),
+      collections.syncMeta().doc('data').get(),
     ]);
-
     return {
-      movies: moviesDoc?.items?.length || 0,
-      series: seriesDoc?.items?.length || 0,
-      channels: channelsDoc?.items?.length || 0,
-      updatedAt: metadataDoc.updatedAt || null,
+      movies: moviesSnap.length,
+      series: seriesSnap.length,
+      channels: channelsSnap.length,
+      updatedAt: metaSnap.exists ? ((metaSnap.data() as { updatedAt?: number })?.updatedAt ?? null) : null,
     };
   } catch (error) {
-    logger.error({ error }, 'Failed to get sync stats from Firestore');
+    logger.error({ error }, 'Failed to get sync stats');
     return null;
+  }
+}
+
+export async function loadHomeData<T = unknown>(): Promise<T | null> {
+  try {
+    const doc = await collections.homeData().doc('cineby').get();
+    if (!doc.exists) return null;
+    return doc.data() as T;
+  } catch (error) {
+    logger.error({ error }, 'Failed to load home data from Firestore');
+    return null;
+  }
+}
+
+export async function saveHomeData(data: Record<string, unknown>): Promise<void> {
+  try {
+    await collections.homeData().doc('cineby').set({
+      ...data,
+      updatedAt: Date.now(),
+    });
+    logger.info('Home data saved to Firestore');
+  } catch (error) {
+    logger.error({ error }, 'Failed to save home data to Firestore');
   }
 }

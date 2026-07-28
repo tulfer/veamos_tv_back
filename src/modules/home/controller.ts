@@ -1,10 +1,8 @@
-import fs from 'fs';
-import path from 'path';
 import { FastifyRequest, FastifyReply } from 'fastify';
 import { scrapePopularMovies } from '../../providers/movies';
 import { scrapePopularSeries } from '../../providers/series';
 import { getCachedOrFetch } from '../../cache';
-import { loadSyncData } from '../../services/data-store';
+import { loadSyncData, loadHomeData } from '../../services/data-store';
 import { BannerItem, Section, HomeResponse, MediaItem, LiveChannel } from '../../types';
 
 const PREVIEW_LIMIT = 10;
@@ -78,24 +76,20 @@ export async function getHomeHandler(_request: FastifyRequest, reply: FastifyRep
 
 export async function getHomeNewHandler(_request: FastifyRequest, reply: FastifyReply) {
   try {
-    const filePath = path.join(process.cwd(), 'data', 'sync-data.home.json');
-    if (!fs.existsSync(filePath)) {
+    const homeData = await loadHomeData();
+    if (!homeData) {
       return reply.status(404).send({ error: 'Home data not found. Run /sync/home-bysc first.' });
     }
-    const raw = fs.readFileSync(filePath, 'utf-8');
-    const homeData = JSON.parse(raw);
     return reply.send(homeData);
   } catch (error) {
     return reply.status(500).send({ error: 'Failed to load home data' });
   }
 }
 
-function findItemInHome(id: number): { title: string; year?: string } | undefined {
+async function findItemInHome(id: number): Promise<{ title: string; year?: string } | undefined> {
   try {
-    const filePath = path.join(process.cwd(), 'data', 'sync-data.home.json');
-    if (!fs.existsSync(filePath)) return undefined;
-    const raw = fs.readFileSync(filePath, 'utf-8');
-    const homeData = JSON.parse(raw);
+    const homeData = await loadHomeData();
+    if (!homeData) return undefined;
 
     function search(obj: any): { title: string; year?: string } | undefined {
       if (!obj || typeof obj !== 'object') return undefined;
@@ -136,7 +130,7 @@ export async function playerHandler(
   const server = request.query.server || 'peachify';
   const type = mediaType === 'tv' || mediaType === 'series' ? 'tv' : 'movie';
 
-  const item = findItemInHome(Number(id));
+  const item = await findItemInHome(Number(id));
   const title = item?.title || `${type === 'movie' ? 'Movie' : 'TV Show'} ${id}`;
   const year = item?.year || '';
 
