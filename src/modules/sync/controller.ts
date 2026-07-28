@@ -908,33 +908,37 @@ async function runSync(key, route, method, needsPages) {
     document.getElementById('pagesModal').classList.add('active');
     return;
   }
-  await execSync(route, method, {});
+  await execSync(route, key, method, {});
 }
 
 async function confirmPagesSync() {
   const pages = document.getElementById('pagesInput').value.trim();
   const replace = document.getElementById('replaceCheck').checked;
+  const route = pendingRoute;
+  const key = pendingKey;
   if (!pages) return;
   closeModal();
-  await execSync(pendingRoute, 'POST', { pages, replace });
+  await execSync(route, key, 'POST', { pages, replace });
 }
 
-async function execSync(route, method, body) {
-  const btn = document.querySelector(\`#card-\${pendingKey || ''} .btn-primary\`) || document.querySelector('.btn-danger');
+async function execSync(route, key, method, body) {
+  const btn = document.querySelector(\`#card-\${key} .btn-primary\`);
   if (btn) { btn.disabled = true; btn.textContent = 'Ejecutando...'; }
   try {
     const res = await fetch(route, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     if (!res.ok) console.error('Sync error:', await res.text());
   } catch (e) { console.error(e); }
-  setTimeout(() => window.location.reload(), 1500);
+  setTimeout(() => window.location.reload(), 2000);
 }
 
 async function runMigration() {
+  const btn = document.querySelector('.migration-card .btn-danger');
+  if (btn) { btn.disabled = true; btn.textContent = 'Migrando...'; }
   try {
     const res = await fetch('/sync/migrate-to-firestore', { method: 'POST' });
     if (!res.ok) console.error('Migration error:', await res.text());
   } catch (e) { console.error(e); }
-  setTimeout(() => window.location.reload(), 1500);
+  setTimeout(() => window.location.reload(), 2000);
 }
 
 function closeModal() {
