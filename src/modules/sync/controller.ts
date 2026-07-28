@@ -659,9 +659,324 @@ export async function importM3UHandler(request: FastifyRequest, reply: FastifyRe
   });
 }
 
-export async function syncStatusHandler(_request: FastifyRequest, reply: FastifyReply) {
+const DASHBOARD_CODE = '1992';
+
+export async function syncStatusHandler(request: FastifyRequest, reply: FastifyReply) {
   const { getSyncStatus } = await import('../../services/sync-status');
-  return reply.send(getSyncStatus());
+  const accept = request.headers.accept || '';
+
+  if (!accept.includes('text/html')) {
+    return reply.send(getSyncStatus());
+  }
+
+  const query = request.query as { code?: string };
+  if (query.code !== DASHBOARD_CODE) {
+    return reply.type('text/html').send(generateCodeEntryPage());
+  }
+
+  const status = getSyncStatus();
+
+  const syncDefs: { key: string; label: string; route: string; needsPages: boolean; method: string }[] = [
+    { key: 'movies', label: 'Películas', route: '/sync/movies', needsPages: true, method: 'POST' },
+    { key: 'series', label: 'Series', route: '/sync/series', needsPages: true, method: 'POST' },
+    { key: 'channels', label: 'TV en Vivo', route: '/sync/live', needsPages: false, method: 'POST' },
+    { key: 'popularMovies', label: 'Populares Películas', route: '/sync/popular/movies', needsPages: false, method: 'POST' },
+    { key: 'popularSeries', label: 'Populares Series', route: '/sync/popular/series', needsPages: false, method: 'POST' },
+    { key: 'estrenoMovies', label: 'Estrenos Películas', route: '/sync/estrenos/movies', needsPages: true, method: 'POST' },
+    { key: 'estrenoSeries', label: 'Estrenos Series', route: '/sync/estrenos/series', needsPages: true, method: 'POST' },
+    { key: 'home', label: 'Home (cineby.sc)', route: '/sync/home-bysc', needsPages: false, method: 'POST' },
+  ];
+
+  return reply.type('text/html').send(generateSyncDashboard(status, syncDefs, migrationStatus));
+}
+
+function generateCodeEntryPage(): string {
+  return `<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Acceso</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  background:#0f0c29;color:#e0e0e0;min-height:100vh;display:flex;align-items:center;justify-content:center}
+.container{background:rgba(255,255,255,.05);border-radius:16px;padding:2.5rem;width:90%;max-width:380px;
+  backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.1);text-align:center}
+h1{font-size:1.5rem;margin-bottom:.5rem;background:linear-gradient(135deg,#667eea,#764ba2);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent}
+p{color:#888;margin-bottom:1.5rem;font-size:.9rem}
+input[type=password]{width:100%;padding:.8rem;border-radius:8px;border:1px solid rgba(255,255,255,.15);
+  background:rgba(255,255,255,.05);color:#fff;font-size:1.2rem;text-align:center;letter-spacing:4px;margin-bottom:1rem}
+input[type=password]:focus{outline:none;border-color:#667eea}
+.btn{width:100%;padding:.8rem;border-radius:8px;border:none;cursor:pointer;font-size:1rem;font-weight:600;
+  background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;transition:opacity .2s}
+.btn:hover{opacity:.85}
+.error{color:#f87171;font-size:.85rem;margin-top:.5rem;display:none}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>🔐 Acceso Restringido</h1>
+<p>Ingresa el código de acceso</p>
+<form id="codeForm" onsubmit="return checkCode()">
+<input type="password" id="codeInput" placeholder="Código" maxlength="10" autofocus>
+<button class="btn" type="submit">Ingresar</button>
+<div class="error" id="errorMsg">Código incorrecto</div>
+</form>
+</div>
+<script>
+function checkCode() {
+  const code = document.getElementById('codeInput').value;
+  if (code === '1992') {
+    window.location.href = '/sync/status?code=' + code;
+    return false;
+  }
+  document.getElementById('errorMsg').style.display = 'block';
+  return false;
+}
+document.getElementById('codeInput').addEventListener('keydown', function(e) {
+  document.getElementById('errorMsg').style.display = 'none';
+});
+</script>
+</body>
+</html>`;
+}
+
+function generateSyncDashboard(
+  status: Record<string, { status: string; lastRun: number | null; duration?: number; count?: number; error?: string }>,
+  syncDefs: { key: string; label: string; route: string; needsPages: boolean; method: string }[],
+  migStatus: MigrationStatus,
+): string {
+  const statusBadge = (s: string) => {
+    const map: Record<string, string> = { idle: '⚪', running: '🟡', completed: '🟢', failed: '🔴' };
+    return map[s] || '⚪';
+  };
+
+  const rows = syncDefs.map(def => {
+    const s = status[def.key];
+    const isRunning = s?.status === 'running';
+    const badge = statusBadge(s?.status || 'idle');
+    const lastRun = s?.lastRun ? new Date(s.lastRun).toLocaleString() : '—';
+    const info = s?.count ? `${s.count} items` : s?.error || '';
+    return `
+    <div class="card" id="card-${def.key}">
+      <div class="card-header">
+        <span class="badge">${badge}</span>
+        <span class="card-title">${def.label}</span>
+        <span class="status-text ${s?.status}">${s?.status || 'idle'}</span>
+      </div>
+      <div class="card-body">
+        <div class="card-row"><span class="label">Última ejecución</span><span>${lastRun}</span></div>
+        ${s?.duration ? `<div class="card-row"><span class="label">Duración</span><span>${(s.duration / 1000).toFixed(1)}s</span></div>` : ''}
+        ${info ? `<div class="card-row"><span class="label">${s?.count ? 'Items' : 'Error'}</span><span class="${s?.error ? 'error' : ''}">${info}</span></div>` : ''}
+      </div>
+      <div class="card-actions">
+        <button class="btn btn-primary btn-sm" onclick="runSync('${def.key}','${def.route}','${def.method}',${def.needsPages})" ${isRunning ? 'disabled' : ''}>
+          ${isRunning ? 'Ejecutando...' : '▶ Ejecutar'}
+        </button>
+        ${def.needsPages ? `<button class="btn btn-secondary btn-sm" onclick="showPagesModal('${def.key}','${def.route}','${def.label}')">⚙ Parámetros</button>` : ''}
+      </div>
+    </div>`;
+  }).join('\n');
+
+  const migRunning = migStatus.running;
+  const migBadge = migRunning ? '🟡' : migStatus.progress === 'completed' ? '🟢' : migStatus.progress === 'error' ? '🔴' : '⚪';
+  const migMsg = migRunning ? 'Migrando...' : migStatus.progress === 'completed' ? 'Completado' : migStatus.progress === 'error' ? 'Error' : 'Inactivo';
+
+  return `<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sync Dashboard</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  background:#0f0c29;color:#e0e0e0;min-height:100vh;padding:2rem}
+h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea,#764ba2);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.dashboard{display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:1rem}
+.card{background:rgba(255,255,255,.05);border-radius:12px;padding:1.2rem;
+  backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.08)}
+.card-header{display:flex;align-items:center;gap:.6rem;margin-bottom:.8rem}
+.badge{font-size:1.2rem}
+.card-title{font-weight:600;font-size:1.05rem;flex:1}
+.status-text{font-size:.8rem;padding:.2rem .6rem;border-radius:4px;text-transform:capitalize}
+.status-text.running{background:rgba(251,191,36,.15);color:#fbbf24}
+.status-text.completed{background:rgba(52,211,153,.15);color:#34d399}
+.status-text.failed{background:rgba(248,113,113,.15);color:#f87171}
+.status-text.idle{background:rgba(156,163,175,.15);color:#9ca3af}
+.card-body{font-size:.9rem;margin-bottom:.8rem}
+.card-row{display:flex;justify-content:space-between;padding:.3rem 0;border-bottom:1px solid rgba(255,255,255,.04)}
+.card-row .label{color:#888}
+.card-row .error{color:#f87171}
+.card-actions{display:flex;gap:.5rem}
+.btn{padding:.5rem 1rem;border-radius:6px;border:none;cursor:pointer;font-size:.85rem;font-weight:600;transition:opacity .2s}
+.btn:hover{opacity:.85}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn-primary{background:linear-gradient(135deg,#667eea,#764ba2);color:#fff}
+.btn-secondary{background:rgba(255,255,255,.1);color:#e0e0e0}
+.btn-danger{background:linear-gradient(135deg,#f87171,#dc2626);color:#fff}
+
+/* Migration card */
+.migration-section{margin-top:2rem}
+.migration-card{background:rgba(255,255,255,.05);border-radius:12px;padding:1.2rem;
+  backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.08);max-width:600px}
+.migration-card .bar{height:6px;background:rgba(255,255,255,.1);border-radius:3px;margin:.8rem 0;overflow:hidden}
+.migration-card .bar-fill{height:100%;border-radius:3px;transition:width .5s;background:linear-gradient(90deg,#667eea,#764ba2)}
+.migration-card .bar-fill.completed{background:linear-gradient(90deg,#34d399,#059669)}
+.migration-card .bar-fill.error{background:linear-gradient(90deg,#f87171,#dc2626)}
+.migration-card .msg{padding:.5rem;border-radius:6px;font-size:.85rem;margin-top:.5rem}
+.migration-card .msg.info{background:rgba(96,165,250,.15);color:#93c5fd}
+.migration-card .msg.success{background:rgba(52,211,153,.15);color:#6ee7b7}
+.migration-card .msg.error{background:rgba(248,113,113,.15);color:#fca5a5}
+
+/* Modal */
+.modal-overlay{display:none;position:fixed;top:0;left:0;width:100%;height:100%;
+  background:rgba(0,0,0,.7);z-index:1000;align-items:center;justify-content:center}
+.modal-overlay.active{display:flex}
+.modal{background:#1e1b4b;border-radius:12px;padding:2rem;width:90%;max-width:420px;
+  border:1px solid rgba(255,255,255,.1)}
+.modal h2{margin-bottom:1rem;font-size:1.2rem}
+.modal label{display:block;margin-bottom:.5rem;color:#aaa;font-size:.9rem}
+.modal input[type=text]{width:100%;padding:.7rem;border-radius:6px;border:1px solid rgba(255,255,255,.15);
+  background:rgba(255,255,255,.05);color:#fff;font-size:.95rem;margin-bottom:1rem}
+.modal input[type=text]:focus{outline:none;border-color:#667eea}
+.modal-actions{display:flex;gap:.7rem;margin-top:.5rem}
+.form-hint{font-size:.8rem;color:#888;margin-top:-.5rem;margin-bottom:.8rem}
+</style>
+</head>
+<body>
+<h1>🔄 Panel de Sincronización</h1>
+<div class="dashboard" id="dashboard">
+  ${rows}
+</div>
+
+<div class="migration-section">
+  <h2 style="margin-bottom:1rem;font-size:1.2rem;color:#a0a0c0">🚀 Migración a Firestore</h2>
+  <div class="migration-card">
+    <div class="card-header">
+      <span class="badge">${migBadge}</span>
+      <span class="card-title">Migración desde sync-data.json</span>
+      <span class="status-text ${migStatus.progress === 'completed' ? 'completed' : migStatus.progress === 'error' ? 'failed' : migRunning ? 'running' : 'idle'}">${migMsg}</span>
+    </div>
+    <div class="card-body">
+      ${migStatus.message ? `<div class="msg ${migStatus.progress === 'error' ? 'error' : migStatus.progress === 'completed' ? 'success' : 'info'}">${migStatus.message}</div>` : ''}
+      <div class="bar">
+        <div class="bar-fill ${migStatus.progress === 'completed' ? 'completed' : ''} ${migStatus.progress === 'error' ? 'error' : ''}"
+             style="width:${migStatus.progress === 'idle' ? 0 : migStatus.progress === 'completed' || migStatus.progress === 'error' ? 100 : 60}%"></div>
+      </div>
+    </div>
+    <div class="card-actions">
+      <button class="btn btn-danger" onclick="runMigration()" ${migRunning ? 'disabled' : ''}>
+        ${migRunning ? 'Migrando...' : '▶ Ejecutar Migración'}
+      </button>
+      <a href="/sync/migration-status" class="btn btn-secondary" style="text-decoration:none">📊 Detalle</a>
+    </div>
+  </div>
+</div>
+
+<!-- Modal -->
+<div class="modal-overlay" id="pagesModal">
+  <div class="modal">
+    <h2 id="modalTitle">Parámetros</h2>
+    <label for="pagesInput" id="modalLabel">Páginas (ej: 1-20 o 1,3,5):</label>
+    <input type="text" id="pagesInput" placeholder="1-20" value="1-20">
+    <div class="form-hint">Usa guión para rangos (1-20) o comas para páginas específicas (1,3,5)</div>
+    <label>
+      <input type="checkbox" id="replaceCheck"> Reemplazar datos existentes
+    </label>
+    <div class="modal-actions">
+      <button class="btn btn-primary" onclick="confirmPagesSync()">✅ Ejecutar</button>
+      <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let pendingRoute = '';
+let pendingKey = '';
+
+async function runSync(key, route, method, needsPages) {
+  if (needsPages) {
+    pendingKey = key;
+    pendingRoute = route;
+    document.getElementById('modalTitle').textContent = 'Parámetros - ' + key;
+    document.getElementById('modalLabel').textContent = 'Páginas (ej: 1-20 o 1,3,5):';
+    document.getElementById('pagesInput').value = '1-20';
+    document.getElementById('pagesModal').classList.add('active');
+    return;
+  }
+  await execSync(route, method, {});
+}
+
+async function confirmPagesSync() {
+  const pages = document.getElementById('pagesInput').value.trim();
+  const replace = document.getElementById('replaceCheck').checked;
+  if (!pages) return;
+  closeModal();
+  await execSync(pendingRoute, 'POST', { pages, replace });
+}
+
+async function execSync(route, method, body) {
+  const btn = document.querySelector(\`#card-\${pendingKey || ''} .btn-primary\`) || document.querySelector('.btn-danger');
+  if (btn) { btn.disabled = true; btn.textContent = 'Ejecutando...'; }
+  try {
+    const res = await fetch(route, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (!res.ok) console.error('Sync error:', await res.text());
+  } catch (e) { console.error(e); }
+  setTimeout(() => window.location.reload(), 1500);
+}
+
+async function runMigration() {
+  try {
+    const res = await fetch('/sync/migrate-to-firestore', { method: 'POST' });
+    if (!res.ok) console.error('Migration error:', await res.text());
+  } catch (e) { console.error(e); }
+  setTimeout(() => window.location.reload(), 1500);
+}
+
+function closeModal() {
+  document.getElementById('pagesModal').classList.remove('active');
+  pendingRoute = '';
+  pendingKey = '';
+}
+
+function showPagesModal(key, route, label) {
+  pendingKey = key;
+  pendingRoute = route;
+  document.getElementById('modalTitle').textContent = 'Parámetros - ' + label;
+  document.getElementById('modalLabel').textContent = 'Páginas (ej: 1-20 o 1,3,5):';
+  document.getElementById('pagesInput').value = '1-20';
+  document.getElementById('pagesModal').classList.add('active');
+}
+
+// Auto-refresh status every 5s
+async function refreshStatus() {
+  try {
+    const res = await fetch('/sync/status');
+    if (res.headers.get('content-type')?.includes('application/json')) {
+      const data = await res.json();
+      for (const key of Object.keys(data)) {
+        const s = data[key];
+        const card = document.getElementById('card-' + key);
+        if (!card) continue;
+        const badge = card.querySelector('.badge');
+        const statusText = card.querySelector('.status-text');
+        const btn = card.querySelector('.btn-primary');
+        const map = { idle: '⚪', running: '🟡', completed: '🟢', failed: '🔴' };
+        if (badge) badge.textContent = map[s.status] || '⚪';
+        if (statusText) { statusText.textContent = s.status; statusText.className = 'status-text ' + s.status; }
+        if (btn) { btn.disabled = s.status === 'running'; btn.textContent = s.status === 'running' ? 'Ejecutando...' : '▶ Ejecutar'; }
+      }
+    }
+  } catch {}
+}
+setInterval(refreshStatus, 5000);
+</script>
+</body>
+</html>`;
 }
 
 /* ───── Migración de JSON local a Firestore ───── */
