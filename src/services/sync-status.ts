@@ -1,12 +1,24 @@
 export type SyncType =
   | 'movies'
   | 'series'
+  | 'all'
   | 'channels'
   | 'popularMovies'
   | 'popularSeries'
   | 'estrenoMovies'
   | 'estrenoSeries'
-  | 'home';
+  | 'home'
+  | 'fetchDetails'
+  | 'importM3U'
+  | 'refreshAll'
+  | 'refreshExpired'
+  | 'migrate';
+
+export interface SyncProgress {
+  current: number;
+  total?: number;
+  message: string;
+}
 
 export interface SyncJobStatus {
   status: 'idle' | 'running' | 'completed' | 'failed';
@@ -14,6 +26,7 @@ export interface SyncJobStatus {
   duration?: number;
   count?: number;
   error?: string;
+  progress?: SyncProgress;
 }
 
 export type SyncState = Record<SyncType, SyncJobStatus>;
@@ -23,18 +36,30 @@ const defaultStatus: SyncJobStatus = { status: 'idle', lastRun: null };
 const state: SyncState = {
   movies: { ...defaultStatus },
   series: { ...defaultStatus },
+  all: { ...defaultStatus },
   channels: { ...defaultStatus },
   popularMovies: { ...defaultStatus },
   popularSeries: { ...defaultStatus },
   estrenoMovies: { ...defaultStatus },
   estrenoSeries: { ...defaultStatus },
   home: { ...defaultStatus },
+  fetchDetails: { ...defaultStatus },
+  importM3U: { ...defaultStatus },
+  refreshAll: { ...defaultStatus },
+  refreshExpired: { ...defaultStatus },
+  migrate: { ...defaultStatus },
 };
 
 export function startSync(type: SyncType): boolean {
   if (state[type].status === 'running') return false;
-  state[type] = { status: 'running', lastRun: Date.now(), duration: undefined, count: undefined, error: undefined };
+  state[type] = { status: 'running', lastRun: Date.now(), duration: undefined, count: undefined, error: undefined, progress: undefined };
   return true;
+}
+
+export function updateSyncProgress(type: SyncType, current: number, message: string, total?: number): void {
+  if (state[type].status === 'running') {
+    state[type].progress = { current, total, message };
+  }
 }
 
 export function completeSync(type: SyncType, count?: number): void {
@@ -44,6 +69,7 @@ export function completeSync(type: SyncType, count?: number): void {
     status: 'completed',
     lastRun: Date.now(),
     duration: started ? Date.now() - started : undefined,
+    progress: count !== undefined ? { current: count, message: count > 0 ? `${count} items procesados` : 'Completado sin datos' } : undefined,
     count,
   };
 }

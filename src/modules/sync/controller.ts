@@ -11,7 +11,7 @@ import { fetchHTML } from '../../utils/http';
 import { logger } from '../../utils/logger';
 import { memoryCache } from '../../cache/memory';
 import { SyncMovie, SyncSeries, SyncData, LiveChannel } from '../../types';
-import { startSync, completeSync, failSync, SyncType } from '../../services/sync-status';
+import { startSync, completeSync, failSync, updateSyncProgress, SyncType } from '../../services/sync-status';
 
 interface MigrationStatus {
   running: boolean;
@@ -82,7 +82,7 @@ async function processBatch<T>(items: T[], fn: (item: T) => Promise<void>): Prom
   }
 }
 
-async function syncMovies(pages: number[]): Promise<SyncMovie[]> {
+async function syncMovies(pages: number[], type: SyncType = 'movies'): Promise<SyncMovie[]> {
   const allItems: { id: string; title: string; poster?: string; rating?: number; year?: number }[] = [];
 
   for (const page of pages) {
@@ -90,14 +90,18 @@ async function syncMovies(pages: number[]): Promise<SyncMovie[]> {
     for (const item of pageData.items) {
       allItems.push({ id: item.id, title: item.title, poster: item.poster, rating: item.rating, year: item.year });
     }
+    updateSyncProgress(type, allItems.length, `Escaneando página ${page}...`);
     logger.info({ page, total: allItems.length }, 'Movies list page synced');
   }
 
   const results: SyncMovie[] = [];
+  let processed = 0;
 
   await processBatch(allItems, async (item) => {
     try {
       const detail = await scrapeMovieDetail(item.id);
+      processed++;
+      updateSyncProgress(type, processed, `Procesando detalles (${processed}/${allItems.length})...`, allItems.length);
       if (detail) {
         results.push({
           id: detail.id,
@@ -125,10 +129,11 @@ async function syncMovies(pages: number[]): Promise<SyncMovie[]> {
     });
   });
 
+  updateSyncProgress(type, results.length, `${results.length} películas procesadas`);
   return results;
 }
 
-async function syncSeries(pages: number[]): Promise<SyncSeries[]> {
+async function syncSeries(pages: number[], type: SyncType = 'series'): Promise<SyncSeries[]> {
   const allItems: { id: string; title: string; poster?: string; rating?: number; year?: number }[] = [];
 
   for (const page of pages) {
@@ -136,14 +141,18 @@ async function syncSeries(pages: number[]): Promise<SyncSeries[]> {
     for (const item of pageData.items) {
       allItems.push({ id: item.id, title: item.title, poster: item.poster, rating: item.rating, year: item.year });
     }
+    updateSyncProgress(type, allItems.length, `Escaneando página ${page}...`);
     logger.info({ page, total: allItems.length }, 'Series list page synced');
   }
 
   const results: SyncSeries[] = [];
+  let processed = 0;
 
   await processBatch(allItems, async (item) => {
     try {
       const detail = await scrapeSeriesDetail(item.id);
+      processed++;
+      updateSyncProgress(type, processed, `Procesando detalles (${processed}/${allItems.length})...`, allItems.length);
       if (detail) {
         results.push({
           id: detail.id,
@@ -171,6 +180,7 @@ async function syncSeries(pages: number[]): Promise<SyncSeries[]> {
     });
   });
 
+  updateSyncProgress(type, results.length, `${results.length} series procesadas`);
   return results;
 }
 
@@ -323,7 +333,7 @@ export async function syncEstrenoMoviesHandler(request: FastifyRequest, reply: F
   reply.send({ ok: true, message: 'Estreno movies sync started' });
 
   runBackgroundSync('estrenoMovies', async () => {
-    const movies = await syncMovies(pages);
+    const movies = await syncMovies(pages, 'estrenoMovies');
     const existing = await loadSyncData();
     const shouldReplace = body?.replace === true;
     const finalEstrenoMovies = shouldReplace ? movies : mergeByIdGeneric(movies, existing?.estrenoMovies || []);
@@ -355,7 +365,7 @@ export async function syncEstrenoSeriesHandler(request: FastifyRequest, reply: F
   reply.send({ ok: true, message: 'Estreno series sync started' });
 
   runBackgroundSync('estrenoSeries', async () => {
-    const series = await syncSeries(pages);
+    const series = await syncSeries(pages, 'estrenoSeries');
     const existing = await loadSyncData();
     const shouldReplace = body?.replace === true;
     const finalEstrenoSeries = shouldReplace ? series : mergeByIdGeneric(series, existing?.estrenoSeries || []);
@@ -417,14 +427,18 @@ export async function syncLiveHandler(request: FastifyRequest, reply: FastifyRep
     const existing = await loadSyncData();
 
     if (!existing || existing.channels.length === 0) {
+      updateSyncProgress('channels', 0, 'Migrando canales desde JSON...');
       const migrated = await migrateChannelsFromJson();
       if (migrated > 0) {
+        updateSyncProgress('channels', migrated, `${migrated} canales migrados desde JSON`);
         logger.info({ migrated }, 'Channels migrated from JSON');
         return migrated;
       }
     }
 
+    updateSyncProgress('channels', 0, 'Obteniendo canales desde iptv-org...');
     const channels = await fetchLiveChannels();
+    updateSyncProgress('channels', channels.length, `${channels.length} canales obtenidos, guardando...`);
     const shouldReplace = body?.replace === true;
     const finalChannels = shouldReplace ? channels : mergeChannels(channels, existing?.channels || []);
     await saveSyncData({
@@ -437,6 +451,7 @@ export async function syncLiveHandler(request: FastifyRequest, reply: FastifyRep
       estrenoSeries: existing?.estrenoSeries || [],
       updatedAt: Date.now(),
     });
+    updateSyncProgress('channels', finalChannels.length, `${finalChannels.length} canales guardados`);
     return finalChannels.length;
   });
 }
@@ -450,7 +465,9 @@ export async function syncPopularMoviesHandler(request: FastifyRequest, reply: F
   reply.send({ ok: true, message: 'Popular movies sync started' });
 
   runBackgroundSync('popularMovies', async () => {
+    updateSyncProgress('popularMovies', 0, 'Scrapeando películas populares...');
     const popularMovies = await scrapePopularMovies();
+    updateSyncProgress('popularMovies', popularMovies.length, `${popularMovies.length} películas obtenidas, guardando...`);
     const existing = await loadSyncData();
     const shouldReplace = body?.replace === true;
     const finalPopularMovies = shouldReplace ? popularMovies : mergeByIdGeneric(popularMovies, existing?.popularMovies || []);
@@ -464,6 +481,7 @@ export async function syncPopularMoviesHandler(request: FastifyRequest, reply: F
       estrenoSeries: existing?.estrenoSeries || [],
       updatedAt: Date.now(),
     });
+    updateSyncProgress('popularMovies', finalPopularMovies.length, `${finalPopularMovies.length} películas populares guardadas`);
     return finalPopularMovies.length;
   });
 }
@@ -477,7 +495,9 @@ export async function syncPopularSeriesHandler(request: FastifyRequest, reply: F
   reply.send({ ok: true, message: 'Popular series sync started' });
 
   runBackgroundSync('popularSeries', async () => {
+    updateSyncProgress('popularSeries', 0, 'Scrapeando series populares...');
     const popularSeries = await scrapePopularSeries();
+    updateSyncProgress('popularSeries', popularSeries.length, `${popularSeries.length} series obtenidas, guardando...`);
     const existing = await loadSyncData();
     const shouldReplace = body?.replace === true;
     const finalPopularSeries = shouldReplace ? popularSeries : mergeByIdGeneric(popularSeries, existing?.popularSeries || []);
@@ -491,6 +511,7 @@ export async function syncPopularSeriesHandler(request: FastifyRequest, reply: F
       estrenoSeries: existing?.estrenoSeries || [],
       updatedAt: Date.now(),
     });
+    updateSyncProgress('popularSeries', finalPopularSeries.length, `${finalPopularSeries.length} series populares guardadas`);
     return finalPopularSeries.length;
   });
 }
@@ -514,10 +535,14 @@ export async function syncHomeByscHandler(_request: FastifyRequest, reply: Fasti
   reply.send({ ok: true, message: 'Home sync started' });
 
   runBackgroundSync('home', async () => {
+    updateSyncProgress('home', 0, 'Scrapeando datos de cineby.sc...');
     const { scrapeCinebyHome, saveCinebyHomeData } = await import('../../providers/cineby');
     const data = await scrapeCinebyHome();
+    updateSyncProgress('home', 1, 'Guardando datos...');
     await saveCinebyHomeData(data);
-    return Object.keys(data.sections || {}).length || data.banner?.length || 0;
+    const count = Object.keys(data.sections || {}).length || data.banner?.length || 0;
+    updateSyncProgress('home', count, `${count} secciones guardadas`);
+    return count;
   });
 }
 
@@ -559,25 +584,32 @@ export async function fetchDetailsHandler(
   reply: FastifyReply
 ) {
   try {
-    const homeData = await loadHomeData<any>();
-    if (!homeData) {
-      return reply.status(404).send({ error: 'Home data not found. Run /sync/home-bysc first.' });
+    if (!startSync('fetchDetails')) {
+      return reply.send({ ok: true, message: 'Fetch details already in progress' });
     }
+    reply.send({ ok: true, message: 'Fetch details started, running in background...' });
 
-    const allItems: { id: number; mediaType: string; slug: string; title: string }[] = [];
-    collectItems(homeData, allItems);
+    runBackgroundSync('fetchDetails', async () => {
+      const homeData = await loadHomeData<any>();
+      if (!homeData) {
+        throw new Error('Home data not found. Run /sync/home-bysc first.');
+      }
 
-    const details = await fetchItemDetails(allItems);
-    const detailMap = new Map(details.map(d => [d.id, d]));
-    enrichItem(homeData, detailMap);
+      const allItems: { id: number; mediaType: string; slug: string; title: string }[] = [];
+      collectItems(homeData, allItems);
+      updateSyncProgress('fetchDetails', 0, `${allItems.length} items encontrados, obteniendo detalles...`);
 
-    await saveHomeData(homeData);
+      const details = await fetchItemDetails(allItems);
+      updateSyncProgress('fetchDetails', details.length, `${details.length} detalles obtenidos, enriqueciendo...`);
+      const detailMap = new Map(details.map(d => [d.id, d]));
+      enrichItem(homeData, detailMap);
 
-    return reply.send({
-      ok: true,
-      enriched: details.length,
-      updatedAt: Date.now(),
+      await saveHomeData(homeData);
+      updateSyncProgress('fetchDetails', details.length, `${details.length} items enriquecidos`);
+      return details.length;
     });
+
+    return;
   } catch (error) {
     logger.error({ error }, 'Fetch details failed');
     return reply.status(500).send({ error: 'Failed to fetch details' });
@@ -589,22 +621,24 @@ export async function importM3UHandler(request: FastifyRequest, reply: FastifyRe
   if (!body?.url && !body?.content) {
     return reply.status(400).send({ error: 'Provide "url" or "content" with .m3u data' });
   }
-  if (!startSync('channels')) {
+  if (!startSync('importM3U')) {
     return reply.send({ ok: true, message: 'Import already in progress' });
   }
 
   reply.send({ ok: true, message: 'M3U import started' });
 
-  runBackgroundSync('channels', async () => {
+  runBackgroundSync('importM3U', async () => {
     let rawContent: string;
     const sourceCountry: string | undefined = body.country;
 
+    updateSyncProgress('importM3U', 0, 'Descargando lista M3U...');
     if (body.url) {
       rawContent = await fetchHTML(body.url);
     } else {
       rawContent = body.content!;
     }
 
+    updateSyncProgress('importM3U', 0, 'Parseando canales...');
     const parsed = parseM3U(rawContent, sourceCountry);
     if (parsed.length === 0) {
       logger.warn('No channels found in M3U data');
@@ -622,11 +656,15 @@ export async function importM3UHandler(request: FastifyRequest, reply: FastifyRe
       online: true,
     }));
 
+    updateSyncProgress('importM3U', channels.length, `${channels.length} canales parseados, validando...`);
+
     const toAdd = body.skipValidation ? channels : await validateBatchBatched(channels);
     if (toAdd.length === 0) {
       logger.info('No valid channels found in M3U data');
       return 0;
     }
+
+    updateSyncProgress('importM3U', toAdd.length, `${toAdd.length} canales válidos, guardando...`);
 
     const existing = await loadSyncData();
     const existingChannels = existing?.channels || [];
@@ -654,6 +692,7 @@ export async function importM3UHandler(request: FastifyRequest, reply: FastifyRe
       updatedAt: Date.now(),
     });
 
+    updateSyncProgress('importM3U', newChannels.length, `${newChannels.length} canales importados (${skipped} omitidos)`);
     logger.info({ imported: newChannels.length, skipped }, 'M3U import completed');
     return newChannels.length;
   });
@@ -676,15 +715,23 @@ export async function syncStatusHandler(request: FastifyRequest, reply: FastifyR
 
   const status = getSyncStatus();
 
-  const syncDefs: { key: string; label: string; route: string; needsPages: boolean; method: string }[] = [
-    { key: 'movies', label: 'Películas', route: '/sync/movies', needsPages: true, method: 'POST' },
-    { key: 'series', label: 'Series', route: '/sync/series', needsPages: true, method: 'POST' },
-    { key: 'channels', label: 'TV en Vivo', route: '/sync/live', needsPages: false, method: 'POST' },
-    { key: 'popularMovies', label: 'Populares Películas', route: '/sync/popular/movies', needsPages: false, method: 'POST' },
-    { key: 'popularSeries', label: 'Populares Series', route: '/sync/popular/series', needsPages: false, method: 'POST' },
-    { key: 'estrenoMovies', label: 'Estrenos Películas', route: '/sync/estrenos/movies', needsPages: true, method: 'POST' },
-    { key: 'estrenoSeries', label: 'Estrenos Series', route: '/sync/estrenos/series', needsPages: true, method: 'POST' },
-    { key: 'home', label: 'Home (cineby.sc)', route: '/sync/home-bysc', needsPages: false, method: 'POST' },
+  const syncDefs: {
+    key: string; label: string; route: string; method: string;
+    needsPages?: boolean; needsUrl?: boolean; needsBody?: boolean;
+  }[] = [
+    { key: 'movies', label: 'Películas', route: '/sync/movies', method: 'POST', needsPages: true },
+    { key: 'series', label: 'Series', route: '/sync/series', method: 'POST', needsPages: true },
+    { key: 'all', label: 'Todo (Películas+Series)', route: '/sync/all', method: 'POST', needsPages: true },
+    { key: 'estrenoMovies', label: 'Estrenos Películas', route: '/sync/estrenos/movies', method: 'POST', needsPages: true },
+    { key: 'estrenoSeries', label: 'Estrenos Series', route: '/sync/estrenos/series', method: 'POST', needsPages: true },
+    { key: 'channels', label: 'TV en Vivo', route: '/sync/live', method: 'POST' },
+    { key: 'popularMovies', label: 'Populares Películas', route: '/sync/popular/movies', method: 'POST' },
+    { key: 'popularSeries', label: 'Populares Series', route: '/sync/popular/series', method: 'POST' },
+    { key: 'home', label: 'Home (cineby.sc)', route: '/sync/home-bysc', method: 'POST' },
+    { key: 'fetchDetails', label: 'Fetch Details (cineby)', route: '/sync/fetch-details', method: 'POST' },
+    { key: 'importM3U', label: 'Importar M3U', route: '/sync/live/import', method: 'POST', needsUrl: true },
+    { key: 'refreshAll', label: 'Refresh All Canales', route: '/live/channels/refresh-all', method: 'POST' },
+    { key: 'refreshExpired', label: 'Refresh Expired Canales', route: '/live/channels/refresh-expired', method: 'POST' },
   ];
 
   return reply.type('text/html').send(generateSyncDashboard(status, syncDefs, migrationStatus));
@@ -744,8 +791,8 @@ document.getElementById('codeInput').addEventListener('keydown', function(e) {
 }
 
 function generateSyncDashboard(
-  status: Record<string, { status: string; lastRun: number | null; duration?: number; count?: number; error?: string }>,
-  syncDefs: { key: string; label: string; route: string; needsPages: boolean; method: string }[],
+  status: Record<string, { status: string; lastRun: number | null; duration?: number; count?: number; error?: string; progress?: { current: number; total?: number; message: string } }>,
+  syncDefs: { key: string; label: string; route: string; method: string; needsPages?: boolean; needsUrl?: boolean; needsBody?: boolean }[],
   migStatus: MigrationStatus,
 ): string {
   const statusBadge = (s: string) => {
@@ -759,6 +806,8 @@ function generateSyncDashboard(
     const badge = statusBadge(s?.status || 'idle');
     const lastRun = s?.lastRun ? new Date(s.lastRun).toLocaleString() : '—';
     const info = s?.count ? `${s.count} items` : s?.error || '';
+    const prog = s?.progress;
+    const hasParams = def.needsPages || def.needsUrl || def.needsBody;
     return `
     <div class="card" id="card-${def.key}">
       <div class="card-header">
@@ -770,12 +819,13 @@ function generateSyncDashboard(
         <div class="card-row"><span class="label">Última ejecución</span><span>${lastRun}</span></div>
         ${s?.duration ? `<div class="card-row"><span class="label">Duración</span><span>${(s.duration / 1000).toFixed(1)}s</span></div>` : ''}
         ${info ? `<div class="card-row"><span class="label">${s?.count ? 'Items' : 'Error'}</span><span class="${s?.error ? 'error' : ''}">${info}</span></div>` : ''}
+        ${isRunning && prog ? `<div class="progress-row"><span class="progress-msg">${prog.message}</span></div>` : ''}
       </div>
       <div class="card-actions">
-        <button class="btn btn-primary btn-sm" onclick="runSync('${def.key}','${def.route}','${def.method}',${def.needsPages})" ${isRunning ? 'disabled' : ''}>
-          ${isRunning ? 'Ejecutando...' : '▶ Ejecutar'}
+        <button class="btn btn-primary btn-sm" onclick="runSync('${def.key}','${def.route}','${def.method}',${!!def.needsPages})" ${isRunning ? 'disabled' : ''}>
+          ${isRunning ? (prog ? prog.message : 'Ejecutando...') : '▶ Ejecutar'}
         </button>
-        ${def.needsPages ? `<button class="btn btn-secondary btn-sm" onclick="showPagesModal('${def.key}','${def.route}','${def.label}')">⚙ Parámetros</button>` : ''}
+        ${hasParams ? `<button class="btn btn-secondary btn-sm" onclick="showPagesModal('${def.key}','${def.route}','${def.label}')">⚙ Parámetros</button>` : ''}
       </div>
     </div>`;
   }).join('\n');
@@ -811,7 +861,9 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
 .card-row{display:flex;justify-content:space-between;padding:.3rem 0;border-bottom:1px solid rgba(255,255,255,.04)}
 .card-row .label{color:#888}
 .card-row .error{color:#f87171}
-.card-actions{display:flex;gap:.5rem}
+.progress-row{padding:.4rem 0}
+.progress-msg{display:block;font-size:.82rem;color:#fbbf24;background:rgba(251,191,36,.1);padding:.3rem .6rem;border-radius:4px;text-align:center}
+.card-actions{display:flex;gap:.5rem;flex-wrap:wrap}
 .btn{padding:.5rem 1rem;border-radius:6px;border:none;cursor:pointer;font-size:.85rem;font-weight:600;transition:opacity .2s}
 .btn:hover{opacity:.85}
 .btn:disabled{opacity:.4;cursor:not-allowed}
@@ -877,7 +929,7 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
   </div>
 </div>
 
-<!-- Modal -->
+<!-- Modal para páginas -->
 <div class="modal-overlay" id="pagesModal">
   <div class="modal">
     <h2 id="modalTitle">Parámetros</h2>
@@ -893,6 +945,151 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
     </div>
   </div>
 </div>
+
+<!-- Sección: Agregar Canales (multi-ejecución) -->
+<div class="migration-section">
+  <h2 style="margin-bottom:1rem;font-size:1.2rem;color:#a0a0c0">📡 Agregar Canales en Vivo</h2>
+  <div class="add-channel-card">
+    <div class="add-channel-form">
+      <div class="form-row">
+        <div class="form-group">
+          <label>Proveedor</label>
+          <select id="chProvider">
+            <option value="chatytv">ChatyTV</option>
+            <option value="wsdeportes">WsDeportes</option>
+            <option value="tvporinternet2">TVporInternet2</option>
+            <option value="cablevisionhd">CablevisionHD</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label id="chParamLabel">Canal / Slug</label>
+          <input type="text" id="chParam" placeholder="ej: caracol">
+        </div>
+      </div>
+      <div class="form-row" id="extraFields">
+        <div class="form-group">
+          <label>Título</label>
+          <input type="text" id="chTitle" placeholder="Nombre del canal">
+        </div>
+        <div class="form-group">
+          <label>Logo URL</label>
+          <input type="text" id="chLogo" placeholder="https://...">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>País</label>
+          <input type="text" id="chCountry" placeholder="CO" maxlength="2">
+        </div>
+        <div class="form-group">
+          <label>Opción</label>
+          <input type="text" id="chOption" placeholder="opcional" title="Opción numérica para tvporinternet2 / cablevisionhd">
+        </div>
+      </div>
+      <button class="btn btn-primary" onclick="addChannel()">➕ Agregar Canal</button>
+    </div>
+    <div class="add-channel-log" id="chLog">
+      <div class="log-empty">Aún no hay ejecuciones</div>
+    </div>
+  </div>
+</div>
+
+<style>
+.add-channel-card{background:rgba(255,255,255,.05);border-radius:12px;padding:1.2rem;
+  backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.08);max-width:700px}
+.add-channel-form{display:flex;flex-direction:column;gap:.8rem}
+.form-row{display:flex;gap:.8rem;flex-wrap:wrap}
+.form-group{flex:1;min-width:140px}
+.form-group label{display:block;font-size:.8rem;color:#aaa;margin-bottom:.3rem}
+.form-group select,.form-group input{width:100%;padding:.55rem;border-radius:6px;border:1px solid rgba(255,255,255,.12);
+  background:rgba(255,255,255,.05);color:#fff;font-size:.9rem}
+.form-group select option{background:#1e1b4b;color:#fff}
+.form-group select:focus,.form-group input:focus{outline:none;border-color:#667eea}
+.add-channel-log{margin-top:.8rem;max-height:240px;overflow-y:auto;display:flex;flex-direction:column;gap:.4rem}
+.log-entry{padding:.4rem .6rem;border-radius:6px;font-size:.82rem;display:flex;align-items:center;gap:.5rem}
+.log-entry.running{background:rgba(251,191,36,.12);color:#fbbf24}
+.log-entry.success{background:rgba(52,211,153,.12);color:#34d399}
+.log-entry.error{background:rgba(248,113,113,.12);color:#f87171}
+.log-empty{color:#555;font-size:.85rem;text-align:center;padding:.5rem}
+</style>
+
+<script>
+// Agregar Canales - multi-ejecución
+let channelJobs = [];
+
+document.getElementById('chProvider').addEventListener('change', function() {
+  const provider = this.value;
+  const label = document.getElementById('chParamLabel');
+  const titleField = document.getElementById('chTitle');
+  const optionField = document.getElementById('chOption').parentElement;
+  if (provider === 'chatytv') {
+    label.textContent = 'Canal';
+    titleField.required = false;
+    optionField.style.display = 'none';
+  } else if (provider === 'wsdeportes') {
+    label.textContent = 'Parámetro (winsports, etc)';
+    titleField.required = true;
+    optionField.style.display = 'none';
+  } else {
+    label.textContent = 'Slug';
+    titleField.required = true;
+    optionField.style.display = 'block';
+  }
+});
+document.getElementById('chProvider').dispatchEvent(new Event('change'));
+
+async function addChannel() {
+  const provider = document.getElementById('chProvider').value;
+  const param = document.getElementById('chParam').value.trim();
+  const title = document.getElementById('chTitle').value.trim();
+  const logo = document.getElementById('chLogo').value.trim();
+  const country = document.getElementById('chCountry').value.trim().toUpperCase();
+  const option = document.getElementById('chOption').value.trim();
+
+  if (!param) { alert('Ingresa el parámetro del canal'); return; }
+  if ((provider === 'wsdeportes' || provider === 'tvporinternet2' || provider === 'cablevisionhd') && !title) {
+    alert('Ingresa el título del canal'); return;
+  }
+
+  const id = Date.now() + '_' + Math.random().toString(36).slice(2, 6);
+  const logEmpty = document.querySelector('.log-empty');
+  if (logEmpty) logEmpty.remove();
+
+  const entry = document.createElement('div');
+  entry.className = 'log-entry running';
+  entry.id = 'job_' + id;
+  entry.innerHTML = '<span>⏳</span><span><strong>' + provider + '</strong> ' + param + '</span><span style="margin-left:auto">Agregando...</span>';
+  document.getElementById('chLog').prepend(entry);
+
+  const route = '/live/channels/add/' + provider + '/' + encodeURIComponent(param);
+  const body = {};
+  if (title) body.title = title;
+  if (logo) body.logo = logo;
+  if (country) body.country = country;
+  if (option && (provider === 'tvporinternet2' || provider === 'cablevisionhd')) body.option = option;
+
+  try {
+    const res = await fetch(route, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const data = await res.json();
+    if (res.ok) {
+      entry.className = 'log-entry success';
+      entry.innerHTML = '<span>✅</span><span><strong>' + provider + '</strong> ' + param + '</span><span style="margin-left:auto">' + (data.channel?.title || 'Agregado') + '</span>';
+    } else {
+      entry.className = 'log-entry error';
+      entry.innerHTML = '<span>❌</span><span><strong>' + provider + '</strong> ' + param + '</span><span style="margin-left:auto">' + (data.error || 'Error') + '</span>';
+    }
+  } catch (e) {
+    entry.className = 'log-entry error';
+    entry.innerHTML = '<span>❌</span><span><strong>' + provider + '</strong> ' + param + '</span><span style="margin-left:auto">Error de red</span>';
+  }
+
+  // Limpiar si hay más de 20 entries
+  const log = document.getElementById('chLog');
+  while (log.children.length > 20) log.removeChild(log.lastChild);
+}
+
+document.getElementById('chParam').addEventListener('keydown', function(e) { if (e.key === 'Enter') addChannel(); });
+</script>
 
 <script>
 let pendingRoute = '';
@@ -956,7 +1153,7 @@ function showPagesModal(key, route, label) {
   document.getElementById('pagesModal').classList.add('active');
 }
 
-// Auto-refresh status every 5s
+// Auto-refresh status + progress every 3s
 async function refreshStatus() {
   try {
     const res = await fetch('/sync/status');
@@ -969,15 +1166,30 @@ async function refreshStatus() {
         const badge = card.querySelector('.badge');
         const statusText = card.querySelector('.status-text');
         const btn = card.querySelector('.btn-primary');
+        const progressRow = card.querySelector('.progress-row');
         const map = { idle: '⚪', running: '🟡', completed: '🟢', failed: '🔴' };
         if (badge) badge.textContent = map[s.status] || '⚪';
         if (statusText) { statusText.textContent = s.status; statusText.className = 'status-text ' + s.status; }
         if (btn) { btn.disabled = s.status === 'running'; btn.textContent = s.status === 'running' ? 'Ejecutando...' : '▶ Ejecutar'; }
+        // Update progress message in real-time
+        if (s.status === 'running' && s.progress) {
+          if (progressRow) {
+            progressRow.querySelector('.progress-msg').textContent = s.progress.message;
+          } else {
+            const body = card.querySelector('.card-body');
+            const div = document.createElement('div');
+            div.className = 'progress-row';
+            div.innerHTML = '<span class="progress-msg">' + s.progress.message + '</span>';
+            body.appendChild(div);
+          }
+        } else if (s.status !== 'running' && progressRow) {
+          progressRow.remove();
+        }
       }
     }
   } catch {}
 }
-setInterval(refreshStatus, 5000);
+setInterval(refreshStatus, 3000);
 </script>
 </body>
 </html>`;
