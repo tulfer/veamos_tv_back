@@ -13,7 +13,7 @@ export async function getHomeHandler(_request: FastifyRequest, reply: FastifyRep
   const homeData = await getCachedOrFetch<HomeResponse>(
     'home:aggregated',
     async () => {
-      const synced = loadSyncData();
+      const synced = await loadSyncData();
 
       let movies: MediaItem[] = [];
       let series: MediaItem[] = [];

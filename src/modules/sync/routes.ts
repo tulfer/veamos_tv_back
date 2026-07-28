@@ -11,6 +11,8 @@ import {
   importM3UHandler,
   syncHomeByscHandler,
   fetchDetailsHandler,
+  migrateToFirestoreHandler,
+  migrationStatusHandler,
 } from './controller';
 
 export async function syncRoutes(app: FastifyInstance) {
@@ -25,4 +27,6 @@ export async function syncRoutes(app: FastifyInstance) {
   app.post('/sync/live/import', importM3UHandler);
   app.post('/sync/home-bysc', syncHomeByscHandler);
   app.post('/sync/fetch-details', fetchDetailsHandler);
+  app.post('/sync/migrate-to-firestore', migrateToFirestoreHandler);
+  app.get('/sync/migration-status', migrationStatusHandler);
 }

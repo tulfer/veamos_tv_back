@@ -13,6 +13,7 @@ export const collections = {
   users: () => getDb().collection('users'),
   cache: () => getDb().collection('cache'),
   recommendations: () => getDb().collection('recommendations'),
+  syncData: () => getDb().collection('syncData'),
 };
 
 export async function getUserDoc(uid: string) {

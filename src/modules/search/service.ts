@@ -5,8 +5,8 @@ import { memoryCache } from '../../cache/memory';
 import { loadSyncData, saveSyncData } from '../../services/data-store';
 import { logger } from '../../utils/logger';
 
-function searchSync(query: string): { movies: MediaItem[]; series: MediaItem[] } {
-  const data = loadSyncData();
+async function searchSync(query: string): Promise<{ movies: MediaItem[]; series: MediaItem[] }> {
+  const data = await loadSyncData();
   if (!data) return { movies: [], series: [] };
 
   const q = query.toLowerCase();
@@ -23,9 +23,9 @@ function searchSync(query: string): { movies: MediaItem[]; series: MediaItem[] }
   return { movies, series };
 }
 
-function persistExternalResults(external: { movies: MediaItem[]; series: MediaItem[] }): void {
+async function persistExternalResults(external: { movies: MediaItem[]; series: MediaItem[] }): Promise<void> {
   try {
-    const existing = loadSyncData();
+    const existing = await loadSyncData();
     if (!existing) return;
 
     const movieTitles = new Set(existing.movies.map((m) => m.title.toLowerCase().trim()));
@@ -64,7 +64,7 @@ function persistExternalResults(external: { movies: MediaItem[]; series: MediaIt
     }
 
     if (updated.movies.length !== existing.movies.length || updated.series.length !== existing.series.length) {
-      saveSyncData(updated);
+      await saveSyncData(updated);
       logger.info({ movies: updated.movies.length - existing.movies.length, series: updated.series.length - existing.series.length }, 'Search persisted new items');
     }
   } catch (error) {
@@ -78,7 +78,7 @@ export async function searchAll(query: string, page = 1): Promise<SearchResult> 
   const cached = memoryCache.get<SearchResult>(cacheKey);
   if (cached) return cached;
 
-  const synced = searchSync(query);
+  const synced = await searchSync(query);
   const liveChannels = await fetchLiveChannels().catch(() => [] as any[]);
   const liveItems: MediaItem[] = liveChannels
     .filter((c: any) => c.title.toLowerCase().includes(q))
@@ -91,7 +91,7 @@ export async function searchAll(query: string, page = 1): Promise<SearchResult> 
     externalMovies = external.movies.filter((em) => !synced.movies.some((sm) => sm.title.toLowerCase() === em.title.toLowerCase()));
     externalSeries = external.series.filter((es) => !synced.series.some((ss) => ss.title.toLowerCase() === es.title.toLowerCase()));
     if (externalMovies.length > 0 || externalSeries.length > 0) {
-      persistExternalResults({ movies: externalMovies, series: externalSeries });
+      await persistExternalResults({ movies: externalMovies, series: externalSeries });
     }
   }
 
@@ -122,7 +122,7 @@ export async function searchByType(
     return { items: items.slice(0, 20), total: items.length, query };
   }
 
-  const synced = searchSync(query);
+  const synced = await searchSync(query);
   let items = type === 'movie' ? synced.movies : synced.series;
 
   if (items.length < 20) {
@@ -130,8 +130,8 @@ export async function searchByType(
     const filtered = (type === 'movie' ? external.movies : external.series)
       .filter((em) => !items.some((sm) => sm.title.toLowerCase() === em.title.toLowerCase()));
     if (filtered.length > 0) {
-      if (type === 'movie') persistExternalResults({ movies: filtered, series: [] });
-      else persistExternalResults({ movies: [], series: filtered });
+      if (type === 'movie') await persistExternalResults({ movies: filtered, series: [] });
+      else await persistExternalResults({ movies: [], series: filtered });
     }
     items = [...items, ...filtered].slice(0, 20);
   }

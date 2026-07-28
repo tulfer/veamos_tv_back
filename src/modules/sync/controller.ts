@@ -12,6 +12,28 @@ import { logger } from '../../utils/logger';
 import { memoryCache } from '../../cache/memory';
 import { SyncMovie, SyncSeries, SyncData, LiveChannel } from '../../types';
 
+interface MigrationStatus {
+  running: boolean;
+  progress: string;
+  message: string;
+  error: string | null;
+  stats: {
+    movies: number; series: number; channels: number;
+    popularMovies: number; popularSeries: number;
+    estrenoMovies: number; estrenoSeries: number;
+  };
+  updatedAt: number;
+}
+
+const migrationStatus: MigrationStatus = {
+  running: false,
+  progress: 'idle',
+  message: '',
+  error: null,
+  stats: { movies: 0, series: 0, channels: 0, popularMovies: 0, popularSeries: 0, estrenoMovies: 0, estrenoSeries: 0 },
+  updatedAt: 0,
+};
+
 const CONCURRENCY = 5;
 
 function mergeByIdGeneric<T extends { id: string }>(newItems: T[], existingItems: T[]): T[] {
@@ -162,10 +184,10 @@ export async function syncMoviesHandler(request: FastifyRequest, reply: FastifyR
 
   try {
     const movies = await syncMovies(pages);
-    const existing = loadSyncData();
+    const existing = await loadSyncData();
     const shouldReplace = body?.replace === true;
     const finalMovies = shouldReplace ? movies : mergeByIdGeneric(movies, existing?.movies || []);
-    saveSyncData({
+    await saveSyncData({
       movies: finalMovies,
       series: existing?.series || [],
       channels: existing?.channels || [],
@@ -194,10 +216,10 @@ export async function syncSeriesHandler(request: FastifyRequest, reply: FastifyR
 
   try {
     const series = await syncSeries(pages);
-    const existing = loadSyncData();
+    const existing = await loadSyncData();
     const shouldReplace = body?.replace === true;
     const finalSeries = shouldReplace ? series : mergeByIdGeneric(series, existing?.series || []);
-    saveSyncData({
+    await saveSyncData({
       movies: existing?.movies || [],
       series: finalSeries,
       channels: existing?.channels || [],
@@ -230,11 +252,11 @@ export async function syncAllHandler(request: FastifyRequest, reply: FastifyRepl
       moviePages.length > 0 ? syncMovies(moviePages) : Promise.resolve([]),
       seriesPages.length > 0 ? syncSeries(seriesPages) : Promise.resolve([]),
     ]);
-    const existing = loadSyncData();
+    const existing = await loadSyncData();
     const shouldReplace = body?.replace === true;
     const finalMovies = shouldReplace ? movies : mergeByIdGeneric(movies, existing?.movies || []);
     const finalSeries = shouldReplace ? series : mergeByIdGeneric(series, existing?.series || []);
-    saveSyncData({
+    await saveSyncData({
       movies: finalMovies,
       series: finalSeries,
       channels: existing?.channels || [],
@@ -263,10 +285,10 @@ export async function syncEstrenoMoviesHandler(request: FastifyRequest, reply: F
 
   try {
     const movies = await syncMovies(pages);
-    const existing = loadSyncData();
+    const existing = await loadSyncData();
     const shouldReplace = body?.replace === true;
     const finalEstrenoMovies = shouldReplace ? movies : mergeByIdGeneric(movies, existing?.estrenoMovies || []);
-    saveSyncData({
+    await saveSyncData({
       movies: existing?.movies || [],
       series: existing?.series || [],
       channels: existing?.channels || [],
@@ -295,10 +317,10 @@ export async function syncEstrenoSeriesHandler(request: FastifyRequest, reply: F
 
   try {
     const series = await syncSeries(pages);
-    const existing = loadSyncData();
+    const existing = await loadSyncData();
     const shouldReplace = body?.replace === true;
     const finalEstrenoSeries = shouldReplace ? series : mergeByIdGeneric(series, existing?.estrenoSeries || []);
-    saveSyncData({
+    await saveSyncData({
       movies: existing?.movies || [],
       series: existing?.series || [],
       channels: existing?.channels || [],
@@ -323,10 +345,10 @@ export async function syncLiveHandler(request: FastifyRequest, reply: FastifyRep
 
   try {
     const channels = await fetchLiveChannels();
-    const existing = loadSyncData();
+    const existing = await loadSyncData();
     const shouldReplace = body?.replace === true;
     const finalChannels = shouldReplace ? channels : mergeChannels(channels, existing?.channels || []);
-    saveSyncData({
+    await saveSyncData({
       movies: existing?.movies || [],
       series: existing?.series || [],
       channels: finalChannels,
@@ -350,10 +372,10 @@ export async function syncPopularMoviesHandler(request: FastifyRequest, reply: F
 
   try {
     const popularMovies = await scrapePopularMovies();
-    const existing = loadSyncData();
+    const existing = await loadSyncData();
     const shouldReplace = body?.replace === true;
     const finalPopularMovies = shouldReplace ? popularMovies : mergeByIdGeneric(popularMovies, existing?.popularMovies || []);
-    saveSyncData({
+    await saveSyncData({
       movies: existing?.movies || [],
       series: existing?.series || [],
       channels: existing?.channels || [],
@@ -377,10 +399,10 @@ export async function syncPopularSeriesHandler(request: FastifyRequest, reply: F
 
   try {
     const popularSeries = await scrapePopularSeries();
-    const existing = loadSyncData();
+    const existing = await loadSyncData();
     const shouldReplace = body?.replace === true;
     const finalPopularSeries = shouldReplace ? popularSeries : mergeByIdGeneric(popularSeries, existing?.popularSeries || []);
-    saveSyncData({
+    await saveSyncData({
       movies: existing?.movies || [],
       series: existing?.series || [],
       channels: existing?.channels || [],
@@ -525,7 +547,7 @@ export async function importM3UHandler(request: FastifyRequest, reply: FastifyRe
       return reply.send({ ok: true, imported: 0, skipped: 0, message: 'No valid channels found in the provided list' });
     }
 
-    const existing = loadSyncData();
+    const existing = await loadSyncData();
     const existingChannels = existing?.channels || [];
     const existingTitles = new Set(existingChannels.map((ch) => ch.title.toLowerCase().trim()));
 
@@ -540,7 +562,7 @@ export async function importM3UHandler(request: FastifyRequest, reply: FastifyRe
       }
     }
 
-    saveSyncData({
+    await saveSyncData({
       movies: existing?.movies || [],
       series: existing?.series || [],
       channels: [...existingChannels, ...newChannels],
@@ -556,4 +578,189 @@ export async function importM3UHandler(request: FastifyRequest, reply: FastifyRe
     logger.error({ error }, 'M3U import failed');
     return reply.status(500).send({ error: 'Import failed' });
   }
+}
+
+/* ───── Migración de JSON local a Firestore ───── */
+
+function generateMigrationPage(status: MigrationStatus): string {
+  const isRunning = status.running;
+  const progressMap: Record<string, string> = {
+    idle: '⏳ Inactivo',
+    reading: '📖 Leyendo archivo...',
+    writing: '💾 Escribiendo en Firestore...',
+    completed: '✅ Completado',
+    error: '❌ Error',
+  };
+
+  return `<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Migración a Firestore</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  background:#0f0c29;color:#e0e0e0;min-height:100vh;display:flex;align-items:center;justify-content:center}
+.container{background:rgba(255,255,255,.05);border-radius:16px;padding:2rem;width:90%;max-width:600px;
+  backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.1)}
+h1{font-size:1.5rem;margin-bottom:1.5rem;background:linear-gradient(135deg,#667eea,#764ba2);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.status-row{display:flex;justify-content:space-between;padding:.6rem 0;border-bottom:1px solid rgba(255,255,255,.05)}
+.label{color:#888}
+.value{font-weight:600}
+.value.running{color:#fbbf24}
+.value.completed{color:#34d399}
+.value.error{color:#f87171}
+.bar{height:8px;background:rgba(255,255,255,.1);border-radius:4px;margin-top:1rem;overflow:hidden}
+.bar-fill{height:100%;border-radius:4px;transition:width .5s;background:linear-gradient(90deg,#667eea,#764ba2)}
+.bar-fill.completed{background:linear-gradient(90deg,#34d399,#059669)}
+.bar-fill.error{background:linear-gradient(90deg,#f87171,#dc2626)}
+.btn{display:inline-block;padding:.7rem 1.5rem;border-radius:8px;text-decoration:none;
+  font-weight:600;margin-top:1.5rem;cursor:pointer;border:none;font-size:.9rem}
+.btn-primary{background:linear-gradient(135deg,#667eea,#764ba2);color:#fff}
+.btn-primary:hover{opacity:.9}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.msg{margin-top:1rem;padding:.7rem;border-radius:8px;font-size:.9rem}
+.msg.info{background:rgba(96,165,250,.15);color:#93c5fd}
+.msg.error{background:rgba(248,113,113,.15);color:#fca5a5}
+.msg.success{background:rgba(52,211,153,.15);color:#6ee7b7}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>🚀 Migración a Firestore</h1>
+
+<div class="status-row"><span class="label">Estado</span>
+  <span class="value ${status.progress}">${progressMap[status.progress] || status.progress}</span></div>
+<div class="status-row"><span class="label">Mensaje</span><span class="value">${status.message || '—'}</span></div>
+<div class="status-row"><span class="label">Películas</span><span class="value">${status.stats.movies}</span></div>
+<div class="status-row"><span class="label">Series</span><span class="value">${status.stats.series}</span></div>
+<div class="status-row"><span class="label">Canales</span><span class="value">${status.stats.channels}</span></div>
+<div class="status-row"><span class="label">Populares (M)</span><span class="value">${status.stats.popularMovies}</span></div>
+<div class="status-row"><span class="label">Populares (S)</span><span class="value">${status.stats.popularSeries}</span></div>
+<div class="status-row"><span class="label">Estrenos (M)</span><span class="value">${status.stats.estrenoMovies}</span></div>
+<div class="status-row"><span class="label">Estrenos (S)</span><span class="value">${status.stats.estrenoSeries}</span></div>
+
+<div class="bar">
+  <div class="bar-fill ${status.progress === 'completed' ? 'completed' : ''} ${status.progress === 'error' ? 'error' : ''}"
+       style="width:${status.progress === 'idle' ? 0 : status.progress === 'completed' || status.progress === 'error' ? 100 : status.progress === 'writing' ? 80 : 30}%"></div>
+</div>
+
+${status.message ? `<div class="msg ${status.progress === 'error' ? 'error' : status.progress === 'completed' ? 'success' : 'info'}">${status.message}</div>` : ''}
+
+<div style="display:flex;gap:1rem;margin-top:1.5rem">
+  <form action="/sync/migrate-to-firestore" method="POST">
+    <button class="btn btn-primary" type="submit" ${isRunning ? 'disabled' : ''}>
+      ${isRunning ? 'Migrando...' : 'Iniciar Migración'}
+    </button>
+  </form>
+  <a href="/sync/migration-status" class="btn btn-primary" style="text-align:center">↻ Recargar</a>
+</div>
+</div>
+
+<script>
+async function poll() {
+  try {
+    const res = await fetch('/sync/migration-status');
+    if (res.headers.get('content-type')?.includes('application/json')) {
+      const data = await res.json();
+      const progressMap = { idle: '⏳ Inactivo', reading: '📖 Leyendo archivo...', writing: '💾 Escribiendo en Firestore...', completed: '✅ Completado', error: '❌ Error' };
+      document.querySelectorAll('.status-row .value')[0].textContent = progressMap[data.progress] || data.progress;
+      document.querySelectorAll('.status-row .value')[1].textContent = data.message || '—';
+      document.querySelectorAll('.status-row .value')[2].textContent = data.stats.movies;
+      document.querySelectorAll('.status-row .value')[3].textContent = data.stats.series;
+      document.querySelectorAll('.status-row .value')[4].textContent = data.stats.channels;
+      document.querySelectorAll('.status-row .value')[5].textContent = data.stats.popularMovies;
+      document.querySelectorAll('.status-row .value')[6].textContent = data.stats.popularSeries;
+      document.querySelectorAll('.status-row .value')[7].textContent = data.stats.estrenoMovies;
+      document.querySelectorAll('.status-row .value')[8].textContent = data.stats.estrenoSeries;
+      document.querySelector('.btn-primary').disabled = data.running;
+      document.querySelector('.btn-primary').textContent = data.running ? 'Migrando...' : 'Iniciar Migración';
+    }
+    if (!res.ok) return;
+  } catch {}
+}
+setInterval(poll, 2000);
+</script>
+</body>
+</html>`;
+}
+
+export async function migrateToFirestoreHandler(_request: FastifyRequest, reply: FastifyReply) {
+  if (migrationStatus.running) {
+    return reply.status(409).send({ error: 'Migration already in progress' });
+  }
+
+  migrationStatus.running = true;
+  migrationStatus.progress = 'reading';
+  migrationStatus.message = 'Leyendo sync-data.json...';
+  migrationStatus.error = null;
+  migrationStatus.stats = { movies: 0, series: 0, channels: 0, popularMovies: 0, popularSeries: 0, estrenoMovies: 0, estrenoSeries: 0 };
+  migrationStatus.updatedAt = Date.now();
+
+  runMigration().catch((err) => {
+    migrationStatus.running = false;
+    migrationStatus.progress = 'error';
+    migrationStatus.message = err.message;
+    migrationStatus.error = err.message;
+    migrationStatus.updatedAt = Date.now();
+    logger.error({ error: err }, 'Migration to Firestore failed');
+  });
+
+  return reply.send({ ok: true, message: 'Migration started' });
+}
+
+async function runMigration(): Promise<void> {
+  const filePath = path.join(process.cwd(), 'data', 'sync-data.json');
+
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`Archivo no encontrado: ${filePath}`);
+  }
+
+  migrationStatus.message = `Archivo encontrado, leyendo...`;
+  migrationStatus.updatedAt = Date.now();
+
+  const raw = fs.readFileSync(filePath, 'utf-8');
+  const data = JSON.parse(raw);
+
+  const stats = {
+    movies: data.movies?.length || 0,
+    series: data.series?.length || 0,
+    channels: data.channels?.length || 0,
+    popularMovies: data.popularMovies?.length || 0,
+    popularSeries: data.popularSeries?.length || 0,
+    estrenoMovies: data.estrenoMovies?.length || 0,
+    estrenoSeries: data.estrenoSeries?.length || 0,
+  };
+
+  migrationStatus.stats = stats;
+  migrationStatus.progress = 'writing';
+  migrationStatus.message = `Subiendo ${stats.movies} películas, ${stats.series} series, ${stats.channels} canales a Firestore...`;
+  migrationStatus.updatedAt = Date.now();
+
+  await saveSyncData({
+    movies: data.movies || [],
+    series: data.series || [],
+    channels: data.channels || [],
+    popularMovies: data.popularMovies || [],
+    popularSeries: data.popularSeries || [],
+    estrenoMovies: data.estrenoMovies || [],
+    estrenoSeries: data.estrenoSeries || [],
+    updatedAt: Date.now(),
+  });
+
+  migrationStatus.running = false;
+  migrationStatus.progress = 'completed';
+  migrationStatus.message = 'Migración completada exitosamente';
+  migrationStatus.updatedAt = Date.now();
+  logger.info({ stats }, 'Migration to Firestore completed');
+}
+
+export async function migrationStatusHandler(request: FastifyRequest, reply: FastifyReply) {
+  const accept = request.headers.accept || '';
+  if (accept.includes('text/html')) {
+    return reply.type('text/html').send(generateMigrationPage(migrationStatus));
+  }
+  return reply.send(migrationStatus);
 }
