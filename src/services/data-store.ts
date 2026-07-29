@@ -111,6 +111,44 @@ export async function getSyncStats(): Promise<{
   }
 }
 
+export async function getCollectionCounts(): Promise<Record<string, number>> {
+  try {
+    const counts: Record<string, number> = {};
+    const collections_to_count = [
+      { key: 'movies', ref: collections.movies() },
+      { key: 'series', ref: collections.series() },
+      { key: 'estrenoMovies', ref: collections.estrenoMovies() },
+      { key: 'estrenoSeries', ref: collections.estrenoSeries() },
+      { key: 'channels', ref: collections.channels() },
+      { key: 'popularMovies', ref: collections.popularMovies() },
+      { key: 'popularSeries', ref: collections.popularSeries() },
+    ];
+    const results = await Promise.all(
+      collections_to_count.map(async ({ key, ref }) => {
+        try {
+          const docs = await ref.listDocuments();
+          return { key, count: docs.length };
+        } catch {
+          return { key, count: 0 };
+        }
+      }),
+    );
+    for (const { key, count } of results) {
+      counts[key] = count;
+    }
+    // Combined counts
+    counts['all'] = (counts['movies'] ?? 0) + (counts['series'] ?? 0);
+    // Alias counts for cards that share the same collection
+    counts['importM3U'] = counts['channels'] ?? 0;
+    counts['refreshAll'] = counts['channels'] ?? 0;
+    counts['refreshExpired'] = counts['channels'] ?? 0;
+    return counts;
+  } catch (error) {
+    logger.error({ error }, 'Failed to get collection counts');
+    return {};
+  }
+}
+
 export async function loadHomeData<T = unknown>(): Promise<T | null> {
   try {
     const doc = await collections.homeData().doc('cineby').get();

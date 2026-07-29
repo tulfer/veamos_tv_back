@@ -3,7 +3,7 @@ import path from 'path';
 import { FastifyRequest, FastifyReply } from 'fastify';
 import { scrapeMovies, scrapeMovieDetail, scrapePopularMovies } from '../../providers/movies';
 import { scrapeSeries, scrapeSeriesDetail, scrapePopularSeries } from '../../providers/series';
-import { saveSyncData, loadSyncData, saveHomeData, loadHomeData } from '../../services/data-store';
+import { saveSyncData, loadSyncData, saveHomeData, loadHomeData, getCollectionCounts } from '../../services/data-store';
 import { fetchItemDetails } from '../../providers/cineby';
 import { closeBrowser } from '../../services/video-resolver';
 import { fetchLiveChannels, parseM3U, validateBatch } from '../../providers/live-tv';
@@ -737,6 +737,11 @@ export async function syncStatusHandler(request: FastifyRequest, reply: FastifyR
   return reply.type('text/html').send(generateSyncDashboard(status, syncDefs, migrationStatus));
 }
 
+export async function syncCountsHandler(_request: FastifyRequest, reply: FastifyReply) {
+  const counts = await getCollectionCounts();
+  return reply.send(counts);
+}
+
 function generateCodeEntryPage(): string {
   return `<!DOCTYPE html>
 <html lang="es">
@@ -1156,6 +1161,20 @@ function showPagesModal(key, route, label) {
   document.getElementById('pagesModal').classList.add('active');
 }
 
+// Fetch database counts and update cards
+async function refreshCounts() {
+  try {
+    const res = await fetch('/sync/counts');
+    if (res.ok) {
+      const counts = await res.json();
+      for (const key of Object.keys(counts)) {
+        const countVal = document.querySelector(\`#card-\${key} .count-val\`);
+        if (countVal) countVal.textContent = counts[key];
+      }
+    }
+  } catch {}
+}
+
 // Auto-refresh status + progress + counts every 3s
 async function refreshStatus() {
   try {
@@ -1220,7 +1239,9 @@ async function refreshStatus() {
     }
   } catch {}
 }
+refreshCounts();
 setInterval(refreshStatus, 3000);
+setInterval(refreshCounts, 3000);
 </script>
 </body>
 </html>`;
