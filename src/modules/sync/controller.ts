@@ -818,8 +818,11 @@ function generateSyncDashboard(
       <div class="card-body">
         <div class="card-row"><span class="label">Última ejecución</span><span>${lastRun}</span></div>
         ${s?.duration ? `<div class="card-row"><span class="label">Duración</span><span>${(s.duration / 1000).toFixed(1)}s</span></div>` : ''}
-        ${info ? `<div class="card-row"><span class="label">${s?.count ? 'Items' : 'Error'}</span><span class="${s?.error ? 'error' : ''}">${info}</span></div>` : ''}
-        ${isRunning && prog ? `<div class="progress-row"><span class="progress-msg">${prog.message}</span></div>` : ''}
+        <div class="card-row" id="row-items-${def.key}"><span class="label">Items</span><span class="count-val">${s?.count != null ? s.count : (s?.error ? '—' : '0')}</span></div>
+        ${s?.error ? `<div class="card-row" id="row-error-${def.key}"><span class="label">Error</span><span class="error">${s.error}</span></div>` : ''}
+        <div class="progress-row" id="prog-${def.key}" ${isRunning && prog ? '' : 'style="display:none"'}>
+          <span class="progress-msg">${isRunning && prog ? prog.message : ''}</span>
+        </div>
       </div>
       <div class="card-actions">
         <button class="btn btn-primary btn-sm" onclick="runSync('${def.key}','${def.route}','${def.method}',${!!def.needsPages})" ${isRunning ? 'disabled' : ''}>
@@ -1153,7 +1156,7 @@ function showPagesModal(key, route, label) {
   document.getElementById('pagesModal').classList.add('active');
 }
 
-// Auto-refresh status + progress every 3s
+// Auto-refresh status + progress + counts every 3s
 async function refreshStatus() {
   try {
     const res = await fetch('/sync/status');
@@ -1166,24 +1169,52 @@ async function refreshStatus() {
         const badge = card.querySelector('.badge');
         const statusText = card.querySelector('.status-text');
         const btn = card.querySelector('.btn-primary');
-        const progressRow = card.querySelector('.progress-row');
+        const progressRow = card.getElementById('prog-' + key);
+        const progressMsg = progressRow?.querySelector('.progress-msg');
+        const countRow = card.getElementById('row-items-' + key);
+        const countVal = countRow?.querySelector('.count-val');
         const map = { idle: '⚪', running: '🟡', completed: '🟢', failed: '🔴' };
+
         if (badge) badge.textContent = map[s.status] || '⚪';
         if (statusText) { statusText.textContent = s.status; statusText.className = 'status-text ' + s.status; }
-        if (btn) { btn.disabled = s.status === 'running'; btn.textContent = s.status === 'running' ? 'Ejecutando...' : '▶ Ejecutar'; }
-        // Update progress message in real-time
-        if (s.status === 'running' && s.progress) {
-          if (progressRow) {
-            progressRow.querySelector('.progress-msg').textContent = s.progress.message;
+        if (btn) { btn.disabled = s.status === 'running'; btn.textContent = s.status === 'running' ? (s.progress ? s.progress.message : 'Ejecutando...') : '▶ Ejecutar'; }
+
+        // Always update count
+        if (countVal) {
+          countVal.textContent = s.count != null ? s.count : (s.progress ? s.progress.current : 0);
+        }
+
+        // Update progress message: always visible when running or completed with count
+        if (progressRow && progressMsg) {
+          if (s.status === 'running' && s.progress) {
+            progressRow.style.display = '';
+            progressMsg.textContent = s.progress.message;
+          } else if (s.status === 'completed' && s.count != null) {
+            progressRow.style.display = '';
+            progressMsg.textContent = \`✅ \${s.count} items (en \${s.duration ? (s.duration / 1000).toFixed(1) + 's' : '—'})\`;
+          } else if (s.status === 'failed') {
+            progressRow.style.display = '';
+            progressMsg.textContent = '❌ ' + (s.error || 'Error');
           } else {
+            progressRow.style.display = 'none';
+          }
+        }
+
+        // Show/hide error row
+        let errorRow = card.getElementById('row-error-' + key);
+        if (s.status === 'failed' && s.error) {
+          if (!errorRow) {
             const body = card.querySelector('.card-body');
             const div = document.createElement('div');
-            div.className = 'progress-row';
-            div.innerHTML = '<span class="progress-msg">' + s.progress.message + '</span>';
-            body.appendChild(div);
+            div.className = 'card-row';
+            div.id = 'row-error-' + key;
+            div.innerHTML = '<span class="label">Error</span><span class="error">' + s.error + '</span>';
+            body.insertBefore(div, progressRow);
+          } else {
+            errorRow.querySelector('.error').textContent = s.error;
           }
-        } else if (s.status !== 'running' && progressRow) {
-          progressRow.remove();
+        } else if (errorRow && s.status !== 'failed') {
+          errorRow.remove();
         }
       }
     }
