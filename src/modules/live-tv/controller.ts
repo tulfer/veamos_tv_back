@@ -233,6 +233,11 @@ export async function refreshExpiredChannelsHandler(_request: FastifyRequest, re
       continue;
     }
     pushLog('refreshExpired', `  Slug extraído: ${slug}`);
+    const fetchUrl = source === 'wsdeportes' ? `https://wsdeportes.net/?v=${slug}` :
+      source === 'tvporinternet2' ? `https://www.tvporinternet2.com/${slug}.html` :
+      source === 'cablevisionhd' ? `https://www.cablevisionhd.com/${slug}.php` :
+      `https://${source}.com/${slug}`;
+    pushLog('refreshExpired', `  URL consultada: ${fetchUrl}`);
 
     pushLog('refreshExpired', `  Invalidando caché para ${source}:${slug}...`);
     memoryCache.del(`${source}:${slug}`);
@@ -344,6 +349,11 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
       continue;
     }
     pushLog('refreshAll', `  Slug: ${slug}${ch.refreshOption ? ` | Opción: ${ch.refreshOption}` : ''}`);
+    const fetchUrl = source === 'wsdeportes' ? `https://wsdeportes.net/?v=${slug}` :
+      source === 'tvporinternet2' ? `https://www.tvporinternet2.com/${slug}.html` :
+      source === 'cablevisionhd' ? `https://www.cablevisionhd.com/${slug}.php` :
+      `https://${source}.com/${slug}`;
+    pushLog('refreshAll', `  URL consultada: ${fetchUrl}`);
 
     pushLog('refreshAll', `  Invalidando caché...`);
     memoryCache.del(`${source}:${slug}`);

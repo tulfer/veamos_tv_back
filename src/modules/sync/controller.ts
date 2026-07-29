@@ -776,21 +776,29 @@ a:hover{text-decoration:underline}
 <div class="auto-refresh" id="status">Actualizando automáticamente...</div>
 <div class="terminal" id="logContainer">${logHtml || '<div class="line" style="color:#8b949e">Sin registros aún</div>'}</div>
 <script>
+let prevLen = 0;
+let autoScroll = true;
+document.getElementById('logContainer').addEventListener('scroll', function() {
+  const el = this;
+  autoScroll = el.scrollTop + el.clientHeight >= el.scrollHeight - 10;
+});
 async function refreshLogs() {
   try {
     const res = await fetch('/sync/detail/${type}');
     if (res.ok) {
       const data = await res.json();
       const container = document.getElementById('logContainer');
+      const hasNew = data.length !== prevLen;
       container.innerHTML = data.map(line =>
         '<div class="line">' + line.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</div>'
       ).join('') || '<div class="line" style="color:#8b949e">Sin registros aún</div>';
-      container.scrollTop = container.scrollHeight;
+      if (autoScroll && hasNew) container.scrollTop = container.scrollHeight;
+      prevLen = data.length;
     }
   } catch {}
 }
-setInterval(refreshLogs, 1500);
 refreshLogs();
+setInterval(refreshLogs, 1500);
 </script>
 </body>
 </html>`);
