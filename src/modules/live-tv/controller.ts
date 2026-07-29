@@ -6,6 +6,7 @@ import { loadSyncData, saveSyncData } from '../../services/data-store';
 import { LiveChannel } from '../../types';
 import { logger } from '../../utils/logger';
 import { startSync, completeSync, failSync, updateSyncProgress, pushLog, clearLogs } from '../../services/sync-status';
+import { fetchHTML } from '../../utils/http';
 
 const CACHE_KEY = 'live:channels';
 const PAGE_SIZE = 10;
@@ -253,6 +254,13 @@ export async function refreshExpiredChannelsHandler(_request: FastifyRequest, re
         updatedChannels.push(ch);
       } else {
         pushLog('refreshExpired', `  ❌ El proveedor no devolvió URL`);
+        pushLog('refreshExpired', `  🔍 Diagnosticando ${fetchUrl}...`);
+        try {
+          const html = await fetchHTML(fetchUrl);
+          pushLog('refreshExpired', `  Página cargada: ${html.substring(0, 300)}...`);
+        } catch (diagErr: any) {
+          pushLog('refreshExpired', `  Error HTTP: ${diagErr.message}`);
+        }
         failedChannels.push({ id: ch.id, error: 'No se obtuvo URL del proveedor' });
         processed++;
         updateSyncProgress('refreshExpired', processed, `[${processed}/${totalToProcess}] ❌ ${ch.title || ch.id} — sin URL`, totalToProcess);
@@ -370,6 +378,13 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
         updatedChannels.push(ch);
       } else {
         pushLog('refreshAll', `  ❌ El proveedor no devolvió URL`);
+        pushLog('refreshAll', `  🔍 Diagnosticando ${fetchUrl}...`);
+        try {
+          const html = await fetchHTML(fetchUrl);
+          pushLog('refreshAll', `  Página cargada: ${html.substring(0, 300)}...`);
+        } catch (diagErr: any) {
+          pushLog('refreshAll', `  Error HTTP: ${diagErr.message}`);
+        }
         failedChannels.push({ id: ch.id, error: 'No se obtuvo URL del proveedor' });
         processed++;
         updateSyncProgress('refreshAll', processed, `[${processed}/${totalToProcess}] ❌ ${ch.title || ch.id} — sin URL`, totalToProcess);
