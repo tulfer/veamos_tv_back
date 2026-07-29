@@ -11,7 +11,7 @@ import { fetchHTML } from '../../utils/http';
 import { logger } from '../../utils/logger';
 import { memoryCache } from '../../cache/memory';
 import { SyncMovie, SyncSeries, SyncData, LiveChannel } from '../../types';
-import { startSync, completeSync, failSync, updateSyncProgress, SyncType } from '../../services/sync-status';
+import { startSync, completeSync, failSync, updateSyncProgress, getLogs, SyncType } from '../../services/sync-status';
 
 interface MigrationStatus {
   running: boolean;
@@ -742,6 +742,63 @@ export async function syncCountsHandler(_request: FastifyRequest, reply: Fastify
   return reply.send(counts);
 }
 
+export async function syncDetailHandler(request: FastifyRequest, reply: FastifyReply) {
+  const { type } = request.params as { type: string };
+  const logEntries = getLogs(type);
+  const accept = request.headers.accept || '';
+
+  if (accept.includes('text/html')) {
+    const logHtml = logEntries.map(line =>
+      `<div class="line">${line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>`
+    ).join('\n');
+
+    return reply.type('text/html').send(`<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Detalle: ${type}</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Courier New',monospace;background:#0d1117;color:#e6edf3;padding:1rem;font-size:.85rem}
+h1{color:#58a6ff;margin-bottom:1rem;font-size:1.2rem}
+.terminal{background:#161b22;border-radius:8px;padding:1rem;border:1px solid #30363d;max-height:80vh;overflow-y:auto}
+.line{padding:2px 0;line-height:1.5;word-break:break-all}
+.line:nth-child(even){background:rgba(255,255,255,.02)}
+a{color:#58a6ff;text-decoration:none;margin-bottom:1rem;display:inline-block}
+a:hover{text-decoration:underline}
+.auto-refresh{color:#8b949e;font-size:.75rem;margin-bottom:.5rem}
+</style>
+</head>
+<body>
+<a href="/sync/status?code=1992">← Volver al Dashboard</a>
+<h1>📋 Detalle: ${type}</h1>
+<div class="auto-refresh" id="status">Actualizando automáticamente...</div>
+<div class="terminal" id="logContainer">${logHtml || '<div class="line" style="color:#8b949e">Sin registros aún</div>'}</div>
+<script>
+async function refreshLogs() {
+  try {
+    const res = await fetch('/sync/detail/${type}');
+    if (res.ok) {
+      const data = await res.json();
+      const container = document.getElementById('logContainer');
+      container.innerHTML = data.map(line =>
+        '<div class="line">' + line.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</div>'
+      ).join('') || '<div class="line" style="color:#8b949e">Sin registros aún</div>';
+      container.scrollTop = container.scrollHeight;
+    }
+  } catch {}
+}
+setInterval(refreshLogs, 1500);
+refreshLogs();
+</script>
+</body>
+</html>`);
+  }
+
+  return reply.send(logEntries);
+}
+
 function generateCodeEntryPage(): string {
   return `<!DOCTYPE html>
 <html lang="es">
@@ -834,6 +891,7 @@ function generateSyncDashboard(
           ${isRunning ? (prog ? prog.message : 'Ejecutando...') : '▶ Ejecutar'}
         </button>
         ${hasParams ? `<button class="btn btn-secondary btn-sm" onclick="showPagesModal('${def.key}','${def.route}','${def.label}')">⚙ Parámetros</button>` : ''}
+        ${def.key === 'refreshAll' || def.key === 'refreshExpired' ? `<a href="/sync/detail/${def.key}" class="btn btn-secondary btn-sm" style="text-decoration:none">📋 Detalle</a>` : ''}
       </div>
     </div>`;
   }).join('\n');

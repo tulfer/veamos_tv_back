@@ -33,6 +33,25 @@ export type SyncState = Record<SyncType, SyncJobStatus>;
 
 const defaultStatus: SyncJobStatus = { status: 'idle', lastRun: null };
 
+// Logs detallados por tipo de sincronización
+const logs: Record<string, string[]> = {};
+const LOG_MAX = 500;
+
+export function pushLog(type: string, message: string): void {
+  if (!logs[type]) logs[type] = [];
+  const timestamp = new Date().toLocaleTimeString();
+  logs[type].push(`[${timestamp}] ${message}`);
+  if (logs[type].length > LOG_MAX) logs[type].splice(0, logs[type].length - LOG_MAX);
+}
+
+export function getLogs(type: string): string[] {
+  return logs[type] || [];
+}
+
+export function clearLogs(type: string): void {
+  delete logs[type];
+}
+
 const state: SyncState = {
   movies: { ...defaultStatus },
   series: { ...defaultStatus },
