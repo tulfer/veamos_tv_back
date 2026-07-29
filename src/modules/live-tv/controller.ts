@@ -5,6 +5,7 @@ import { getCachedOrFetch, memoryCache } from '../../cache';
 import { loadSyncData, saveSyncData } from '../../services/data-store';
 import { LiveChannel } from '../../types';
 import { logger } from '../../utils/logger';
+import { startSync, completeSync, failSync, updateSyncProgress } from '../../services/sync-status';
 
 const CACHE_KEY = 'live:channels';
 const PAGE_SIZE = 10;
@@ -188,61 +189,66 @@ export async function refreshExpiredChannelsHandler(_request: FastifyRequest, re
     return reply.status(400).send({ error: 'No sync data found' });
   }
 
+  if (!startSync('refreshExpired')) {
+    return reply.send({ ok: true, message: 'Refresh expired already in progress' });
+  }
+
+  reply.send({ ok: true, message: 'Refresh expired channels started' });
+
   const channels = synced.channels;
+  const expiredChannels = channels.filter(ch => ch.url?.includes('expires=') && ch.refreshUrl);
+  const totalToProcess = expiredChannels.length;
   const updatedChannels: LiveChannel[] = [];
   const failedChannels: { id: string; error: string }[] = [];
+  let processed = 0;
 
   for (const ch of channels) {
-    // Verificar si la URL tiene "expires" y tiene refreshUrl
     if (!ch.url || !ch.url.includes('expires=') || !ch.refreshUrl) {
       continue;
     }
 
     const source = extractRefreshSource(ch.refreshUrl);
     if (!source) {
+      processed++;
+      updateSyncProgress('refreshExpired', processed, `[${processed}/${totalToProcess}] ${ch.title || ch.id} — fuente no detectada`, totalToProcess);
       continue;
     }
 
     const slug = extractSlugFromUrl(ch.refreshUrl, source);
     if (!slug) {
+      processed++;
+      updateSyncProgress('refreshExpired', processed, `[${processed}/${totalToProcess}] ${ch.title || ch.id} — slug inválido`, totalToProcess);
       continue;
     }
 
     try {
-      logger.info({ id: ch.id, source, slug, option: ch.refreshOption }, 'Refreshing channel URL');
-
       const result = await getChannelStream(source, slug, ch.refreshOption || undefined);
       if (result && result.url && !result.url.includes('expires=')) {
-        // Actualizar solo la URL
         ch.url = result.url;
         updatedChannels.push(ch);
-        logger.info({ id: ch.id, url: ch.url?.substring(0, 80) }, 'Channel URL refreshed successfully');
       } else {
         failedChannels.push({ id: ch.id, error: 'New URL still has expires or is empty' });
-        logger.warn({ id: ch.id }, 'New URL still has expires or is empty');
       }
     } catch (error: any) {
       failedChannels.push({ id: ch.id, error: error.message });
-      logger.error({ id: ch.id, error: error.message }, 'Failed to refresh channel URL');
     }
+    processed++;
+    updateSyncProgress('refreshExpired', processed, `[${processed}/${totalToProcess}] ${ch.title || ch.id}`, totalToProcess);
   }
 
-  // Guardar los cambios si se actualizó algún canal
   if (updatedChannels.length > 0) {
-    await saveSyncData({
-      ...synced,
-      channels,
-      updatedAt: Date.now(),
-    });
+    await saveSyncData({ ...synced, channels, updatedAt: Date.now() });
     memoryCache.del('live:channels');
   }
 
-  return reply.send({
-    ok: true,
-    message: `Refreshed ${updatedChannels.length} channels, ${failedChannels.length} failed`,
-    updated: updatedChannels.map((ch) => ({ id: ch.id })),
-    failed: failedChannels,
-  });
+  const count = updatedChannels.length;
+  if (failedChannels.length > 0 && count === 0) {
+    failSync('refreshExpired', `0 actualizados, ${failedChannels.length} fallos`);
+  } else if (failedChannels.length > 0) {
+    failSync('refreshExpired', `${count} actualizados, ${failedChannels.length} fallos: ${failedChannels[0].error}${failedChannels.length > 1 ? ` (+${failedChannels.length - 1} más)` : ''}`);
+  } else {
+    completeSync('refreshExpired', count);
+  }
 }
 
 /**
@@ -256,73 +262,70 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
     return reply.status(400).send({ error: 'No sync data found' });
   }
 
+  if (!startSync('refreshAll')) {
+    return reply.send({ ok: true, message: 'Refresh all already in progress' });
+  }
+
+  reply.send({ ok: true, message: 'Refresh all channels started' });
+
   const channels = synced.channels;
+  const totalToProcess = channels.filter(ch => ch.refreshUrl).length;
   const updatedChannels: LiveChannel[] = [];
   const failedChannels: { id: string; error: string }[] = [];
+  let processed = 0;
 
   for (const ch of channels) {
-    // Solo procesar canales que tengan refreshUrl
     if (!ch.refreshUrl) {
       continue;
     }
 
-    // Inferir el proveedor desde el campo "proveedor" o desde la refreshUrl
     const provedor = (ch.proveedor || extractRefreshSource(ch.refreshUrl)) as string;
     if (provedor !== 'wsdeportes' && provedor !== 'cablevisionhd' && provedor !== 'tvporinternet2') {
       failedChannels.push({ id: ch.id, error: `Proveedor no soportado: ${provedor || '(none)'}` });
-      logger.warn({ id: ch.id, refreshUrl: ch.refreshUrl, proveedor: ch.proveedor }, 'Proveedor no soportado');
+      processed++;
+      updateSyncProgress('refreshAll', processed, `[${processed}/${totalToProcess}] ${ch.title || ch.id} — proveedor no soportado`, totalToProcess);
       continue;
     }
     const source: 'wsdeportes' | 'cablevisionhd' | 'tvporinternet2' = provedor;
 
-    // Extraer slug de la refreshUrl según el proveedor
     const slug = extractSlugFromUrl(ch.refreshUrl, source);
     if (!slug) {
       failedChannels.push({ id: ch.id, error: 'No se pudo extraer slug de refreshUrl' });
-      logger.warn({ id: ch.id, refreshUrl: ch.refreshUrl, proveedor: source }, 'No se pudo extraer slug');
+      processed++;
+      updateSyncProgress('refreshAll', processed, `[${processed}/${totalToProcess}] ${ch.title || ch.id} — slug inválido`, totalToProcess);
       continue;
     }
 
     try {
-      logger.info({ id: ch.id, proveedor: source, slug, option: ch.refreshOption }, 'Refrescando URL del canal');
-
-      // Invalidar caché en memoria para forzar una consulta fresca
       memoryCache.del(`${source}:${slug}`);
       memoryCache.del(`${source}:${slug}:default`);
       if (ch.refreshOption) memoryCache.del(`${source}:${slug}:${ch.refreshOption}`);
       const result = await getChannelStream(source, slug, ch.refreshOption || undefined);
       if (result && result.url) {
-        // Actualizar solo la URL y asegurar el proveedor en el canal
         ch.url = result.url;
         if (!ch.proveedor) ch.proveedor = source;
         updatedChannels.push(ch);
-        logger.info({ id: ch.id, url: ch.url?.substring(0, 80) }, 'URL del canal actualizada exitosamente');
       } else {
         failedChannels.push({ id: ch.id, error: 'No se obtuvo URL del proveedor' });
-        logger.warn({ id: ch.id }, 'No se obtuvo URL del proveedor');
       }
     } catch (error: any) {
       failedChannels.push({ id: ch.id, error: error.message });
-      logger.error({ id: ch.id, error: error.message }, 'Error al refrescar URL del canal');
     }
+    processed++;
+    updateSyncProgress('refreshAll', processed, `[${processed}/${totalToProcess}] ${ch.title || ch.id}`, totalToProcess);
   }
 
-  // Guardar los cambios si se actualizó algún canal
   if (updatedChannels.length > 0) {
-    await saveSyncData({
-      ...synced,
-      channels,
-      updatedAt: Date.now(),
-    });
+    await saveSyncData({ ...synced, channels, updatedAt: Date.now() });
     memoryCache.del('live:channels');
   }
 
-  return reply.send({
-    ok: true,
-    message: `URLs actualizadas: ${updatedChannels.length}, fallos: ${failedChannels.length}`,
-    updated: updatedChannels.map((ch) => ({ id: ch.id, title: ch.title })),
-    failed: failedChannels,
-  });
+  const count = updatedChannels.length;
+  if (failedChannels.length > 0) {
+    failSync('refreshAll', `${count} actualizados, ${failedChannels.length} fallos: ${failedChannels[0].error}${failedChannels.length > 1 ? ` (+${failedChannels.length - 1} más)` : ''}`);
+  } else {
+    completeSync('refreshAll', count);
+  }
 }
 
 export async function getTvPorInternet2Handler(request: FastifyRequest, reply: FastifyReply) {

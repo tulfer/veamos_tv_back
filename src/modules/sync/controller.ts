@@ -1127,13 +1127,22 @@ async function confirmPagesSync() {
 }
 
 async function execSync(route, key, method, body) {
-  const btn = document.querySelector(\`#card-\${key} .btn-primary\`);
+  const btn = document.querySelector('#card-' + key + ' .btn-primary');
   if (btn) { btn.disabled = true; btn.textContent = 'Ejecutando...'; }
   try {
     const res = await fetch(route, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    if (!res.ok) console.error('Sync error:', await res.text());
-  } catch (e) { console.error(e); }
-  setTimeout(() => window.location.reload(), 2000);
+    if (!res.ok) {
+      const err = await res.text();
+      console.error('Sync error:', err);
+      if (btn) { btn.disabled = false; btn.textContent = '▶ Ejecutar'; }
+    } else {
+      // Immediately poll status to pick up running state
+      setTimeout(refreshStatus, 500);
+    }
+  } catch (e) {
+    console.error(e);
+    if (btn) { btn.disabled = false; btn.textContent = '▶ Ejecutar'; }
+  }
 }
 
 async function runMigration() {
@@ -1143,7 +1152,7 @@ async function runMigration() {
     const res = await fetch('/sync/migrate-to-firestore', { method: 'POST' });
     if (!res.ok) console.error('Migration error:', await res.text());
   } catch (e) { console.error(e); }
-  setTimeout(() => window.location.reload(), 2000);
+  setTimeout(refreshStatus, 500);
 }
 
 function closeModal() {
