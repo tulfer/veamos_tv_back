@@ -222,13 +222,17 @@ export async function refreshExpiredChannelsHandler(_request: FastifyRequest, re
     }
 
     try {
+      // Invalidar caché en memoria para forzar consulta fresca
+      memoryCache.del(`${source}:${slug}`);
+      memoryCache.del(`${source}:${slug}:default`);
+      if (ch.refreshOption) memoryCache.del(`${source}:${slug}:${ch.refreshOption}`);
       const result = await getChannelStream(source, slug, ch.refreshOption || undefined);
-      if (result && result.url && !result.url.includes('expires=')) {
+      if (result && result.url) {
         ch.url = result.url;
         updatedChannels.push(ch);
       } else {
-        failedChannels.push({ id: ch.id, error: 'New URL still has expires or is empty' });
-        updateSyncProgress('refreshExpired', processed + 1, `[${processed + 1}/${totalToProcess}] ❌ ${ch.title || ch.id} — URL aún expirada`, totalToProcess);
+        failedChannels.push({ id: ch.id, error: 'No se obtuvo URL del proveedor' });
+        updateSyncProgress('refreshExpired', processed + 1, `[${processed + 1}/${totalToProcess}] ❌ ${ch.title || ch.id} — sin URL`, totalToProcess);
         processed++;
         continue;
       }
