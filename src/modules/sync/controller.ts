@@ -1197,9 +1197,9 @@ async function refreshStatus() {
         const badge = card.querySelector('.badge');
         const statusText = card.querySelector('.status-text');
         const btn = card.querySelector('.btn-primary');
-        const progressRow = card.getElementById('prog-' + key);
+        const progressRow = document.getElementById('prog-' + key);
         const progressMsg = progressRow?.querySelector('.progress-msg');
-        const countRow = card.getElementById('row-items-' + key);
+        const countRow = document.getElementById('row-items-' + key);
         const countVal = countRow?.querySelector('.count-val');
         const map = { idle: '⚪', running: '🟡', completed: '🟢', failed: '🔴' };
 
@@ -1229,7 +1229,7 @@ async function refreshStatus() {
         }
 
         // Show/hide error row
-        let errorRow = card.getElementById('row-error-' + key);
+        let errorRow = document.getElementById('row-error-' + key);
         if (s.status === 'failed' && s.error) {
           if (!errorRow) {
             const body = card.querySelector('.card-body');

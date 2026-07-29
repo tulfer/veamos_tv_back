@@ -228,9 +228,15 @@ export async function refreshExpiredChannelsHandler(_request: FastifyRequest, re
         updatedChannels.push(ch);
       } else {
         failedChannels.push({ id: ch.id, error: 'New URL still has expires or is empty' });
+        updateSyncProgress('refreshExpired', processed + 1, `[${processed + 1}/${totalToProcess}] ❌ ${ch.title || ch.id} — URL aún expirada`, totalToProcess);
+        processed++;
+        continue;
       }
     } catch (error: any) {
       failedChannels.push({ id: ch.id, error: error.message });
+      updateSyncProgress('refreshExpired', processed + 1, `[${processed + 1}/${totalToProcess}] ❌ ${ch.title || ch.id} — ${error.message}`, totalToProcess);
+      processed++;
+      continue;
     }
     processed++;
     updateSyncProgress('refreshExpired', processed, `[${processed}/${totalToProcess}] ${ch.title || ch.id}`, totalToProcess);
@@ -242,10 +248,16 @@ export async function refreshExpiredChannelsHandler(_request: FastifyRequest, re
   }
 
   const count = updatedChannels.length;
-  if (failedChannels.length > 0 && count === 0) {
-    failSync('refreshExpired', `0 actualizados, ${failedChannels.length} fallos`);
-  } else if (failedChannels.length > 0) {
-    failSync('refreshExpired', `${count} actualizados, ${failedChannels.length} fallos: ${failedChannels[0].error}${failedChannels.length > 1 ? ` (+${failedChannels.length - 1} más)` : ''}`);
+  if (failedChannels.length > 0) {
+    const errorGroups: Record<string, number> = {};
+    for (const f of failedChannels) {
+      errorGroups[f.error] = (errorGroups[f.error] || 0) + 1;
+    }
+    const summary = Object.entries(errorGroups)
+      .sort((a, b) => b[1] - a[1])
+      .map(([msg, n]) => `"${msg}" (${n})`)
+      .join(', ');
+    failSync('refreshExpired', `${count} actualizados, ${failedChannels.length} fallos: ${summary}`);
   } else {
     completeSync('refreshExpired', count);
   }
@@ -307,9 +319,15 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
         updatedChannels.push(ch);
       } else {
         failedChannels.push({ id: ch.id, error: 'No se obtuvo URL del proveedor' });
+        updateSyncProgress('refreshAll', processed + 1, `[${processed + 1}/${totalToProcess}] ❌ ${ch.title || ch.id} — sin URL`, totalToProcess);
+        processed++;
+        continue;
       }
     } catch (error: any) {
       failedChannels.push({ id: ch.id, error: error.message });
+      updateSyncProgress('refreshAll', processed + 1, `[${processed + 1}/${totalToProcess}] ❌ ${ch.title || ch.id} — ${error.message}`, totalToProcess);
+      processed++;
+      continue;
     }
     processed++;
     updateSyncProgress('refreshAll', processed, `[${processed}/${totalToProcess}] ${ch.title || ch.id}`, totalToProcess);
@@ -322,7 +340,15 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
 
   const count = updatedChannels.length;
   if (failedChannels.length > 0) {
-    failSync('refreshAll', `${count} actualizados, ${failedChannels.length} fallos: ${failedChannels[0].error}${failedChannels.length > 1 ? ` (+${failedChannels.length - 1} más)` : ''}`);
+    const errorGroups: Record<string, number> = {};
+    for (const f of failedChannels) {
+      errorGroups[f.error] = (errorGroups[f.error] || 0) + 1;
+    }
+    const summary = Object.entries(errorGroups)
+      .sort((a, b) => b[1] - a[1])
+      .map(([msg, n]) => `"${msg}" (${n})`)
+      .join(', ');
+    failSync('refreshAll', `${count} actualizados, ${failedChannels.length} fallos: ${summary}`);
   } else {
     completeSync('refreshAll', count);
   }
