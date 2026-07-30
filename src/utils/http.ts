@@ -15,6 +15,13 @@ export async function fetchHTML(url: string): Promise<string> {
   return response.data;
 }
 
+export async function fetchHTMLWithReferer(url: string, referer: string): Promise<string> {
+  const response = await httpClient.get(url, {
+    headers: { Referer: referer },
+  });
+  return response.data;
+}
+
 export async function fetchJSON<T>(url: string): Promise<T> {
   const response = await httpClient.get(url, {
     headers: { Accept: 'application/json' },

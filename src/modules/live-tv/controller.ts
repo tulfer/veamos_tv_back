@@ -6,7 +6,7 @@ import { loadSyncData, saveSyncData } from '../../services/data-store';
 import { LiveChannel } from '../../types';
 import { logger } from '../../utils/logger';
 import { startSync, completeSync, failSync, updateSyncProgress, pushLog, clearLogs } from '../../services/sync-status';
-import { fetchHTML } from '../../utils/http';
+import { fetchHTML, fetchHTMLWithReferer } from '../../utils/http';
 
 const CACHE_KEY = 'live:channels';
 const PAGE_SIZE = 10;
@@ -158,6 +158,79 @@ function extractRefreshSource(refreshUrl?: string): 'wsdeportes' | 'tvporinterne
   return null;
 }
 
+async function manualExtractStream(
+  fetchUrl: string,
+  logPrefix: string,
+): Promise<string | null> {
+  let pageUrl: string = fetchUrl;
+  let lastIframeUrl: string = '';
+  let foundStream: string | null = null;
+  for (let depth = 0; depth < 4 && pageUrl && !foundStream; depth++) {
+    pushLog(logPrefix, `  Nivel ${depth + 1}: ${pageUrl.substring(0, 150)}`);
+    const html = depth === 0 ? await fetchHTML(pageUrl) : await fetchHTMLWithReferer(pageUrl, fetchUrl);
+
+    // STREAM_URL en JS con \/ escapados (wsdeportes)
+    const streamUrlVar = html.match(/STREAM_URL\s*=\s*["']((?:https?:\\\/\\\/|https:\/\/)[^"']+\.(?:m3u8|m3u)[^"']*?)["']/i);
+    if (streamUrlVar) {
+      foundStream = streamUrlVar[1].replace(/\\\//g, '/');
+      pushLog(logPrefix, `  ✅ STREAM_URL en JS`);
+      break;
+    }
+
+    // Tambien buscar cualquier URL con \/ escapados
+    const escapedM3u8 = html.match(/["']((?:https?:)?\\\/\\\/[^"']+\.(?:m3u8|m3u)[^"']*?)["']/i);
+    if (escapedM3u8) {
+      foundStream = escapedM3u8[1].replace(/\\\//g, '/');
+      if (!foundStream.startsWith('http')) foundStream = 'https:' + foundStream;
+      pushLog(logPrefix, `  ✅ .m3u8 con \/ escapado`);
+      break;
+    }
+
+    const m3u8 = html.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|m3u)[^\s"'<>]*/i);
+    if (m3u8) { foundStream = m3u8[0]; pushLog(logPrefix, `  ✅ .m3u8 nivel ${depth + 1}`); break; }
+    const fileMatch = html.match(/file["']?\s*:\s*["']([^"']+)["']/i);
+    const srcMatch = html.match(/src["']?\s*:\s*["']([^"']+(?:m3u8|ts|mp4)[^"']*)["']/i);
+    const sourceTag = html.match(/<source\s[^>]*src=["']([^"']+)["']/i);
+    if (fileMatch) { foundStream = fileMatch[1]; break; }
+    if (srcMatch) { foundStream = srcMatch[1]; break; }
+    if (sourceTag) { foundStream = sourceTag[1]; break; }
+
+    // Buscar iframe con src O data-src
+    const iframeSrc = html.match(/<iframe[^>]+(?:name|id)="?player"?[^>]+(?:data-src|src)=["']([^"']+)["']/i)?.[1] ||
+                      html.match(/<iframe[^>]+(?:data-src|src)=["']([^"']+(?:player|core|stream|embed|tv))[^"']*["']/i)?.[1] ||
+                      html.match(/<iframe[^>]+data-src=["']([^"']+)["']/i)?.[1] ||
+                      html.match(/<embed[^>]+src=["']([^"']+)["']/i)?.[1] ||
+                      html.match(/<video[^>]+src=["']([^"']+)["']/i)?.[1];
+    if (iframeSrc) {
+      const cleaned = iframeSrc.replace(/&amp;/g, '&');
+      lastIframeUrl = cleaned.startsWith('http') ? cleaned : new URL(cleaned, pageUrl).href;
+      pageUrl = lastIframeUrl;
+    } else {
+      pushLog(logPrefix, `  No más iframes player en este nivel`);
+      // Buscar cualquier .m3u8 en scripts o data (con o sin escape)
+      const scriptM3u8 = html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|m3u)[^"']*?)["']/i);
+      const scriptM3u8Escaped = html.match(/["'](https?:\\\/\\\/[^"']+\.(?:m3u8|m3u)[^"']*?)["']/i);
+      if (scriptM3u8) {
+        pushLog(logPrefix, `  ✅ .m3u8 en script/data`);
+        foundStream = scriptM3u8[1];
+        break;
+      }
+      if (scriptM3u8Escaped) {
+        foundStream = scriptM3u8Escaped[1].replace(/\\\//g, '/');
+        pushLog(logPrefix, `  ✅ .m3u8 con \/ escapado en script`);
+        break;
+      }
+      pushLog(logPrefix, `  HTML (primeros 400): ${html.substring(0, 400)}`);
+      pageUrl = '';
+    }
+  }
+  if (!foundStream && lastIframeUrl) {
+    pushLog(logPrefix, `  ⚠ Usando URL del último iframe como stream`);
+    foundStream = lastIframeUrl;
+  }
+  return foundStream;
+}
+
 function extractSlugFromUrl(refreshUrl?: string, proveedor?: string): string | null {
   if (!refreshUrl) return null;
   try {
@@ -256,45 +329,7 @@ export async function refreshExpiredChannelsHandler(_request: FastifyRequest, re
         pushLog('refreshExpired', `  ❌ El proveedor no devolvió URL`);
         pushLog('refreshExpired', `  🔍 Extrayendo manualmente desde ${fetchUrl}...`);
         try {
-          let pageUrl: string = fetchUrl;
-          let lastIframeUrl: string = '';
-          let foundStream: string | null = null;
-          for (let depth = 0; depth < 4 && pageUrl && !foundStream; depth++) {
-            pushLog('refreshExpired', `  Nivel ${depth + 1}: ${pageUrl.substring(0, 150)}`);
-            const html = await fetchHTML(pageUrl);
-            const m3u8 = html.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|m3u)[^\s"'<>]*/i);
-            if (m3u8) { foundStream = m3u8[0]; pushLog('refreshExpired', `  ✅ .m3u8 nivel ${depth + 1}`); break; }
-            const fileMatch = html.match(/file["']?\s*:\s*["']([^"']+)["']/i);
-            const srcMatch = html.match(/src["']?\s*:\s*["']([^"']+(?:m3u8|ts|mp4)[^"']*)["']/i);
-            const sourceTag = html.match(/<source\s[^>]*src=["']([^"']+)["']/i);
-            if (fileMatch) { foundStream = fileMatch[1]; break; }
-            if (srcMatch) { foundStream = srcMatch[1]; break; }
-            if (sourceTag) { foundStream = sourceTag[1]; break; }
-            const iframeSrc = html.match(/<iframe[^>]+(?:name|id)="?player"?[^>]+src=["']([^"']+)["']/i)?.[1] ||
-                              html.match(/<iframe[^>]+src=["']([^"']+(?:player|core|stream|embed|tv))[^"']*["']/i)?.[1] ||
-                              html.match(/<embed[^>]+src=["']([^"']+)["']/i)?.[1] ||
-                              html.match(/<video[^>]+src=["']([^"']+)["']/i)?.[1];
-            if (iframeSrc) {
-              const cleaned = iframeSrc.replace(/&amp;/g, '&');
-              lastIframeUrl = cleaned.startsWith('http') ? cleaned : new URL(cleaned, pageUrl).href;
-              pageUrl = lastIframeUrl;
-            } else {
-              pushLog('refreshExpired', `  No más iframes player en este nivel`);
-              // Si no hay iframe, buscar cualquier .m3u8 en scripts o data
-              const scriptM3u8 = html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|m3u)[^"']*?)["']/i);
-              if (scriptM3u8) {
-                pushLog('refreshExpired', `  ✅ .m3u8 en script/data`);
-                foundStream = scriptM3u8[1];
-                break;
-              }
-              pageUrl = '';
-            }
-          }
-          // Si llegamos hasta el último iframe sin encontrar .m3u8, usar esa URL como stream
-          if (!foundStream && lastIframeUrl) {
-            pushLog('refreshExpired', `  ⚠ Usando URL del último iframe como stream`);
-            foundStream = lastIframeUrl;
-          }
+          const foundStream = await manualExtractStream(fetchUrl, 'refreshExpired');
           if (foundStream) {
             pushLog('refreshExpired', `  ✅ Stream: ${foundStream.substring(0, 120)}`);
             ch.url = foundStream;
@@ -426,43 +461,7 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
         pushLog('refreshAll', `  ❌ El proveedor no devolvió URL`);
         pushLog('refreshAll', `  🔍 Extrayendo manualmente desde ${fetchUrl}...`);
         try {
-          let pageUrl: string = fetchUrl;
-          let lastIframeUrl: string = '';
-          let foundStream: string | null = null;
-          for (let depth = 0; depth < 4 && pageUrl && !foundStream; depth++) {
-            pushLog('refreshAll', `  Nivel ${depth + 1}: ${pageUrl.substring(0, 150)}`);
-            const html = await fetchHTML(pageUrl);
-            const m3u8 = html.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|m3u)[^\s"'<>]*/i);
-            if (m3u8) { foundStream = m3u8[0]; pushLog('refreshAll', `  ✅ .m3u8 nivel ${depth + 1}`); break; }
-            const fileMatch = html.match(/file["']?\s*:\s*["']([^"']+)["']/i);
-            const srcMatch = html.match(/src["']?\s*:\s*["']([^"']+(?:m3u8|ts|mp4)[^"']*)["']/i);
-            const sourceTag = html.match(/<source\s[^>]*src=["']([^"']+)["']/i);
-            if (fileMatch) { foundStream = fileMatch[1]; break; }
-            if (srcMatch) { foundStream = srcMatch[1]; break; }
-            if (sourceTag) { foundStream = sourceTag[1]; break; }
-            const iframeSrc = html.match(/<iframe[^>]+(?:name|id)="?player"?[^>]+src=["']([^"']+)["']/i)?.[1] ||
-                              html.match(/<iframe[^>]+src=["']([^"']+(?:player|core|stream|embed|tv))[^"']*["']/i)?.[1] ||
-                              html.match(/<embed[^>]+src=["']([^"']+)["']/i)?.[1] ||
-                              html.match(/<video[^>]+src=["']([^"']+)["']/i)?.[1];
-            if (iframeSrc) {
-              const cleaned = iframeSrc.replace(/&amp;/g, '&');
-              lastIframeUrl = cleaned.startsWith('http') ? cleaned : new URL(cleaned, pageUrl).href;
-              pageUrl = lastIframeUrl;
-            } else {
-              pushLog('refreshAll', `  No más iframes player en este nivel`);
-              const scriptM3u8 = html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|m3u)[^"']*?)["']/i);
-              if (scriptM3u8) {
-                pushLog('refreshAll', `  ✅ .m3u8 en script/data`);
-                foundStream = scriptM3u8[1];
-                break;
-              }
-              pageUrl = '';
-            }
-          }
-          if (!foundStream && lastIframeUrl) {
-            pushLog('refreshAll', `  ⚠ Usando URL del último iframe como stream`);
-            foundStream = lastIframeUrl;
-          }
+          const foundStream = await manualExtractStream(fetchUrl, 'refreshAll');
           if (foundStream) {
             pushLog('refreshAll', `  ✅ Stream: ${foundStream.substring(0, 120)}`);
             ch.url = foundStream;
