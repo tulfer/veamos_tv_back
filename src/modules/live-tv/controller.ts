@@ -264,6 +264,7 @@ export async function refreshExpiredChannelsHandler(_request: FastifyRequest, re
             pushLog('refreshExpired', `  Iframe player: ${fullUrl}`);
             pushLog('refreshExpired', `  Extrayendo stream desde iframe...`);
             const iframeHtml = await fetchHTML(fullUrl);
+            pushLog('refreshExpired', `  Iframe HTML (primeros 600): ${iframeHtml.substring(0, 600)}`);
             const streamUrl = iframeHtml.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|m3u)[^\s"'<>]*/i)?.[0] ||
                               iframeHtml.match(/file:\s*["']([^"']+)["']/i)?.[1] ||
                               iframeHtml.match(/src:\s*["']([^"']+(?:m3u8|ts|mp4)[^"']*)["']/i)?.[1] ||
@@ -410,6 +411,7 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
             pushLog('refreshAll', `  Iframe player: ${fullUrl}`);
             pushLog('refreshAll', `  Extrayendo stream desde iframe...`);
             const iframeHtml = await fetchHTML(fullUrl);
+            pushLog('refreshAll', `  Iframe HTML (primeros 600): ${iframeHtml.substring(0, 600)}`);
             const streamUrl = iframeHtml.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|m3u)[^\s"'<>]*/i)?.[0] ||
                               iframeHtml.match(/file:\s*["']([^"']+)["']/i)?.[1] ||
                               iframeHtml.match(/src:\s*["']([^"']+(?:m3u8|ts|mp4)[^"']*)["']/i)?.[1] ||
