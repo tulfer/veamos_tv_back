@@ -254,26 +254,34 @@ export async function refreshExpiredChannelsHandler(_request: FastifyRequest, re
         updatedChannels.push(ch);
       } else {
         pushLog('refreshExpired', `  ❌ El proveedor no devolvió URL`);
-        pushLog('refreshExpired', `  🔍 Diagnosticando ${fetchUrl}...`);
+        pushLog('refreshExpired', `  🔍 Extrayendo manualmente desde ${fetchUrl}...`);
         try {
           const html = await fetchHTML(fetchUrl);
-          pushLog('refreshExpired', `  Longitud HTML: ${html.length} caracteres`);
-          const iframeMatch = html.match(/<iframe[^>]+src=["']([^"']+)["']/gi);
-          pushLog('refreshExpired', `  iframes encontrados: ${iframeMatch ? iframeMatch.length : 0}`);
-          if (iframeMatch) {
-            for (const iframe of iframeMatch.slice(0, 5)) {
-              pushLog('refreshExpired', `    ${iframe.substring(0, 200)}`);
+          const playerSrc = html.match(/<iframe[^>]+name=["']player["'][^>]+src=["']([^"']+)["']/i)?.[1] ||
+                            html.match(/<iframe[^>]+src=["']([^"']+core[^"']+)["']/i)?.[1];
+          if (playerSrc) {
+            const fullUrl = playerSrc.startsWith('http') ? playerSrc : new URL(playerSrc, fetchUrl).href;
+            pushLog('refreshExpired', `  Iframe player: ${fullUrl}`);
+            pushLog('refreshExpired', `  Extrayendo stream desde iframe...`);
+            const iframeHtml = await fetchHTML(fullUrl);
+            const streamUrl = iframeHtml.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|m3u)[^\s"'<>]*/i)?.[0] ||
+                              iframeHtml.match(/file:\s*["']([^"']+)["']/i)?.[1] ||
+                              iframeHtml.match(/src:\s*["']([^"']+(?:m3u8|ts|mp4)[^"']*)["']/i)?.[1] ||
+                              iframeHtml.match(/source\s+src=["']([^"']+)["']/i)?.[1];
+            if (streamUrl) {
+              pushLog('refreshExpired', `  ✅ Stream encontrado manualmente: ${streamUrl.substring(0, 120)}`);
+              ch.url = streamUrl;
+              updatedChannels.push(ch);
+              processed++;
+              updateSyncProgress('refreshExpired', processed, `[${processed}/${totalToProcess}] ✅ ${ch.title || ch.id}`, totalToProcess);
+              continue;
             }
-          }
-          const m3u8Match = html.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|m3u)[^\s"'<>]*/gi);
-          pushLog('refreshExpired', `  URLs .m3u8: ${m3u8Match ? m3u8Match.length : 0}`);
-          if (m3u8Match) {
-            for (const url of m3u8Match.slice(0, 3)) {
-              pushLog('refreshExpired', `    ${url.substring(0, 150)}`);
-            }
+            pushLog('refreshExpired', `  No se encontró stream en iframe`);
+          } else {
+            pushLog('refreshExpired', `  No se encontró iframe player`);
           }
         } catch (diagErr: any) {
-          pushLog('refreshExpired', `  Error HTTP: ${diagErr.message}`);
+          pushLog('refreshExpired', `  Error extracción manual: ${diagErr.message}`);
         }
         failedChannels.push({ id: ch.id, error: 'No se obtuvo URL del proveedor' });
         processed++;
@@ -392,26 +400,35 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
         updatedChannels.push(ch);
       } else {
         pushLog('refreshAll', `  ❌ El proveedor no devolvió URL`);
-        pushLog('refreshAll', `  🔍 Diagnosticando ${fetchUrl}...`);
+        pushLog('refreshAll', `  🔍 Extrayendo manualmente desde ${fetchUrl}...`);
         try {
           const html = await fetchHTML(fetchUrl);
-          pushLog('refreshAll', `  Longitud HTML: ${html.length} caracteres`);
-          const iframeMatch = html.match(/<iframe[^>]+src=["']([^"']+)["']/gi);
-          pushLog('refreshAll', `  iframes encontrados: ${iframeMatch ? iframeMatch.length : 0}`);
-          if (iframeMatch) {
-            for (const iframe of iframeMatch.slice(0, 5)) {
-              pushLog('refreshAll', `    ${iframe.substring(0, 200)}`);
+          const playerSrc = html.match(/<iframe[^>]+name=["']player["'][^>]+src=["']([^"']+)["']/i)?.[1] ||
+                            html.match(/<iframe[^>]+src=["']([^"']+core[^"']+)["']/i)?.[1];
+          if (playerSrc) {
+            const fullUrl = playerSrc.startsWith('http') ? playerSrc : new URL(playerSrc, fetchUrl).href;
+            pushLog('refreshAll', `  Iframe player: ${fullUrl}`);
+            pushLog('refreshAll', `  Extrayendo stream desde iframe...`);
+            const iframeHtml = await fetchHTML(fullUrl);
+            const streamUrl = iframeHtml.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|m3u)[^\s"'<>]*/i)?.[0] ||
+                              iframeHtml.match(/file:\s*["']([^"']+)["']/i)?.[1] ||
+                              iframeHtml.match(/src:\s*["']([^"']+(?:m3u8|ts|mp4)[^"']*)["']/i)?.[1] ||
+                              iframeHtml.match(/source\s+src=["']([^"']+)["']/i)?.[1];
+            if (streamUrl) {
+              pushLog('refreshAll', `  ✅ Stream encontrado manualmente: ${streamUrl.substring(0, 120)}`);
+              ch.url = streamUrl;
+              if (!ch.proveedor) ch.proveedor = source;
+              updatedChannels.push(ch);
+              processed++;
+              updateSyncProgress('refreshAll', processed, `[${processed}/${totalToProcess}] ✅ ${ch.title || ch.id}`, totalToProcess);
+              continue;
             }
-          }
-          const m3u8Match = html.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|m3u)[^\s"'<>]*/gi);
-          pushLog('refreshAll', `  URLs .m3u8: ${m3u8Match ? m3u8Match.length : 0}`);
-          if (m3u8Match) {
-            for (const url of m3u8Match.slice(0, 3)) {
-              pushLog('refreshAll', `    ${url.substring(0, 150)}`);
-            }
+            pushLog('refreshAll', `  No se encontró stream en iframe`);
+          } else {
+            pushLog('refreshAll', `  No se encontró iframe player`);
           }
         } catch (diagErr: any) {
-          pushLog('refreshAll', `  Error HTTP: ${diagErr.message}`);
+          pushLog('refreshAll', `  Error extracción manual: ${diagErr.message}`);
         }
         failedChannels.push({ id: ch.id, error: 'No se obtuvo URL del proveedor' });
         processed++;
