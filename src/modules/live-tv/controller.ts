@@ -257,38 +257,53 @@ export async function refreshExpiredChannelsHandler(_request: FastifyRequest, re
         pushLog('refreshExpired', `  🔍 Extrayendo manualmente desde ${fetchUrl}...`);
         try {
           let pageUrl: string = fetchUrl;
+          let lastIframeUrl: string = '';
           let foundStream: string | null = null;
           for (let depth = 0; depth < 4 && pageUrl && !foundStream; depth++) {
             pushLog('refreshExpired', `  Nivel ${depth + 1}: ${pageUrl.substring(0, 150)}`);
             const html = await fetchHTML(pageUrl);
-            const m3u8Match = html.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|m3u)[^\s"'<>]*/i);
-            if (m3u8Match) { foundStream = m3u8Match[0]; pushLog('refreshExpired', `  ✅ .m3u8 nivel ${depth + 1}`); break; }
+            const m3u8 = html.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|m3u)[^\s"'<>]*/i);
+            if (m3u8) { foundStream = m3u8[0]; pushLog('refreshExpired', `  ✅ .m3u8 nivel ${depth + 1}`); break; }
             const fileMatch = html.match(/file["']?\s*:\s*["']([^"']+)["']/i);
             const srcMatch = html.match(/src["']?\s*:\s*["']([^"']+(?:m3u8|ts|mp4)[^"']*)["']/i);
             const sourceTag = html.match(/<source\s[^>]*src=["']([^"']+)["']/i);
             if (fileMatch) { foundStream = fileMatch[1]; break; }
             if (srcMatch) { foundStream = srcMatch[1]; break; }
             if (sourceTag) { foundStream = sourceTag[1]; break; }
-            const iframeSrc = html.match(/<iframe[^>]+src=["']([^"']+(?:player|core|stream|embed|tv)[^"']*)["']/i)?.[1] ||
-                              html.match(/<iframe[^>]+src=["']([^"']+stream[^"']*)["']/i)?.[1] ||
-                              html.match(/<iframe[^>]+(?:name|id)="?player"?[^>]+src=["']([^"']+)["']/i)?.[1];
+            const iframeSrc = html.match(/<iframe[^>]+(?:name|id)="?player"?[^>]+src=["']([^"']+)["']/i)?.[1] ||
+                              html.match(/<iframe[^>]+src=["']([^"']+(?:player|core|stream|embed|tv))[^"']*["']/i)?.[1] ||
+                              html.match(/<embed[^>]+src=["']([^"']+)["']/i)?.[1] ||
+                              html.match(/<video[^>]+src=["']([^"']+)["']/i)?.[1];
             if (iframeSrc) {
               const cleaned = iframeSrc.replace(/&amp;/g, '&');
-              pageUrl = cleaned.startsWith('http') ? cleaned : new URL(cleaned, pageUrl).href;
+              lastIframeUrl = cleaned.startsWith('http') ? cleaned : new URL(cleaned, pageUrl).href;
+              pageUrl = lastIframeUrl;
             } else {
               pushLog('refreshExpired', `  No más iframes player en este nivel`);
+              // Si no hay iframe, buscar cualquier .m3u8 en scripts o data
+              const scriptM3u8 = html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|m3u)[^"']*?)["']/i);
+              if (scriptM3u8) {
+                pushLog('refreshExpired', `  ✅ .m3u8 en script/data`);
+                foundStream = scriptM3u8[1];
+                break;
+              }
               pageUrl = '';
             }
           }
+          // Si llegamos hasta el último iframe sin encontrar .m3u8, usar esa URL como stream
+          if (!foundStream && lastIframeUrl) {
+            pushLog('refreshExpired', `  ⚠ Usando URL del último iframe como stream`);
+            foundStream = lastIframeUrl;
+          }
           if (foundStream) {
-            pushLog('refreshExpired', `  ✅ Stream encontrado manualmente: ${foundStream.substring(0, 120)}`);
+            pushLog('refreshExpired', `  ✅ Stream: ${foundStream.substring(0, 120)}`);
             ch.url = foundStream;
             updatedChannels.push(ch);
             processed++;
             updateSyncProgress('refreshExpired', processed, `[${processed}/${totalToProcess}] ✅ ${ch.title || ch.id}`, totalToProcess);
             continue;
           }
-          pushLog('refreshExpired', `  No se encontró stream en la cadena de iframes`);
+          pushLog('refreshExpired', `  ❌ No se encontró stream en la cadena de iframes`);
         } catch (diagErr: any) {
           pushLog('refreshExpired', `  Error extracción manual: ${diagErr.message}`);
         }
@@ -412,31 +427,44 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
         pushLog('refreshAll', `  🔍 Extrayendo manualmente desde ${fetchUrl}...`);
         try {
           let pageUrl: string = fetchUrl;
+          let lastIframeUrl: string = '';
           let foundStream: string | null = null;
           for (let depth = 0; depth < 4 && pageUrl && !foundStream; depth++) {
             pushLog('refreshAll', `  Nivel ${depth + 1}: ${pageUrl.substring(0, 150)}`);
             const html = await fetchHTML(pageUrl);
-            const m3u8Match = html.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|m3u)[^\s"'<>]*/i);
-            if (m3u8Match) { foundStream = m3u8Match[0]; pushLog('refreshAll', `  ✅ .m3u8 nivel ${depth + 1}`); break; }
+            const m3u8 = html.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|m3u)[^\s"'<>]*/i);
+            if (m3u8) { foundStream = m3u8[0]; pushLog('refreshAll', `  ✅ .m3u8 nivel ${depth + 1}`); break; }
             const fileMatch = html.match(/file["']?\s*:\s*["']([^"']+)["']/i);
             const srcMatch = html.match(/src["']?\s*:\s*["']([^"']+(?:m3u8|ts|mp4)[^"']*)["']/i);
             const sourceTag = html.match(/<source\s[^>]*src=["']([^"']+)["']/i);
             if (fileMatch) { foundStream = fileMatch[1]; break; }
             if (srcMatch) { foundStream = srcMatch[1]; break; }
             if (sourceTag) { foundStream = sourceTag[1]; break; }
-            const iframeSrc = html.match(/<iframe[^>]+src=["']([^"']+(?:player|core|stream|embed|tv)[^"']*)["']/i)?.[1] ||
-                              html.match(/<iframe[^>]+src=["']([^"']+stream[^"']*)["']/i)?.[1] ||
-                              html.match(/<iframe[^>]+(?:name|id)="?player"?[^>]+src=["']([^"']+)["']/i)?.[1];
+            const iframeSrc = html.match(/<iframe[^>]+(?:name|id)="?player"?[^>]+src=["']([^"']+)["']/i)?.[1] ||
+                              html.match(/<iframe[^>]+src=["']([^"']+(?:player|core|stream|embed|tv))[^"']*["']/i)?.[1] ||
+                              html.match(/<embed[^>]+src=["']([^"']+)["']/i)?.[1] ||
+                              html.match(/<video[^>]+src=["']([^"']+)["']/i)?.[1];
             if (iframeSrc) {
               const cleaned = iframeSrc.replace(/&amp;/g, '&');
-              pageUrl = cleaned.startsWith('http') ? cleaned : new URL(cleaned, pageUrl).href;
+              lastIframeUrl = cleaned.startsWith('http') ? cleaned : new URL(cleaned, pageUrl).href;
+              pageUrl = lastIframeUrl;
             } else {
               pushLog('refreshAll', `  No más iframes player en este nivel`);
+              const scriptM3u8 = html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|m3u)[^"']*?)["']/i);
+              if (scriptM3u8) {
+                pushLog('refreshAll', `  ✅ .m3u8 en script/data`);
+                foundStream = scriptM3u8[1];
+                break;
+              }
               pageUrl = '';
             }
           }
+          if (!foundStream && lastIframeUrl) {
+            pushLog('refreshAll', `  ⚠ Usando URL del último iframe como stream`);
+            foundStream = lastIframeUrl;
+          }
           if (foundStream) {
-            pushLog('refreshAll', `  ✅ Stream encontrado manualmente: ${foundStream.substring(0, 120)}`);
+            pushLog('refreshAll', `  ✅ Stream: ${foundStream.substring(0, 120)}`);
             ch.url = foundStream;
             if (!ch.proveedor) ch.proveedor = source;
             updatedChannels.push(ch);
@@ -444,7 +472,7 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
             updateSyncProgress('refreshAll', processed, `[${processed}/${totalToProcess}] ✅ ${ch.title || ch.id}`, totalToProcess);
             continue;
           }
-          pushLog('refreshAll', `  No se encontró stream en la cadena de iframes`);
+          pushLog('refreshAll', `  ❌ No se encontró stream en la cadena de iframes`);
         } catch (diagErr: any) {
           pushLog('refreshAll', `  Error extracción manual: ${diagErr.message}`);
         }
