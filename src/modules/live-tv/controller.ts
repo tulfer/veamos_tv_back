@@ -257,7 +257,21 @@ export async function refreshExpiredChannelsHandler(_request: FastifyRequest, re
         pushLog('refreshExpired', `  🔍 Diagnosticando ${fetchUrl}...`);
         try {
           const html = await fetchHTML(fetchUrl);
-          pushLog('refreshExpired', `  Página cargada: ${html.substring(0, 300)}...`);
+          pushLog('refreshExpired', `  Longitud HTML: ${html.length} caracteres`);
+          const iframeMatch = html.match(/<iframe[^>]+src=["']([^"']+)["']/gi);
+          pushLog('refreshExpired', `  iframes encontrados: ${iframeMatch ? iframeMatch.length : 0}`);
+          if (iframeMatch) {
+            for (const iframe of iframeMatch.slice(0, 5)) {
+              pushLog('refreshExpired', `    ${iframe.substring(0, 200)}`);
+            }
+          }
+          const m3u8Match = html.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|m3u)[^\s"'<>]*/gi);
+          pushLog('refreshExpired', `  URLs .m3u8: ${m3u8Match ? m3u8Match.length : 0}`);
+          if (m3u8Match) {
+            for (const url of m3u8Match.slice(0, 3)) {
+              pushLog('refreshExpired', `    ${url.substring(0, 150)}`);
+            }
+          }
         } catch (diagErr: any) {
           pushLog('refreshExpired', `  Error HTTP: ${diagErr.message}`);
         }
@@ -381,7 +395,21 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
         pushLog('refreshAll', `  🔍 Diagnosticando ${fetchUrl}...`);
         try {
           const html = await fetchHTML(fetchUrl);
-          pushLog('refreshAll', `  Página cargada: ${html.substring(0, 300)}...`);
+          pushLog('refreshAll', `  Longitud HTML: ${html.length} caracteres`);
+          const iframeMatch = html.match(/<iframe[^>]+src=["']([^"']+)["']/gi);
+          pushLog('refreshAll', `  iframes encontrados: ${iframeMatch ? iframeMatch.length : 0}`);
+          if (iframeMatch) {
+            for (const iframe of iframeMatch.slice(0, 5)) {
+              pushLog('refreshAll', `    ${iframe.substring(0, 200)}`);
+            }
+          }
+          const m3u8Match = html.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|m3u)[^\s"'<>]*/gi);
+          pushLog('refreshAll', `  URLs .m3u8: ${m3u8Match ? m3u8Match.length : 0}`);
+          if (m3u8Match) {
+            for (const url of m3u8Match.slice(0, 3)) {
+              pushLog('refreshAll', `    ${url.substring(0, 150)}`);
+            }
+          }
         } catch (diagErr: any) {
           pushLog('refreshAll', `  Error HTTP: ${diagErr.message}`);
         }

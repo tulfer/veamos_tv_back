@@ -801,21 +801,30 @@ browser = await playwrightChromium.launch({ headless: true });
 
     let streamUrl: string | undefined;
 
+    logger.info({ slug, totalCaptured: capturedUrls.length, iframeCount: allIframes.length }, `Diagnóstico cablevisionhd: ${slug}`);
+
     // Estrategia 1: URLs capturadas por red
     if (capturedUrls.length > 0) {
+      logger.info({ capturedUrls }, 'URLs capturadas por red');
       const m3u8Url = capturedUrls.find((u) => u.includes('.m3u8') || u.includes('.m3u'));
       const streamingUrl = capturedUrls.find((u) => u.includes('mywebtv') || u.includes('tdtcloud') || u.includes('hls'));
       streamUrl = m3u8Url || streamingUrl || capturedUrls[0];
-      logger.info({ url: streamUrl.substring(0, 250), total: capturedUrls.length }, 'Using captured network URL');
+      if (streamUrl) logger.info({ url: streamUrl.substring(0, 250), total: capturedUrls.length }, 'Usando URL capturada por red');
+    } else {
+      logger.info({}, 'No se capturaron URLs de red');
     }
 
     // Estrategia 2: Buscar iframe de video real
     if (!streamUrl) {
+      logger.info({ iframeCount: allIframes.length }, 'Buscando iframe con características de video');
       for (let i = 0; i < allIframes.length; i++) {
         const src = $(allIframes[i]).attr('src');
         if (!src || src === 'about:blank' || src.includes('jetpack') || src.includes('wordpress') ||
             src.includes('comment') || src.includes('disqus') || src.includes('facebook') ||
-            src.includes('googleads') || src.includes('doubleclick') || src.includes('ads')) continue;
+            src.includes('googleads') || src.includes('doubleclick') || src.includes('ads')) {
+          logger.info({ i, src: src?.substring(0, 100) }, '  iframe saltado (blacklist)');
+          continue;
+        }
 
         const allow = $(allIframes[i]).attr('allow') || '';
         const allowfullscreen = $(allIframes[i]).attr('allowfullscreen') !== undefined;
@@ -824,39 +833,46 @@ browser = await playwrightChromium.launch({ headless: true });
           allow.includes('encrypted-media') ||
           allow.includes('picture-in-picture');
 
+        logger.info({ i, src: src?.substring(0, 150), allow: allow?.substring(0, 80), hasVideoFeatures }, '  iframe evaluado');
+
         if (src.startsWith('http') && src.length > 10 && (hasVideoFeatures || src.includes('embed') || src.includes('player') || src.includes('tv'))) {
           streamUrl = src;
-          logger.info({ src: src.substring(0, 250), allow }, 'Found video iframe');
+          logger.info({ src: src.substring(0, 250), allow }, '✅ Iframe con video encontrado');
           break;
         }
       }
+      if (!streamUrl) logger.info({}, 'No se encontró iframe con video');
     }
 
     // Estrategia 3: Cualquier iframe no-blacklisted
     if (!streamUrl) {
+      logger.info({}, 'Buscando cualquier iframe no-blacklisted');
       for (let i = 0; i < allIframes.length; i++) {
         const src = $(allIframes[i]).attr('src');
         if (src && src.startsWith('http') && src.length > 10 && !src.includes('jetpack') &&
             !src.includes('wordpress') && !src.includes('comment') && !src.includes('googleads')) {
           streamUrl = src;
-          logger.info({ src: src.substring(0, 250) }, 'Found fallback iframe');
+          logger.info({ src: src.substring(0, 250) }, '✅ Fallback iframe encontrado');
           break;
         }
       }
+      if (!streamUrl) logger.info({}, 'No se encontró iframe fallback');
     }
 
     // Estrategia 4: Buscar URLs m3u8 en el HTML
     if (!streamUrl) {
       const bodyHtml = $.html();
       const m3u8Matches = bodyHtml.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|m3u)[^\s"'<>]*/gi);
+      logger.info({ total: m3u8Matches?.length || 0 }, 'Buscando .m3u8 en HTML');
       if (m3u8Matches && m3u8Matches.length > 0) {
         streamUrl = m3u8Matches[0];
-        logger.info({ url: streamUrl.substring(0, 250) }, 'Found m3u8 URL in page HTML');
+        logger.info({ url: streamUrl.substring(0, 250) }, '✅ .m3u8 encontrado en HTML');
       }
     }
 
     // Estrategia 5: Buscar en scripts
     if (!streamUrl) {
+      logger.info({ scriptCount: $('script').length }, 'Buscando en scripts');
       const scripts = $('script').toArray();
       for (const script of scripts) {
         const content = $(script).html() || '';
@@ -864,15 +880,16 @@ browser = await playwrightChromium.launch({ headless: true });
           const urlMatch = content.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|ts|mp4|m3u)[^\s"'<>]*/i);
           if (urlMatch) {
             streamUrl = urlMatch[0];
-            logger.info({ url: streamUrl.substring(0, 250) }, 'Found stream URL in script');
+            logger.info({ url: streamUrl.substring(0, 250) }, '✅ URL encontrada en script');
             break;
           }
         }
       }
+      if (!streamUrl) logger.info({}, 'No se encontró URL en scripts');
     }
 
     if (!streamUrl) {
-      logger.warn({ slug, url, capturedUrls }, 'No valid stream source found on cablevisionhd');
+      logger.warn({ slug, url, capturedUrls, iframeCount: allIframes.length }, '❌ No se encontró stream en cablevisionhd');
       return null;
     }
 
