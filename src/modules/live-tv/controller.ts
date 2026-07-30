@@ -256,31 +256,39 @@ export async function refreshExpiredChannelsHandler(_request: FastifyRequest, re
         pushLog('refreshExpired', `  ❌ El proveedor no devolvió URL`);
         pushLog('refreshExpired', `  🔍 Extrayendo manualmente desde ${fetchUrl}...`);
         try {
-          const html = await fetchHTML(fetchUrl);
-          const playerSrc = html.match(/<iframe[^>]+name=["']player["'][^>]+src=["']([^"']+)["']/i)?.[1] ||
-                            html.match(/<iframe[^>]+src=["']([^"']+core[^"']+)["']/i)?.[1];
-          if (playerSrc) {
-            const fullUrl = playerSrc.startsWith('http') ? playerSrc : new URL(playerSrc, fetchUrl).href;
-            pushLog('refreshExpired', `  Iframe player: ${fullUrl}`);
-            pushLog('refreshExpired', `  Extrayendo stream desde iframe...`);
-            const iframeHtml = await fetchHTML(fullUrl);
-            pushLog('refreshExpired', `  Iframe HTML (primeros 600): ${iframeHtml.substring(0, 600)}`);
-            const streamUrl = iframeHtml.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|m3u)[^\s"'<>]*/i)?.[0] ||
-                              iframeHtml.match(/file:\s*["']([^"']+)["']/i)?.[1] ||
-                              iframeHtml.match(/src:\s*["']([^"']+(?:m3u8|ts|mp4)[^"']*)["']/i)?.[1] ||
-                              iframeHtml.match(/source\s+src=["']([^"']+)["']/i)?.[1];
-            if (streamUrl) {
-              pushLog('refreshExpired', `  ✅ Stream encontrado manualmente: ${streamUrl.substring(0, 120)}`);
-              ch.url = streamUrl;
-              updatedChannels.push(ch);
-              processed++;
-              updateSyncProgress('refreshExpired', processed, `[${processed}/${totalToProcess}] ✅ ${ch.title || ch.id}`, totalToProcess);
-              continue;
+          let pageUrl: string = fetchUrl;
+          let foundStream: string | null = null;
+          for (let depth = 0; depth < 4 && pageUrl && !foundStream; depth++) {
+            pushLog('refreshExpired', `  Nivel ${depth + 1}: ${pageUrl.substring(0, 150)}`);
+            const html = await fetchHTML(pageUrl);
+            const m3u8Match = html.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|m3u)[^\s"'<>]*/i);
+            if (m3u8Match) { foundStream = m3u8Match[0]; pushLog('refreshExpired', `  ✅ .m3u8 nivel ${depth + 1}`); break; }
+            const fileMatch = html.match(/file["']?\s*:\s*["']([^"']+)["']/i);
+            const srcMatch = html.match(/src["']?\s*:\s*["']([^"']+(?:m3u8|ts|mp4)[^"']*)["']/i);
+            const sourceTag = html.match(/<source\s[^>]*src=["']([^"']+)["']/i);
+            if (fileMatch) { foundStream = fileMatch[1]; break; }
+            if (srcMatch) { foundStream = srcMatch[1]; break; }
+            if (sourceTag) { foundStream = sourceTag[1]; break; }
+            const iframeSrc = html.match(/<iframe[^>]+src=["']([^"']+(?:player|core|stream|embed|tv)[^"']*)["']/i)?.[1] ||
+                              html.match(/<iframe[^>]+src=["']([^"']+stream[^"']*)["']/i)?.[1] ||
+                              html.match(/<iframe[^>]+(?:name|id)="?player"?[^>]+src=["']([^"']+)["']/i)?.[1];
+            if (iframeSrc) {
+              const cleaned = iframeSrc.replace(/&amp;/g, '&');
+              pageUrl = cleaned.startsWith('http') ? cleaned : new URL(cleaned, pageUrl).href;
+            } else {
+              pushLog('refreshExpired', `  No más iframes player en este nivel`);
+              pageUrl = '';
             }
-            pushLog('refreshExpired', `  No se encontró stream en iframe`);
-          } else {
-            pushLog('refreshExpired', `  No se encontró iframe player`);
           }
+          if (foundStream) {
+            pushLog('refreshExpired', `  ✅ Stream encontrado manualmente: ${foundStream.substring(0, 120)}`);
+            ch.url = foundStream;
+            updatedChannels.push(ch);
+            processed++;
+            updateSyncProgress('refreshExpired', processed, `[${processed}/${totalToProcess}] ✅ ${ch.title || ch.id}`, totalToProcess);
+            continue;
+          }
+          pushLog('refreshExpired', `  No se encontró stream en la cadena de iframes`);
         } catch (diagErr: any) {
           pushLog('refreshExpired', `  Error extracción manual: ${diagErr.message}`);
         }
@@ -403,32 +411,40 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
         pushLog('refreshAll', `  ❌ El proveedor no devolvió URL`);
         pushLog('refreshAll', `  🔍 Extrayendo manualmente desde ${fetchUrl}...`);
         try {
-          const html = await fetchHTML(fetchUrl);
-          const playerSrc = html.match(/<iframe[^>]+name=["']player["'][^>]+src=["']([^"']+)["']/i)?.[1] ||
-                            html.match(/<iframe[^>]+src=["']([^"']+core[^"']+)["']/i)?.[1];
-          if (playerSrc) {
-            const fullUrl = playerSrc.startsWith('http') ? playerSrc : new URL(playerSrc, fetchUrl).href;
-            pushLog('refreshAll', `  Iframe player: ${fullUrl}`);
-            pushLog('refreshAll', `  Extrayendo stream desde iframe...`);
-            const iframeHtml = await fetchHTML(fullUrl);
-            pushLog('refreshAll', `  Iframe HTML (primeros 600): ${iframeHtml.substring(0, 600)}`);
-            const streamUrl = iframeHtml.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|m3u)[^\s"'<>]*/i)?.[0] ||
-                              iframeHtml.match(/file:\s*["']([^"']+)["']/i)?.[1] ||
-                              iframeHtml.match(/src:\s*["']([^"']+(?:m3u8|ts|mp4)[^"']*)["']/i)?.[1] ||
-                              iframeHtml.match(/source\s+src=["']([^"']+)["']/i)?.[1];
-            if (streamUrl) {
-              pushLog('refreshAll', `  ✅ Stream encontrado manualmente: ${streamUrl.substring(0, 120)}`);
-              ch.url = streamUrl;
-              if (!ch.proveedor) ch.proveedor = source;
-              updatedChannels.push(ch);
-              processed++;
-              updateSyncProgress('refreshAll', processed, `[${processed}/${totalToProcess}] ✅ ${ch.title || ch.id}`, totalToProcess);
-              continue;
+          let pageUrl: string = fetchUrl;
+          let foundStream: string | null = null;
+          for (let depth = 0; depth < 4 && pageUrl && !foundStream; depth++) {
+            pushLog('refreshAll', `  Nivel ${depth + 1}: ${pageUrl.substring(0, 150)}`);
+            const html = await fetchHTML(pageUrl);
+            const m3u8Match = html.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|m3u)[^\s"'<>]*/i);
+            if (m3u8Match) { foundStream = m3u8Match[0]; pushLog('refreshAll', `  ✅ .m3u8 nivel ${depth + 1}`); break; }
+            const fileMatch = html.match(/file["']?\s*:\s*["']([^"']+)["']/i);
+            const srcMatch = html.match(/src["']?\s*:\s*["']([^"']+(?:m3u8|ts|mp4)[^"']*)["']/i);
+            const sourceTag = html.match(/<source\s[^>]*src=["']([^"']+)["']/i);
+            if (fileMatch) { foundStream = fileMatch[1]; break; }
+            if (srcMatch) { foundStream = srcMatch[1]; break; }
+            if (sourceTag) { foundStream = sourceTag[1]; break; }
+            const iframeSrc = html.match(/<iframe[^>]+src=["']([^"']+(?:player|core|stream|embed|tv)[^"']*)["']/i)?.[1] ||
+                              html.match(/<iframe[^>]+src=["']([^"']+stream[^"']*)["']/i)?.[1] ||
+                              html.match(/<iframe[^>]+(?:name|id)="?player"?[^>]+src=["']([^"']+)["']/i)?.[1];
+            if (iframeSrc) {
+              const cleaned = iframeSrc.replace(/&amp;/g, '&');
+              pageUrl = cleaned.startsWith('http') ? cleaned : new URL(cleaned, pageUrl).href;
+            } else {
+              pushLog('refreshAll', `  No más iframes player en este nivel`);
+              pageUrl = '';
             }
-            pushLog('refreshAll', `  No se encontró stream en iframe`);
-          } else {
-            pushLog('refreshAll', `  No se encontró iframe player`);
           }
+          if (foundStream) {
+            pushLog('refreshAll', `  ✅ Stream encontrado manualmente: ${foundStream.substring(0, 120)}`);
+            ch.url = foundStream;
+            if (!ch.proveedor) ch.proveedor = source;
+            updatedChannels.push(ch);
+            processed++;
+            updateSyncProgress('refreshAll', processed, `[${processed}/${totalToProcess}] ✅ ${ch.title || ch.id}`, totalToProcess);
+            continue;
+          }
+          pushLog('refreshAll', `  No se encontró stream en la cadena de iframes`);
         } catch (diagErr: any) {
           pushLog('refreshAll', `  Error extracción manual: ${diagErr.message}`);
         }
