@@ -182,7 +182,7 @@ async function manualExtractStream(
     if (escapedM3u8) {
       foundStream = escapedM3u8[1].replace(/\\\//g, '/');
       if (!foundStream.startsWith('http')) foundStream = 'https:' + foundStream;
-      pushLog(logPrefix, `  ✅ .m3u8 con \/ escapado`);
+      pushLog(logPrefix, `  ✅ .m3u8 con slashes escapados`);
       break;
     }
 
@@ -217,7 +217,7 @@ async function manualExtractStream(
       }
       if (scriptM3u8Escaped) {
         foundStream = scriptM3u8Escaped[1].replace(/\\\//g, '/');
-        pushLog(logPrefix, `  ✅ .m3u8 con \/ escapado en script`);
+        pushLog(logPrefix, `  ✅ .m3u8 con slashes escapados en script`);
         break;
       }
       pushLog(logPrefix, `  HTML (primeros 400): ${html.substring(0, 400)}`);
@@ -720,8 +720,6 @@ const UPDATABLE_CHANNEL_FIELDS = [
   'country', 'group', 'logo', 'online', 'proveedor', 'refreshUrl', 'refreshOption', 'title', 'type', 'url',
 ] as const;
 
-type UpdateableChannelField = typeof UPDATABLE_CHANNEL_FIELDS[number];
-
 export async function updateChannelHandler(request: FastifyRequest, reply: FastifyReply) {
   const { id } = request.params as any;
   const body = (request.body || {}) as Record<string, unknown>;
@@ -782,5 +780,115 @@ export async function updateChannelHandler(request: FastifyRequest, reply: Fasti
   } catch (error: any) {
     logger.error({ error: error.message, id }, 'Failed to update channel');
     return reply.status(500).send({ error: 'Failed to update channel' });
+  }
+}
+
+const REFRESH_ONE_TYPE = 'refreshOne';
+
+export async function refreshChannelHandler(request: FastifyRequest, reply: FastifyReply) {
+  const body = (request.body || {}) as any;
+  const id = body?.id || (request.params as any)?.id;
+
+  if (!id || typeof id !== 'string') {
+    return reply.status(400).send({ error: 'Channel id is required (body: { id })' });
+  }
+
+  if (!startSync(REFRESH_ONE_TYPE)) {
+    return reply.send({ ok: true, message: 'Refresh channel already in progress' });
+  }
+
+  clearLogs(REFRESH_ONE_TYPE);
+  pushLog(REFRESH_ONE_TYPE, '=== Refrescando canal: ' + id + ' ===');
+  reply.send({ ok: true, message: 'Refresh channel started', id });
+
+  try {
+    const synced = await loadSyncData();
+    if (!synced || !Array.isArray(synced.channels)) {
+      pushLog(REFRESH_ONE_TYPE, 'No hay datos sincronizados');
+      failSync(REFRESH_ONE_TYPE, 'No hay datos sincronizados');
+      return;
+    }
+
+    const channels = synced.channels;
+    const index = channels.findIndex((ch) => ch.id === id);
+    if (index === -1) {
+      pushLog(REFRESH_ONE_TYPE, 'Canal no encontrado: ' + id);
+      failSync(REFRESH_ONE_TYPE, 'Canal no encontrado: ' + id);
+      return;
+    }
+
+    const ch = channels[index];
+    const source = (ch.proveedor as any) || extractRefreshSource(ch.refreshUrl);
+    if (!source || (source !== 'wsdeportes' && source !== 'cablevisionhd' && source !== 'tvporinternet2')) {
+      pushLog(REFRESH_ONE_TYPE, 'Proveedor no soportado: ' + (source || '(none)'));
+      failSync(REFRESH_ONE_TYPE, 'Proveedor no soportado: ' + (source || '(none)'));
+      return;
+    }
+    pushLog(REFRESH_ONE_TYPE, 'Proveedor: ' + source);
+
+    const slug = extractSlugFromUrl(ch.refreshUrl, source);
+    if (!slug) {
+      pushLog(REFRESH_ONE_TYPE, 'No se pudo extraer slug de refreshUrl: ' + ch.refreshUrl);
+      failSync(REFRESH_ONE_TYPE, 'Slug invalido en refreshUrl: ' + ch.refreshUrl);
+      return;
+    }
+    pushLog(REFRESH_ONE_TYPE, 'Slug: ' + slug + (ch.refreshOption ? ' | Opcion: ' + ch.refreshOption : ''));
+
+    const fetchUrl = source === 'wsdeportes' ? 'https://wsdeportes.net/?v=' + slug :
+      source === 'tvporinternet2' ? 'https://www.tvporinternet2.com/' + slug + '.html' :
+      source === 'cablevisionhd' ? 'https://www.cablevisionhd.com/' + slug + '.php' :
+      'https://' + source + '.com/' + slug;
+    pushLog(REFRESH_ONE_TYPE, 'URL consultada: ' + fetchUrl);
+
+    pushLog(REFRESH_ONE_TYPE, 'Invalidando cache...');
+    memoryCache.del(source + ':' + slug);
+    memoryCache.del(source + ':' + slug + ':default');
+    if (ch.refreshOption) memoryCache.del(source + ':' + slug + ':' + ch.refreshOption);
+
+    pushLog(REFRESH_ONE_TYPE, 'Consultando a ' + source + '...');
+    let newUrl: string | null = null;
+    try {
+      const result = await getChannelStream(source as any, slug, ch.refreshOption || undefined);
+      if (result && result.url) {
+        newUrl = result.url;
+        pushLog(REFRESH_ONE_TYPE, 'URL obtenida: ' + result.url.substring(0, 120) + '...');
+      } else {
+        pushLog(REFRESH_ONE_TYPE, 'El proveedor no devolvio URL');
+        pushLog(REFRESH_ONE_TYPE, 'Extrayendo manualmente desde ' + fetchUrl + '...');
+        const foundStream = await manualExtractStream(fetchUrl, REFRESH_ONE_TYPE);
+        if (foundStream) {
+          newUrl = foundStream;
+          pushLog(REFRESH_ONE_TYPE, 'Stream manual: ' + foundStream.substring(0, 120));
+        } else {
+          pushLog(REFRESH_ONE_TYPE, 'No se encontro stream en la cadena de iframes');
+        }
+      }
+    } catch (error: any) {
+      pushLog(REFRESH_ONE_TYPE, 'Error: ' + error.message);
+    }
+
+    if (!newUrl) {
+      pushLog(REFRESH_ONE_TYPE, 'No se pudo obtener URL para ' + id);
+      failSync(REFRESH_ONE_TYPE, 'No se pudo obtener URL para ' + id);
+      return;
+    }
+
+    channels[index] = { ...ch, url: newUrl, online: true };
+    await saveSyncData({
+      movies: synced.movies || [],
+      series: synced.series || [],
+      channels,
+      popularMovies: synced.popularMovies || [],
+      popularSeries: synced.popularSeries || [],
+      estrenoMovies: synced.estrenoMovies || [],
+      estrenoSeries: synced.estrenoSeries || [],
+      updatedAt: Date.now(),
+    });
+    memoryCache.del('live:channels');
+    pushLog(REFRESH_ONE_TYPE, 'Canal actualizado: ' + id);
+    completeSync(REFRESH_ONE_TYPE, 1);
+  } catch (error: any) {
+    pushLog(REFRESH_ONE_TYPE, 'Error general: ' + error.message);
+    failSync(REFRESH_ONE_TYPE, error.message);
   }
 }

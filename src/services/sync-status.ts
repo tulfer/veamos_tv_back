@@ -12,6 +12,7 @@ export type SyncType =
   | 'importM3U'
   | 'refreshAll'
   | 'refreshExpired'
+  | 'refreshOne'
   | 'migrate';
 
 export interface SyncProgress {
@@ -66,6 +67,7 @@ const state: SyncState = {
   importM3U: { ...defaultStatus },
   refreshAll: { ...defaultStatus },
   refreshExpired: { ...defaultStatus },
+  refreshOne: { ...defaultStatus },
   migrate: { ...defaultStatus },
 };
 

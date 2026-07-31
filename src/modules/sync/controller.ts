@@ -717,7 +717,7 @@ export async function syncStatusHandler(request: FastifyRequest, reply: FastifyR
 
   const syncDefs: {
     key: string; label: string; route: string; method: string;
-    needsPages?: boolean; needsUrl?: boolean; needsBody?: boolean;
+    needsPages?: boolean; needsUrl?: boolean; needsBody?: boolean; needsId?: boolean; needsJson?: boolean;
   }[] = [
     { key: 'movies', label: 'Películas', route: '/sync/movies', method: 'POST', needsPages: true },
     { key: 'series', label: 'Series', route: '/sync/series', method: 'POST', needsPages: true },
@@ -732,6 +732,8 @@ export async function syncStatusHandler(request: FastifyRequest, reply: FastifyR
     { key: 'importM3U', label: 'Importar M3U', route: '/sync/live/import', method: 'POST', needsUrl: true },
     { key: 'refreshAll', label: 'Refresh All Canales', route: '/live/channels/refresh-all', method: 'POST' },
     { key: 'refreshExpired', label: 'Refresh Expired Canales', route: '/live/channels/refresh-expired', method: 'POST' },
+    { key: 'refreshOne', label: 'Refresh Canal (por ID)', route: '/live/channels/refresh', method: 'POST', needsId: true },
+    { key: 'updateChannel', label: 'Actualizar Canal (PATCH)', route: '/live/channels/{id}', method: 'PATCH', needsId: true, needsJson: true },
   ];
 
   return reply.type('text/html').send(generateSyncDashboard(status, syncDefs, migrationStatus));
@@ -773,15 +775,50 @@ a:hover{text-decoration:underline}
 <body>
 <a href="/sync/status?code=1992">← Volver al Dashboard</a>
 <h1>📋 Detalle: ${type}</h1>
-<div class="auto-refresh" id="status">Actualizando automáticamente...</div>
+<div class="auto-refresh" id="status">Actualizando automáticamente... <button id="toggleBtn" onclick="togglePause()" style="margin-left:.5rem;cursor:pointer;background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:4px;padding:2px 8px;font-size:.7rem">⏸ Pausar</button></div>
 <div class="terminal" id="logContainer">${logHtml || '<div class="line" style="color:#8b949e">Sin registros aún</div>'}</div>
 <script>
 let prevLen = 0;
 let autoScroll = true;
+let paused = false;
+let timer = null;
 document.getElementById('logContainer').addEventListener('scroll', function() {
   const el = this;
   autoScroll = el.scrollTop + el.clientHeight >= el.scrollHeight - 10;
 });
+async function checkDone() {
+  try {
+    const res = await fetch('/sync/status');
+    if (res.ok) {
+      const data = await res.json();
+      const st = data['${type}'];
+      if (st && (st.status === 'completed' || st.status === 'failed')) {
+        if (timer) clearInterval(timer);
+        timer = null;
+        const el = document.getElementById('status');
+        el.firstChild.textContent = st.status === 'completed' ? '✅ Sincronización finalizada (auto-refresh detenido)' : '⛔ Sincronización fallida (auto-refresh detenido)';
+        document.getElementById('toggleBtn').style.display = 'none';
+      }
+    }
+  } catch {}
+}
+function togglePause() {
+  paused = !paused;
+  document.getElementById('toggleBtn').textContent = paused ? '▶ Reanudar' : '⏸ Pausar';
+  const el = document.getElementById('status');
+  el.firstChild.textContent = paused ? '⏸ En pausa (puedes seleccionar texto)' : 'Actualizando automáticamente...';
+  if (paused) {
+    if (timer) { clearInterval(timer); timer = null; }
+  } else {
+    refreshLogs();
+    checkDone();
+    timer = setInterval(tick, 1500);
+  }
+}
+async function tick() {
+  await refreshLogs();
+  checkDone();
+}
 async function refreshLogs() {
   try {
     const res = await fetch('/sync/detail/${type}');
@@ -798,7 +835,8 @@ async function refreshLogs() {
   } catch {}
 }
 refreshLogs();
-setInterval(refreshLogs, 1500);
+timer = setInterval(tick, 1500);
+checkDone();
 </script>
 </body>
 </html>`);
@@ -862,7 +900,7 @@ document.getElementById('codeInput').addEventListener('keydown', function(e) {
 
 function generateSyncDashboard(
   status: Record<string, { status: string; lastRun: number | null; duration?: number; count?: number; error?: string; progress?: { current: number; total?: number; message: string } }>,
-  syncDefs: { key: string; label: string; route: string; method: string; needsPages?: boolean; needsUrl?: boolean; needsBody?: boolean }[],
+  syncDefs: { key: string; label: string; route: string; method: string; needsPages?: boolean; needsUrl?: boolean; needsBody?: boolean; needsId?: boolean; needsJson?: boolean }[],
   migStatus: MigrationStatus,
 ): string {
   const statusBadge = (s: string) => {
@@ -877,7 +915,7 @@ function generateSyncDashboard(
     const lastRun = s?.lastRun ? new Date(s.lastRun).toLocaleString() : '—';
     const info = s?.count ? `${s.count} items` : s?.error || '';
     const prog = s?.progress;
-    const hasParams = def.needsPages || def.needsUrl || def.needsBody;
+    const hasParams = def.needsPages || def.needsUrl || def.needsBody || def.needsId || def.needsJson;
     return `
     <div class="card" id="card-${def.key}">
       <div class="card-header">
@@ -895,11 +933,11 @@ function generateSyncDashboard(
         </div>
       </div>
       <div class="card-actions">
-        <button class="btn btn-primary btn-sm" onclick="runSync('${def.key}','${def.route}','${def.method}',${!!def.needsPages})" ${isRunning ? 'disabled' : ''}>
+        <button class="btn btn-primary btn-sm" onclick="runSync('${def.key}','${def.route}','${def.method}','${def.needsId ? 'id' : def.needsJson ? 'json' : def.needsPages ? 'pages' : ''}')" ${isRunning ? 'disabled' : ''}>
           ${isRunning ? (prog ? prog.message : 'Ejecutando...') : '▶ Ejecutar'}
         </button>
-        ${hasParams ? `<button class="btn btn-secondary btn-sm" onclick="showPagesModal('${def.key}','${def.route}','${def.label}')">⚙ Parámetros</button>` : ''}
-        ${def.key === 'refreshAll' || def.key === 'refreshExpired' ? `<a href="/sync/detail/${def.key}" class="btn btn-secondary btn-sm" style="text-decoration:none">📋 Detalle</a>` : ''}
+        ${hasParams ? `<button class="btn btn-secondary btn-sm" onclick="showParamsModal('${def.key}','${def.route}','${def.label}','${def.method}','${def.needsId ? '1' : ''}','${def.needsJson ? '1' : ''}')">⚙ Parámetros</button>` : ''}
+        ${def.key === 'refreshAll' || def.key === 'refreshExpired' || def.key === 'refreshOne' ? `<a href="/sync/detail/${def.key}" class="btn btn-secondary btn-sm" style="text-decoration:none">📋 Detalle</a>` : ''}
       </div>
     </div>`;
   }).join('\n');
@@ -1009,8 +1047,16 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
     <h2 id="modalTitle">Parámetros</h2>
     <label for="pagesInput" id="modalLabel">Páginas (ej: 1-20 o 1,3,5):</label>
     <input type="text" id="pagesInput" placeholder="1-20" value="1-20">
-    <div class="form-hint">Usa guión para rangos (1-20) o comas para páginas específicas (1,3,5)</div>
-    <label>
+    <div class="form-hint" id="pagesHint">Usa guión para rangos (1-20) o comas para páginas específicas (1,3,5)</div>
+    <label id="idWrap" style="display:none">
+      ID del canal:
+      <input type="text" id="idInput" placeholder="live_winsportsmas&op=2" style="width:100%;padding:.7rem;border-radius:6px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.05);color:#fff;font-size:.95rem;margin-bottom:1rem;margin-top:.4rem">
+    </label>
+    <label id="jsonWrap" style="display:none">
+      Body (JSON, opcional):
+      <textarea id="jsonInput" rows="4" placeholder='{"country":"CO","group":"Canales Deportivos","online":true}' style="width:100%;padding:.7rem;border-radius:6px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.05);color:#fff;font-size:.85rem;margin-bottom:1rem;margin-top:.4rem;font-family:'Courier New',monospace"></textarea>
+    </label>
+    <label id="replaceWrap">
       <input type="checkbox" id="replaceCheck"> Reemplazar datos existentes
     </label>
     <div class="modal-actions">
@@ -1168,28 +1214,77 @@ document.getElementById('chParam').addEventListener('keydown', function(e) { if 
 <script>
 let pendingRoute = '';
 let pendingKey = '';
+let pendingMethod = '';
+let pendingParamType = '';
 
-async function runSync(key, route, method, needsPages) {
-  if (needsPages) {
-    pendingKey = key;
-    pendingRoute = route;
-    document.getElementById('modalTitle').textContent = 'Parámetros - ' + key;
-    document.getElementById('modalLabel').textContent = 'Páginas (ej: 1-20 o 1,3,5):';
-    document.getElementById('pagesInput').value = '1-20';
-    document.getElementById('pagesModal').classList.add('active');
+async function runSync(key, route, method, paramType) {
+  if (paramType === 'pages') {
+    openParamsModal(key, route, 'Páginas (ej: 1-20 o 1,3,5):', method, false, false);
+    return;
+  }
+  if (paramType === 'id') {
+    openParamsModal(key, route, 'ID del canal:', method, true, false);
+    return;
+  }
+  if (paramType === 'json') {
+    openParamsModal(key, route, 'Body JSON:', method, true, true);
     return;
   }
   await execSync(route, key, method, {});
 }
 
+function openParamsModal(key, route, label, method, needsId, needsJson) {
+  pendingKey = key;
+  pendingRoute = route;
+  pendingMethod = method;
+  pendingParamType = needsJson ? 'json' : needsId ? 'id' : 'pages';
+  document.getElementById('modalTitle').textContent = 'Parámetros - ' + key;
+  document.getElementById('modalLabel').textContent = label;
+  document.getElementById('idWrap').style.display = needsId ? 'block' : 'none';
+  document.getElementById('jsonWrap').style.display = needsJson ? 'block' : 'none';
+  document.getElementById('pagesHint').style.display = !needsId && !needsJson ? 'block' : 'none';
+  document.getElementById('pagesInput').style.display = !needsId && !needsJson ? 'block' : 'none';
+  document.getElementById('replaceWrap').style.display = !needsId && !needsJson ? 'block' : 'none';
+  document.getElementById('pagesInput').value = '1-20';
+  document.getElementById('idInput').value = '';
+  document.getElementById('jsonInput').value = '';
+  document.getElementById('pagesModal').classList.add('active');
+}
+
 async function confirmPagesSync() {
-  const pages = document.getElementById('pagesInput').value.trim();
-  const replace = document.getElementById('replaceCheck').checked;
   const route = pendingRoute;
   const key = pendingKey;
-  if (!pages) return;
+  const method = pendingMethod;
+  const paramType = pendingParamType;
+  let body = {};
+  let target = route;
+
+  if (paramType === 'id' || paramType === 'json') {
+    const id = document.getElementById('idInput').value.trim();
+    if (!id) return;
+    if (route.includes('{id}')) {
+      target = route.replace('{id}', encodeURIComponent(id));
+    } else {
+      body = { id };
+    }
+    const jsonText = document.getElementById('jsonInput').value.trim();
+    if (jsonText) {
+      try {
+        body = { ...body, ...JSON.parse(jsonText) };
+      } catch (e) {
+        alert('JSON inválido: ' + e.message);
+        return;
+      }
+    }
+  } else {
+    const pages = document.getElementById('pagesInput').value.trim();
+    const replace = document.getElementById('replaceCheck').checked;
+    if (!pages) return;
+    body = { pages, replace };
+  }
+
   closeModal();
-  await execSync(route, key, 'POST', { pages, replace });
+  await execSync(target, key, method, body);
 }
 
 async function execSync(route, key, method, body) {
@@ -1227,13 +1322,8 @@ function closeModal() {
   pendingKey = '';
 }
 
-function showPagesModal(key, route, label) {
-  pendingKey = key;
-  pendingRoute = route;
-  document.getElementById('modalTitle').textContent = 'Parámetros - ' + label;
-  document.getElementById('modalLabel').textContent = 'Páginas (ej: 1-20 o 1,3,5):';
-  document.getElementById('pagesInput').value = '1-20';
-  document.getElementById('pagesModal').classList.add('active');
+function showParamsModal(key, route, label, method, needsId, needsJson) {
+  openParamsModal(key, route, 'Parámetros - ' + label, method, needsId === '1', needsJson === '1');
 }
 
 // Fetch database counts and update cards
