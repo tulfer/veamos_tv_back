@@ -993,6 +993,60 @@ function buildStreamProxyUrl(streamUrl: string, referer?: string): string {
   return `${base}/proxy/stream?${params.toString()}`;
 }
 
+async function extractCablevisionHdHttp(url: string): Promise<{ streamUrl?: string; m3u8HostFrameUrl?: string } | null> {
+  try {
+    let streamUrl: string | undefined;
+    let m3u8HostFrameUrl: string | undefined;
+    let pageUrl: string = url;
+    let lastIframeUrl: string = '';
+    let fallbackHostUrl: string | undefined;
+    for (let depth = 0; depth < 4 && pageUrl && !streamUrl; depth++) {
+      const html = depth === 0 ? await fetchHTML(pageUrl) : await fetchHTMLWithReferer(pageUrl, url);
+      const streamUrlVar = html.match(/STREAM_URL\s*=\s*["']((?:https?:\\\/\\\/|https:\/\/)[^"']+\.(?:m3u8|m3u)[^"']*?)["']/i);
+      if (streamUrlVar) {
+        streamUrl = streamUrlVar[1].replace(/\\\//g, '/');
+        fallbackHostUrl = pageUrl;
+        logger.info({ url: streamUrl.substring(0, 150) }, 'Found STREAM_URL via HTTP fallback for cablevisionhd');
+        break;
+      }
+      const escapedM3u8 = html.match(/["']((?:https?:)?\\\/\\\/[^"']+\.(?:m3u8|m3u)[^"']*?)["']/i);
+      if (escapedM3u8) {
+        streamUrl = escapedM3u8[1].replace(/\\\//g, '/');
+        if (!streamUrl.startsWith('http')) streamUrl = 'https:' + streamUrl;
+        fallbackHostUrl = pageUrl;
+        logger.info({ url: streamUrl.substring(0, 150) }, 'Found escaped m3u8 via HTTP fallback for cablevisionhd');
+        break;
+      }
+      const m3u8 = html.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|m3u)[^\s"'<>]*/i);
+      if (m3u8) { streamUrl = m3u8[0]; fallbackHostUrl = pageUrl; logger.info({ url: streamUrl.substring(0, 150) }, 'Found m3u8 via HTTP fallback for cablevisionhd'); break; }
+      const fileMatch = html.match(/file["']?\s*:\s*["']([^"']+)["']/i);
+      const srcMatch = html.match(/src["']?\s*:\s*["']([^"']+(?:m3u8|ts|mp4)[^"']*)["']/i);
+      const sourceTag = html.match(/<source\s[^>]*src=["']([^"']+)["']/i);
+      if (fileMatch) { streamUrl = fileMatch[1]; fallbackHostUrl = pageUrl; logger.info({}, 'Found file: via HTTP fallback'); break; }
+      if (srcMatch) { streamUrl = srcMatch[1]; fallbackHostUrl = pageUrl; logger.info({}, 'Found src: via HTTP fallback'); break; }
+      if (sourceTag) { streamUrl = sourceTag[1]; fallbackHostUrl = pageUrl; logger.info({}, 'Found source tag via HTTP fallback'); break; }
+      const iframeSrc = html.match(/<iframe[^>]+(?:name|id)="?player"?[^>]+(?:data-src|src)=["']([^"']+)["']/i)?.[1] ||
+                        html.match(/<iframe[^>]+(?:data-src|src)=["']([^"']+(?:player|core|stream|embed|tv))[^"']*["']/i)?.[1] ||
+                        html.match(/<iframe[^>]+data-src=["']([^"']+)["']/i)?.[1] ||
+                        html.match(/<embed[^>]+src=["']([^"']+)["']/i)?.[1] ||
+                        html.match(/<video[^>]+src=["']([^"']+)["']/i)?.[1];
+      if (iframeSrc) {
+        lastIframeUrl = iframeSrc.replace(/&amp;/g, '&');
+        if (!lastIframeUrl.startsWith('http')) lastIframeUrl = new URL(lastIframeUrl, pageUrl).href;
+        pageUrl = lastIframeUrl;
+      } else {
+        pageUrl = '';
+      }
+    }
+    if (!streamUrl && lastIframeUrl) streamUrl = lastIframeUrl;
+    if (streamUrl && !m3u8HostFrameUrl) m3u8HostFrameUrl = fallbackHostUrl;
+    return { streamUrl, m3u8HostFrameUrl };
+  } catch (fallbackErr: any) {
+    logger.error({ error: fallbackErr.message }, 'HTTP fallback failed for cablevisionhd');
+    return null;
+  }
+}
+
 export async function getCablevisionHd(slug: string, option?: string): Promise<LiveChannel | null> {
   const cacheKey = `cablevisionhd:${slug}:${option || 'default'}`;
   const cached = memoryCache.get<LiveChannel>(cacheKey);
@@ -1003,8 +1057,36 @@ export async function getCablevisionHd(slug: string, option?: string): Promise<L
     const url = `${CABLEVISIONHD_BASE}/${slug}.php`;
     logger.info({ slug, url, option }, 'Fetching channel from cablevisionhd');
 
-    const { chromium: playwrightChromium } = await import('playwright');
-browser = await playwrightChromium.launch({ headless: true });
+    let playwrightAvailable = true;
+    try {
+      const { chromium: playwrightChromium } = await import('playwright');
+      browser = await playwrightChromium.launch({ headless: true });
+    } catch (pwErr: any) {
+      playwrightAvailable = false;
+      logger.warn({ error: pwErr?.message, slug }, 'Playwright no disponible, usando fallback HTTP');
+    }
+
+    if (!playwrightAvailable) {
+      const httpResult = await extractCablevisionHdHttp(url);
+      if (!httpResult?.streamUrl) {
+        logger.warn({ slug, url }, 'No valid stream source found on cablevisionhd');
+        return null;
+      }
+      const proxyUrl = buildStreamProxyUrl(httpResult.streamUrl, httpResult.m3u8HostFrameUrl || url);
+      const result: LiveChannel = {
+        id: `live_${slug}`,
+        title: slug.replace(/-/g, ' ').replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase()),
+        logo: undefined,
+        group: 'Canales TV',
+        url: proxyUrl,
+        type: 'live',
+        online: true,
+        refreshUrl: url,
+      };
+      memoryCache.set(cacheKey, result, 3600000);
+      return result;
+    }
+
     const context = await browser.newContext({
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     });
@@ -1214,55 +1296,11 @@ browser = await playwrightChromium.launch({ headless: true });
     }
 
     if (!streamUrl) {
-      logger.warn({ slug, url, capturedUrls, iframeCount: allIframes.length }, 'No valid stream source found on cablevisionhd via Playwright, trying HTTP fallback');
-      try {
-        let pageUrl: string = url;
-        let lastIframeUrl: string = '';
-        let fallbackHostUrl: string | undefined;
-        for (let depth = 0; depth < 4 && pageUrl && !streamUrl; depth++) {
-          const html = depth === 0 ? await fetchHTML(pageUrl) : await fetchHTMLWithReferer(pageUrl, url);
-          const streamUrlVar = html.match(/STREAM_URL\s*=\s*["']((?:https?:\\\/\\\/|https:\/\/)[^"']+\.(?:m3u8|m3u)[^"']*?)["']/i);
-          if (streamUrlVar) {
-            streamUrl = streamUrlVar[1].replace(/\\\//g, '/');
-            fallbackHostUrl = pageUrl;
-            logger.info({ url: streamUrl.substring(0, 150) }, 'Found STREAM_URL via HTTP fallback for cablevisionhd');
-            break;
-          }
-          const escapedM3u8 = html.match(/["']((?:https?:)?\\\/\\\/[^"']+\.(?:m3u8|m3u)[^"']*?)["']/i);
-          if (escapedM3u8) {
-            streamUrl = escapedM3u8[1].replace(/\\\//g, '/');
-            if (!streamUrl.startsWith('http')) streamUrl = 'https:' + streamUrl;
-            fallbackHostUrl = pageUrl;
-            logger.info({ url: streamUrl.substring(0, 150) }, 'Found escaped m3u8 via HTTP fallback for cablevisionhd');
-            break;
-          }
-          const m3u8 = html.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|m3u)[^\s"'<>]*/i);
-          if (m3u8) { streamUrl = m3u8[0]; fallbackHostUrl = pageUrl; logger.info({ url: streamUrl.substring(0, 150) }, 'Found m3u8 via HTTP fallback for cablevisionhd'); break; }
-          const fileMatch = html.match(/file["']?\s*:\s*["']([^"']+)["']/i);
-          const srcMatch = html.match(/src["']?\s*:\s*["']([^"']+(?:m3u8|ts|mp4)[^"']*)["']/i);
-          const sourceTag = html.match(/<source\s[^>]*src=["']([^"']+)["']/i);
-          if (fileMatch) { streamUrl = fileMatch[1]; fallbackHostUrl = pageUrl; logger.info({}, 'Found file: via HTTP fallback'); break; }
-          if (srcMatch) { streamUrl = srcMatch[1]; fallbackHostUrl = pageUrl; logger.info({}, 'Found src: via HTTP fallback'); break; }
-          if (sourceTag) { streamUrl = sourceTag[1]; fallbackHostUrl = pageUrl; logger.info({}, 'Found source tag via HTTP fallback'); break; }
-          const iframeSrc = html.match(/<iframe[^>]+(?:name|id)="?player"?[^>]+(?:data-src|src)=["']([^"']+)["']/i)?.[1] ||
-                            html.match(/<iframe[^>]+(?:data-src|src)=["']([^"']+(?:player|core|stream|embed|tv))[^"']*["']/i)?.[1] ||
-                            html.match(/<iframe[^>]+data-src=["']([^"']+)["']/i)?.[1] ||
-                            html.match(/<embed[^>]+src=["']([^"']+)["']/i)?.[1] ||
-                            html.match(/<video[^>]+src=["']([^"']+)["']/i)?.[1];
-          if (iframeSrc) {
-            lastIframeUrl = iframeSrc.replace(/&amp;/g, '&');
-            if (!lastIframeUrl.startsWith('http')) lastIframeUrl = new URL(lastIframeUrl, pageUrl).href;
-            pageUrl = lastIframeUrl;
-          } else {
-            pageUrl = '';
-          }
-        }
-        if (!streamUrl && lastIframeUrl) streamUrl = lastIframeUrl;
-        if (streamUrl && !m3u8HostFrameUrl) m3u8HostFrameUrl = fallbackHostUrl;
-      } catch (fallbackErr: any) {
-        logger.error({ error: fallbackErr.message }, 'HTTP fallback failed for cablevisionhd');
-      }
-      if (!streamUrl) {
+      const httpResult = await extractCablevisionHdHttp(url);
+      if (httpResult?.streamUrl) {
+        streamUrl = httpResult.streamUrl;
+        m3u8HostFrameUrl = httpResult.m3u8HostFrameUrl;
+      } else {
         logger.warn({ slug, url }, 'No valid stream source found on cablevisionhd');
         return null;
       }

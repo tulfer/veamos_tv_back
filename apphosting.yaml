@@ -4,6 +4,7 @@ runtime: nodejs20
 build:
   commands:
     - npm install
+    - npx playwright install chromium || true
     - npm run build
 
 run:
