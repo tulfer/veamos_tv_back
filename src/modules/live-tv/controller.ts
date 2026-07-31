@@ -349,7 +349,7 @@ export async function refreshExpiredChannelsHandler(_request: FastifyRequest, re
     }
     pushLog('refreshExpired', `  Slug extraído: ${slug}`);
     const fetchUrl = source === 'wsdeportes' ? `https://wsdeportes.net/?v=${slug}` :
-      source === 'tvporinternet2' ? `https://www.tvporinternet2.com/${slug}.html` :
+      source === 'tvporinternet2' ? `https://www.tvporinternet2.com/${slug}.php` :
       source === 'cablevisionhd' ? `https://www.cablevisionhd.com/${slug}.php` :
       source === 'chatytv' ? `https://www.chatytvgratis.net/${slug}/` :
       `https://${source}.com/${slug}`;
@@ -485,7 +485,7 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
     }
     pushLog('refreshAll', `  Slug: ${slug}${ch.refreshOption ? ` | Opción: ${ch.refreshOption}` : ''}`);
     const fetchUrl = source === 'wsdeportes' ? `https://wsdeportes.net/?v=${slug}` :
-      source === 'tvporinternet2' ? `https://www.tvporinternet2.com/${slug}.html` :
+      source === 'tvporinternet2' ? `https://www.tvporinternet2.com/${slug}.php` :
       source === 'cablevisionhd' ? `https://www.cablevisionhd.com/${slug}.php` :
       source === 'chatytv' ? `https://www.chatytvgratis.net/${slug}/` :
       `https://${source}.com/${slug}`;
@@ -878,7 +878,7 @@ export async function refreshChannelHandler(request: FastifyRequest, reply: Fast
     pushLog(REFRESH_ONE_TYPE, 'Slug: ' + slug + (ch.refreshOption ? ' | Opcion: ' + ch.refreshOption : ''));
 
     const fetchUrl = source === 'wsdeportes' ? 'https://wsdeportes.net/?v=' + slug :
-      source === 'tvporinternet2' ? 'https://www.tvporinternet2.com/' + slug + '.html' :
+      source === 'tvporinternet2' ? 'https://www.tvporinternet2.com/' + slug + '.php' :
       source === 'cablevisionhd' ? 'https://www.cablevisionhd.com/' + slug + '.php' :
       source === 'chatytv' ? 'https://www.chatytvgratis.net/' + slug + '/' :
       'https://' + source + '.com/' + slug;

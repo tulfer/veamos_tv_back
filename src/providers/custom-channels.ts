@@ -705,6 +705,55 @@ browser = await playwrightChromium.launch({ headless: true });
   }
 }
 
+async function extractTvPorInternet2Http(url: string): Promise<{ streamUrl?: string } | null> {
+  try {
+    let streamUrl: string | undefined;
+    let pageUrl: string = url;
+    let lastIframeUrl: string = '';
+    for (let depth = 0; depth < 4 && pageUrl && !streamUrl; depth++) {
+      const html = depth === 0 ? await fetchHTML(pageUrl) : await fetchHTMLWithReferer(pageUrl, url);
+      const streamUrlVar = html.match(/STREAM_URL\s*=\s*["']((?:https?:\\\/\\\/|https:\/\/)[^"']+\.(?:m3u8|m3u)[^"']*?)["']/i);
+      if (streamUrlVar) {
+        streamUrl = streamUrlVar[1].replace(/\\\//g, '/');
+        logger.info({ url: streamUrl.substring(0, 150) }, 'Found STREAM_URL via HTTP fallback for tvporinternet2');
+        break;
+      }
+      const escapedM3u8 = html.match(/["']((?:https?:)?\\\/\\\/[^"']+\.(?:m3u8|m3u)[^"']*?)["']/i);
+      if (escapedM3u8) {
+        streamUrl = escapedM3u8[1].replace(/\\\//g, '/');
+        if (!streamUrl.startsWith('http')) streamUrl = 'https:' + streamUrl;
+        logger.info({ url: streamUrl.substring(0, 150) }, 'Found escaped m3u8 via HTTP fallback for tvporinternet2');
+        break;
+      }
+      const m3u8 = html.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|m3u)[^\s"'<>]*/i);
+      if (m3u8) { streamUrl = m3u8[0]; logger.info({ url: streamUrl.substring(0, 150) }, 'Found m3u8 via HTTP fallback for tvporinternet2'); break; }
+      const fileMatch = html.match(/file["']?\s*:\s*["']([^"']+)["']/i);
+      const srcMatch = html.match(/src["']?\s*:\s*["']([^"']+(?:m3u8|ts|mp4)[^"']*)["']/i);
+      const sourceTag = html.match(/<source\s[^>]*src=["']([^"']+)["']/i);
+      if (fileMatch) { streamUrl = fileMatch[1]; logger.info({}, 'Found file: via HTTP fallback'); break; }
+      if (srcMatch) { streamUrl = srcMatch[1]; logger.info({}, 'Found src: via HTTP fallback'); break; }
+      if (sourceTag) { streamUrl = sourceTag[1]; logger.info({}, 'Found source tag via HTTP fallback'); break; }
+      const iframeSrc = html.match(/<iframe[^>]+(?:name|id)="?player"?[^>]+(?:data-src|src)=["']([^"']+)["']/i)?.[1] ||
+                        html.match(/<iframe[^>]+(?:data-src|src)=["']([^"']+(?:player|core|stream|embed|tv))[^"']*["']/i)?.[1] ||
+                        html.match(/<iframe[^>]+data-src=["']([^"']+)["']/i)?.[1] ||
+                        html.match(/<embed[^>]+src=["']([^"']+)["']/i)?.[1] ||
+                        html.match(/<video[^>]+src=["']([^"']+)["']/i)?.[1];
+      if (iframeSrc) {
+        lastIframeUrl = iframeSrc.replace(/&amp;/g, '&');
+        if (!lastIframeUrl.startsWith('http')) lastIframeUrl = new URL(lastIframeUrl, pageUrl).href;
+        pageUrl = lastIframeUrl;
+      } else {
+        pageUrl = '';
+      }
+    }
+    if (!streamUrl && lastIframeUrl) streamUrl = lastIframeUrl;
+    return { streamUrl };
+  } catch (fallbackErr: any) {
+    logger.error({ error: fallbackErr.message }, 'HTTP fallback failed for tvporinternet2');
+    return null;
+  }
+}
+
 export async function getTvPorInternet2(slug: string, option?: string): Promise<LiveChannel | null> {
   const cacheKey = `tvporinternet2:${slug}:${option || 'default'}`;
   const cached = memoryCache.get<LiveChannel>(cacheKey);
@@ -712,11 +761,39 @@ export async function getTvPorInternet2(slug: string, option?: string): Promise<
 
   let browser: any = null;
   try {
-    const url = `${TVPORINTERNET2_BASE}/${slug}.html`;
+    const url = `${TVPORINTERNET2_BASE}/${slug}.php`;
     logger.info({ slug, url, option }, 'Fetching channel from tvporinternet2');
 
-    const { chromium: playwrightChromium } = await import('playwright');
-browser = await playwrightChromium.launch({ headless: true });
+    let playwrightAvailable = true;
+    try {
+      const { chromium: playwrightChromium } = await import('playwright');
+      browser = await playwrightChromium.launch({ headless: true });
+    } catch (pwErr: any) {
+      playwrightAvailable = false;
+      logger.warn({ error: pwErr?.message, slug }, 'Playwright no disponible, usando fallback HTTP');
+    }
+
+    if (!playwrightAvailable) {
+      const httpResult = await extractTvPorInternet2Http(url);
+      if (!httpResult?.streamUrl) {
+        logger.warn({ slug, url }, 'No valid stream source found on tvporinternet2');
+        return null;
+      }
+      const title = slug.replace(/-/g, ' ').replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
+      const result: LiveChannel = {
+        id: `live_${slug}`,
+        title,
+        logo: undefined,
+        group: 'Canales TV',
+        url: httpResult.streamUrl,
+        type: 'live',
+        online: true,
+        refreshUrl: url,
+      };
+      memoryCache.set(cacheKey, result, 3600000);
+      return result;
+    }
+
     const context = await browser.newContext({
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     });
@@ -902,51 +979,10 @@ browser = await playwrightChromium.launch({ headless: true });
     }
 
     if (!streamUrl) {
-      logger.warn({ slug, url, capturedUrls }, 'No valid stream source found on tvporinternet2 via Playwright, trying HTTP fallback');
-      try {
-        let pageUrl: string = url;
-        let lastIframeUrl: string = '';
-        for (let depth = 0; depth < 4 && pageUrl && !streamUrl; depth++) {
-          const html = depth === 0 ? await fetchHTML(pageUrl) : await fetchHTMLWithReferer(pageUrl, url);
-          const streamUrlVar = html.match(/STREAM_URL\s*=\s*["']((?:https?:\\\/\\\/|https:\/\/)[^"']+\.(?:m3u8|m3u)[^"']*?)["']/i);
-          if (streamUrlVar) {
-            streamUrl = streamUrlVar[1].replace(/\\\//g, '/');
-            logger.info({ url: streamUrl.substring(0, 150) }, 'Found STREAM_URL via HTTP fallback for tvporinternet2');
-            break;
-          }
-          const escapedM3u8 = html.match(/["']((?:https?:)?\\\/\\\/[^"']+\.(?:m3u8|m3u)[^"']*?)["']/i);
-          if (escapedM3u8) {
-            streamUrl = escapedM3u8[1].replace(/\\\//g, '/');
-            if (!streamUrl.startsWith('http')) streamUrl = 'https:' + streamUrl;
-            logger.info({ url: streamUrl.substring(0, 150) }, 'Found escaped m3u8 via HTTP fallback for tvporinternet2');
-            break;
-          }
-          const m3u8 = html.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|m3u)[^\s"'<>]*/i);
-          if (m3u8) { streamUrl = m3u8[0]; logger.info({ url: streamUrl.substring(0, 150) }, 'Found m3u8 via HTTP fallback for tvporinternet2'); break; }
-          const fileMatch = html.match(/file["']?\s*:\s*["']([^"']+)["']/i);
-          const srcMatch = html.match(/src["']?\s*:\s*["']([^"']+(?:m3u8|ts|mp4)[^"']*)["']/i);
-          const sourceTag = html.match(/<source\s[^>]*src=["']([^"']+)["']/i);
-          if (fileMatch) { streamUrl = fileMatch[1]; logger.info({}, 'Found file: via HTTP fallback'); break; }
-          if (srcMatch) { streamUrl = srcMatch[1]; logger.info({}, 'Found src: via HTTP fallback'); break; }
-          if (sourceTag) { streamUrl = sourceTag[1]; logger.info({}, 'Found source tag via HTTP fallback'); break; }
-          const iframeSrc = html.match(/<iframe[^>]+(?:name|id)="?player"?[^>]+(?:data-src|src)=["']([^"']+)["']/i)?.[1] ||
-                            html.match(/<iframe[^>]+(?:data-src|src)=["']([^"']+(?:player|core|stream|embed|tv))[^"']*["']/i)?.[1] ||
-                            html.match(/<iframe[^>]+data-src=["']([^"']+)["']/i)?.[1] ||
-                            html.match(/<embed[^>]+src=["']([^"']+)["']/i)?.[1] ||
-                            html.match(/<video[^>]+src=["']([^"']+)["']/i)?.[1];
-          if (iframeSrc) {
-            lastIframeUrl = iframeSrc.replace(/&amp;/g, '&');
-            if (!lastIframeUrl.startsWith('http')) lastIframeUrl = new URL(lastIframeUrl, pageUrl).href;
-            pageUrl = lastIframeUrl;
-          } else {
-            pageUrl = '';
-          }
-        }
-        if (!streamUrl && lastIframeUrl) streamUrl = lastIframeUrl;
-      } catch (fallbackErr: any) {
-        logger.error({ error: fallbackErr.message }, 'HTTP fallback failed for tvporinternet2');
-      }
-      if (!streamUrl) {
+      const httpResult = await extractTvPorInternet2Http(url);
+      if (httpResult?.streamUrl) {
+        streamUrl = httpResult.streamUrl;
+      } else {
         logger.warn({ slug, url }, 'No valid stream source found on tvporinternet2');
         return null;
       }
