@@ -1333,8 +1333,8 @@ function openParamsModal(key, route, label, method, needsId, needsJson) {
   pendingParamType = needsJson ? 'json' : needsId ? 'id' : 'pages';
   document.getElementById('modalTitle').textContent = 'Parámetros - ' + key;
   document.getElementById('modalLabel').textContent = label;
-  document.getElementById('idWrap').style.display = needsId ? 'block' : 'none';
-  document.getElementById('channelPickWrap').style.display = needsId ? 'block' : 'none';
+  document.getElementById('idWrap').style.display = needsId && needsJson ? 'block' : 'none';
+  document.getElementById('channelPickWrap').style.display = needsId && !needsJson ? 'block' : 'none';
   document.getElementById('jsonWrap').style.display = needsJson ? 'block' : 'none';
   document.getElementById('pagesHint').style.display = !needsId && !needsJson ? 'block' : 'none';
   document.getElementById('pagesInput').style.display = !needsId && !needsJson ? 'block' : 'none';
@@ -1359,8 +1359,11 @@ async function confirmPagesSync() {
   let target = route;
 
   if (paramType === 'id' || paramType === 'json') {
-    const id = document.getElementById('idInput').value.trim();
-    if (!id) return;
+    const id = (document.getElementById('idInput').value || document.getElementById('cpChannel').value).trim();
+    if (!id) {
+      alert('Selecciona un canal en la lista de búsqueda');
+      return;
+    }
     if (route.includes('{id}')) {
       target = route.replace('{id}', encodeURIComponent(id));
     } else {
@@ -1395,6 +1398,7 @@ async function execSync(route, key, method, body) {
       const err = await res.text();
       console.error('Sync error:', err);
       if (btn) { btn.disabled = false; btn.textContent = '▶ Ejecutar'; }
+      alert('Error al ejecutar: ' + res.status + ' ' + err.slice(0, 300));
     } else {
       // Immediately poll status to pick up running state
       setTimeout(refreshStatus, 500);
@@ -1402,6 +1406,7 @@ async function execSync(route, key, method, body) {
   } catch (e) {
     console.error(e);
     if (btn) { btn.disabled = false; btn.textContent = '▶ Ejecutar'; }
+    alert('Error de red: ' + e.message);
   }
 }
 
