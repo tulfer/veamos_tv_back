@@ -26,11 +26,50 @@ export async function getChatytv(channel: string): Promise<LiveChannel | null> {
   const cached = memoryCache.get<LiveChannel>(cacheKey);
   if (cached) return cached;
 
+  const url = `${CHATYTVGRATIS_BASE}/${channel}/`;
+  logger.info({ channel, url }, 'Fetching channel from chatytvgratis');
+
+  // 1) Extracción por cadena HTTP (embed.php → menu → opciones) sin navegador
+  let extracted: { stream: string; title: string } | null = null;
+  try {
+    extracted = await extractChatyTvCloud(url);
+    if (extracted) {
+      logger.info({ url: extracted.stream.substring(0, 130) }, 'chatytvgratis: stream obtenido por cadena HTTP');
+    }
+  } catch (e: any) {
+    logger.warn({ error: e.message, channel }, 'chatytvgratis: cadena HTTP fallida');
+  }
+
+  // 2) Fallback con Playwright
+  if (!extracted) {
+    logger.warn({ channel }, 'chatytvgratis: probando Playwright');
+    extracted = await extractChatyTvPlaywright(channel, url);
+  }
+
+  if (!extracted || !extracted.stream) {
+    logger.warn({ channel, url }, 'No valid stream source found on chatytvgratis');
+    return null;
+  }
+
+  const result: LiveChannel = {
+    id: `live_${channel}`,
+    title: extracted.title || channel.replace(/-/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase()),
+    logo: undefined,
+    group: 'Canales TV',
+    url: extracted.stream,
+    type: 'live',
+    online: true,
+    refreshUrl: url,
+    proveedor: 'chatytv',
+  };
+
+  memoryCache.set(cacheKey, result, 3600000);
+  return result;
+}
+
+async function extractChatyTvPlaywright(channel: string, url: string): Promise<{ stream: string; title: string } | null> {
   let browser: any = null;
   try {
-    const url = `${CHATYTVGRATIS_BASE}/${channel}/`;
-    logger.info({ channel, url }, 'Fetching channel from chatytvgratis');
-
     // Usar Playwright para renderizar JavaScript
     const { chromium: playwrightChromium } = await import('playwright');
 browser = await playwrightChromium.launch({ headless: true });
@@ -221,18 +260,7 @@ browser = await playwrightChromium.launch({ headless: true });
                  $('title').text().trim() ||
                  channel.replace(/-/g, ' ').toUpperCase();
 
-    const result: LiveChannel = {
-      id: `live_${channel}`,
-      title: title || channel,
-      logo: undefined,
-      group: 'Canales TV',
-      url: streamUrl,
-      type: 'live',
-      online: true,
-    };
-
-    memoryCache.set(cacheKey, result, 3600000);
-    return result;
+    return { stream: streamUrl, title: title || channel };
   } catch (error: any) {
     logger.error({ error: error.message, channel }, 'Failed to fetch from chatytvgratis with Playwright');
     return null;
@@ -243,10 +271,154 @@ browser = await playwrightChromium.launch({ headless: true });
   }
 }
 
+async function extractChatyTvCloud(
+  fetchUrl: string,
+): Promise<{ stream: string; title: string } | null> {
+  // Nivel 1: página del canal → iframe embed.php?id={id}
+  const channelHtml = await fetchHTML(fetchUrl);
+  const $ = cheerio.load(channelHtml);
+  const title = $('h1').first().text().trim() || $('title').text().trim();
+
+  const iframes: string[] = [];
+  $('iframe').each((i, el) => {
+    const raw = $(el).attr('src') || $(el).attr('data-src');
+    if (!raw) return;
+    const cleaned = raw.replace(/&amp;/g, '&');
+    const full = cleaned.startsWith('http') ? cleaned : new URL(cleaned, fetchUrl).href;
+    if (full.startsWith('http')) iframes.push(full);
+  });
+  if (iframes.length === 0) {
+    logger.info({ fetchUrl }, 'chatytvgratis: sin iframes en la página del canal');
+    return null;
+  }
+  const embedUrl = iframes.find((u) => u.includes('embed.php')) ||
+                   iframes.find((u) => u.includes('tdtcloud')) ||
+                   iframes.find((u) => u.includes('twitch.tv')) ||
+                   iframes.find((u) => !isBlacklistedIframe(u)) ||
+                   iframes[0];
+  if (!embedUrl) return null;
+  logger.info({ embedUrl: embedUrl.substring(0, 150) }, 'chatytvgratis: embed encontrado');
+
+  // Player directo (Twitch, etc.): la página del player es el stream
+  if (embedUrl.includes('twitch.tv') || embedUrl.includes('youtube.com')) {
+    return { stream: embedUrl, title };
+  }
+
+  // Nivel 2: embed.php → {id}menu.php (onclick o iframe) o STREAM_URL directo
+  const embedHtml = await fetchHTMLWithReferer(embedUrl, fetchUrl);
+  const directStream = extractStreamFromHtml(embedHtml);
+  if (directStream && await verifyStreamGet(directStream)) {
+    logger.info({ url: directStream.substring(0, 120) }, 'chatytvgratis: STREAM_URL directo en embed');
+    return { stream: directStream, title };
+  }
+
+  let targetUrl: string | null = null;
+  const onclick = embedHtml.match(/location\.(?:replace|href)\(?\s*['"]([^'"]+\.php[^'"]*?)['"]/i);
+  if (onclick) {
+    targetUrl = onclick[1].startsWith('http') ? onclick[1] : new URL(onclick[1], embedUrl).href;
+  } else {
+    const embedIframe = embedHtml.match(/<iframe[^>]+(?:data-src|src)=["']([^"']+\.php[^'"]*?)["']/i);
+    if (embedIframe) {
+      targetUrl = embedIframe[1].replace(/&amp;/g, '&');
+      if (!targetUrl.startsWith('http')) targetUrl = new URL(targetUrl, embedUrl).href;
+    }
+  }
+  if (!targetUrl) {
+    if (directStream) return { stream: directStream, title };
+    logger.info({ embedUrl: embedUrl.substring(0, 120) }, 'chatytvgratis: sin target .php en embed');
+    return null;
+  }
+  logger.info({ targetUrl: targetUrl.substring(0, 150) }, 'chatytvgratis: target .php encontrado');
+
+  // Nivel 3: página target → STREAM_URL directo o fuentes (tabs/stage/iframes)
+  const targetHtml = await fetchHTMLWithReferer(targetUrl, embedUrl);
+  const directTarget = extractStreamFromHtml(targetHtml);
+  if (directTarget && await verifyStreamGet(directTarget)) {
+    return { stream: directTarget, title };
+  }
+
+  const $t = cheerio.load(targetHtml);
+  const candidates: string[] = [];
+  $t('#stage iframe, .stage iframe, iframe').each((i, el) => {
+    const src = $t(el).attr('src') || $t(el).attr('data-src');
+    if (src && !isBlacklistedIframe(src)) candidates.push(src.replace(/&amp;/g, '&'));
+  });
+  $t('[data-v]').each((i, el) => {
+    const v = $t(el).attr('data-v');
+    if (v) candidates.push(v.replace(/&amp;/g, '&'));
+  });
+  const resolved = candidates.map((c) => (c.startsWith('http') ? c : new URL(c, targetUrl).href));
+  const unique = [...new Set(resolved)];
+  logger.info({ sources: unique.map((u) => u.substring(0, 80)) }, 'chatytvgratis: fuentes en target');
+
+  // Nivel 4: cada fuente → STREAM_URL; si no se puede reproducir standalone (requiere referer/token),
+  // usar la página del player (si da 200) para que la app la embeba
+  for (const candidate of unique) {
+    try {
+      const tabHtml = await fetchHTMLWithReferer(candidate, targetUrl);
+      const stream = extractStreamFromHtml(tabHtml);
+      if (stream && await verifyStreamGet(stream)) {
+        return { stream, title };
+      }
+      try {
+        const res = await httpClient.get(candidate, { timeout: 10000, headers: { Referer: targetUrl } });
+        if (res.status === 200) {
+          logger.info({ from: (stream || '').substring(0, 120), to: candidate.substring(0, 150) }, 'chatytvgratis: usando pagina del player (m3u8 no reproducible standalone)');
+          return { stream: candidate, title };
+        }
+      } catch {
+        // seguir con la siguiente fuente
+      }
+    } catch {
+      // seguir con la siguiente fuente
+    }
+  }
+
+  // Fallbacks finales: página target o embed (si dan 200)
+  try {
+    const res = await httpClient.get(targetUrl, { timeout: 8000, headers: { Referer: embedUrl } });
+    if (res.status === 200) return { stream: targetUrl, title };
+  } catch {
+    // nada
+  }
+  try {
+    const res = await httpClient.get(embedUrl, { timeout: 8000, headers: { Referer: fetchUrl } });
+    if (res.status === 200) return { stream: embedUrl, title };
+  } catch {
+    // nada
+  }
+  return null;
+}
+
+function extractStreamFromHtml(html: string): string | null {
+  const sv = html.match(/STREAM_URL\s*=\s*["']((?:https?:\\\/\\\/|https:\/\/)[^"']+\.(?:m3u8|m3u)[^"']*?)["']/i);
+  if (sv) return sv[1].replace(/\\\//g, '/');
+  const escaped = html.match(/["']((?:https?:)?\\\/\\\/[^"']+\.(?:m3u8|m3u)[^"']*?)["']/i);
+  if (escaped) {
+    let u = escaped[1].replace(/\\\//g, '/');
+    if (!u.startsWith('http')) u = 'https:' + u;
+    return u;
+  }
+  const plain = html.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|m3u)[^\s"'<>]*/i);
+  if (plain) return plain[0];
+  return null;
+}
+
 async function verifyStreamUrl(testUrl: string): Promise<boolean> {
   try {
     const res = await httpClient.head(testUrl, { timeout: 10000 });
     return res.status === 200;
+  } catch {
+    return false;
+  }
+}
+
+async function verifyStreamGet(testUrl: string): Promise<boolean> {
+  try {
+    const res = await httpClient.get(testUrl, { timeout: 8000 });
+    if (res.status !== 200) return false;
+    const data = String(res.data || '');
+    return data.startsWith('#EXTM3U') || data.includes('#EXT-X-');
   } catch {
     return false;
   }

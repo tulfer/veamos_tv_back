@@ -108,6 +108,7 @@ export async function getValidationStatusHandler(_request: FastifyRequest, reply
 
 export async function getChatytvChannelHandler(request: FastifyRequest, reply: FastifyReply) {
   const { channel } = request.params as any;
+  const { title, logo, country } = request.body as any;
 
   if (!channel || typeof channel !== 'string') {
     return reply.status(400).send({ error: 'Channel parameter is required' });
@@ -119,18 +120,25 @@ export async function getChatytvChannelHandler(request: FastifyRequest, reply: F
       return reply.status(404).send({ error: 'Channel not found or unavailable' });
     }
 
+    const channelData: LiveChannel = {
+      ...result,
+      title: title || result.title,
+      logo: logo || result.logo,
+      country: country || result.country,
+    };
+
     // Agregar a la lista de canales sincronizados
     const existing = await loadSyncData();
     const channels = existing?.channels || [];
 
     // Buscar si ya existe
-    const existingIndex = channels.findIndex((ch) => ch.id === result.id);
+    const existingIndex = channels.findIndex((ch) => ch.id === channelData.id);
     if (existingIndex !== -1) {
       // Mover al inicio
       channels.splice(existingIndex, 1);
     }
     // Agregar al inicio
-    channels.unshift(result);
+    channels.unshift(channelData);
 
     await saveSyncData({
       movies: existing?.movies || [],
@@ -144,17 +152,18 @@ export async function getChatytvChannelHandler(request: FastifyRequest, reply: F
     });
 
     memoryCache.del('live:channels');
-    return reply.send({ ok: true, channel: result, message: 'Channel added at the beginning of the list' });
+    return reply.send({ ok: true, channel: channelData, message: 'Channel added at the beginning of the list' });
   } catch (error) {
     return reply.status(500).send({ error: 'Failed to add channel' });
   }
 }
 
-function extractRefreshSource(refreshUrl?: string): 'wsdeportes' | 'tvporinternet2' | 'cablevisionhd' | null {
+function extractRefreshSource(refreshUrl?: string): 'wsdeportes' | 'tvporinternet2' | 'cablevisionhd' | 'chatytv' | null {
   if (!refreshUrl) return null;
   if (refreshUrl.includes('wsdeportes.net')) return 'wsdeportes';
   if (refreshUrl.includes('tvporinternet2.com')) return 'tvporinternet2';
   if (refreshUrl.includes('cablevisionhd.com')) return 'cablevisionhd';
+  if (refreshUrl.includes('chatytvgratis.net')) return 'chatytv';
   return null;
 }
 
@@ -279,8 +288,8 @@ function extractSlugFromUrl(refreshUrl?: string, proveedor?: string): string | n
       return remaining.length > 0 ? `${v}&${remaining.join('&')}` : v;
     }
 
-    // Para cablevisionhd y tvporinternet2, el slug está en el path
-    const pathname = urlObj.pathname.replace(/^\//, '');
+    // Para cablevisionhd, tvporinternet2 y chatytv, el slug está en el path
+    const pathname = urlObj.pathname.replace(/^\//, '').replace(/\/+$/, '');
     const slug = pathname.replace(/\.\w+$/, ''); // remove .html or .php
     return slug || null;
   } catch {
@@ -341,6 +350,7 @@ export async function refreshExpiredChannelsHandler(_request: FastifyRequest, re
     const fetchUrl = source === 'wsdeportes' ? `https://wsdeportes.net/?v=${slug}` :
       source === 'tvporinternet2' ? `https://www.tvporinternet2.com/${slug}.html` :
       source === 'cablevisionhd' ? `https://www.cablevisionhd.com/${slug}.php` :
+      source === 'chatytv' ? `https://www.chatytvgratis.net/${slug}/` :
       `https://${source}.com/${slug}`;
     pushLog('refreshExpired', `  URL consultada: ${fetchUrl}`);
 
@@ -454,14 +464,14 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
     pushLog('refreshAll', `  refreshUrl: ${ch.refreshUrl}`);
 
     const provedor = (ch.proveedor || extractRefreshSource(ch.refreshUrl)) as string;
-    if (provedor !== 'wsdeportes' && provedor !== 'cablevisionhd' && provedor !== 'tvporinternet2') {
+    if (provedor !== 'wsdeportes' && provedor !== 'cablevisionhd' && provedor !== 'tvporinternet2' && provedor !== 'chatytv') {
       pushLog('refreshAll', `  ❌ Proveedor no soportado: ${provedor || '(none)'}`);
       failedChannels.push({ id: ch.id, title: ch.title || ch.id, error: `Proveedor no soportado: ${provedor || '(none)'}` });
       processed++;
       updateSyncProgress('refreshAll', processed, `[${processed}/${totalToProcess}] ${ch.title || ch.id} — proveedor no soportado`, totalToProcess);
       continue;
     }
-    const source: 'wsdeportes' | 'cablevisionhd' | 'tvporinternet2' = provedor;
+    const source: 'wsdeportes' | 'cablevisionhd' | 'tvporinternet2' | 'chatytv' = provedor;
     pushLog('refreshAll', `  Proveedor: ${source}`);
 
     const slug = extractSlugFromUrl(ch.refreshUrl, source);
@@ -476,6 +486,7 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
     const fetchUrl = source === 'wsdeportes' ? `https://wsdeportes.net/?v=${slug}` :
       source === 'tvporinternet2' ? `https://www.tvporinternet2.com/${slug}.html` :
       source === 'cablevisionhd' ? `https://www.cablevisionhd.com/${slug}.php` :
+      source === 'chatytv' ? `https://www.chatytvgratis.net/${slug}/` :
       `https://${source}.com/${slug}`;
     pushLog('refreshAll', `  URL consultada: ${fetchUrl}`);
 
@@ -850,7 +861,7 @@ export async function refreshChannelHandler(request: FastifyRequest, reply: Fast
 
     const ch = channels[index];
     const source = (ch.proveedor as any) || extractRefreshSource(ch.refreshUrl);
-    if (!source || (source !== 'wsdeportes' && source !== 'cablevisionhd' && source !== 'tvporinternet2')) {
+    if (!source || (source !== 'wsdeportes' && source !== 'cablevisionhd' && source !== 'tvporinternet2' && source !== 'chatytv')) {
       pushLog(REFRESH_ONE_TYPE, 'Proveedor no soportado: ' + (source || '(none)'));
       failSync(REFRESH_ONE_TYPE, 'Proveedor no soportado: ' + (source || '(none)'));
       return;
@@ -868,6 +879,7 @@ export async function refreshChannelHandler(request: FastifyRequest, reply: Fast
     const fetchUrl = source === 'wsdeportes' ? 'https://wsdeportes.net/?v=' + slug :
       source === 'tvporinternet2' ? 'https://www.tvporinternet2.com/' + slug + '.html' :
       source === 'cablevisionhd' ? 'https://www.cablevisionhd.com/' + slug + '.php' :
+      source === 'chatytv' ? 'https://www.chatytvgratis.net/' + slug + '/' :
       'https://' + source + '.com/' + slug;
     pushLog(REFRESH_ONE_TYPE, 'URL consultada: ' + fetchUrl);
 

@@ -1144,14 +1144,17 @@ document.getElementById('chProvider').addEventListener('change', function() {
   const optionField = document.getElementById('chOption').parentElement;
   if (provider === 'chatytv') {
     label.textContent = 'Canal';
+    document.getElementById('chParam').placeholder = 'ej: canal-caracol-tv-en-vivo';
     titleField.required = false;
     optionField.style.display = 'none';
   } else if (provider === 'wsdeportes') {
     label.textContent = 'Parámetro (winsports, etc)';
+    document.getElementById('chParam').placeholder = 'ej: winsportsmas&op=2';
     titleField.required = true;
     optionField.style.display = 'none';
   } else {
     label.textContent = 'Slug';
+    document.getElementById('chParam').placeholder = 'ej: fox-sports-en-vivo';
     titleField.required = true;
     optionField.style.display = 'block';
   }
