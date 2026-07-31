@@ -278,7 +278,7 @@ export async function refreshExpiredChannelsHandler(_request: FastifyRequest, re
   pushLog('refreshExpired', `Canales con URL expirada y refreshUrl: ${totalToProcess}`);
 
   const updatedChannels: LiveChannel[] = [];
-  const failedChannels: { id: string; error: string }[] = [];
+  const failedChannels: { id: string; title: string; error: string }[] = [];
   let processed = 0;
 
   for (const ch of channels) {
@@ -291,7 +291,7 @@ export async function refreshExpiredChannelsHandler(_request: FastifyRequest, re
     const source = extractRefreshSource(ch.refreshUrl);
     if (!source) {
       pushLog('refreshExpired', `  ❌ Fuente no detectada en refreshUrl: ${ch.refreshUrl}`);
-      failedChannels.push({ id: ch.id, error: 'Fuente no detectada' });
+      failedChannels.push({ id: ch.id, title: ch.title || ch.id, error: 'Fuente no detectada' });
       processed++;
       updateSyncProgress('refreshExpired', processed, `[${processed}/${totalToProcess}] ${ch.title || ch.id} — fuente no detectada`, totalToProcess);
       continue;
@@ -301,7 +301,7 @@ export async function refreshExpiredChannelsHandler(_request: FastifyRequest, re
     const slug = extractSlugFromUrl(ch.refreshUrl, source);
     if (!slug) {
       pushLog('refreshExpired', `  ❌ No se pudo extraer slug de: ${ch.refreshUrl}`);
-      failedChannels.push({ id: ch.id, error: 'slug inválido' });
+      failedChannels.push({ id: ch.id, title: ch.title || ch.id, error: 'slug inválido' });
       processed++;
       updateSyncProgress('refreshExpired', processed, `[${processed}/${totalToProcess}] ${ch.title || ch.id} — slug inválido`, totalToProcess);
       continue;
@@ -342,14 +342,14 @@ export async function refreshExpiredChannelsHandler(_request: FastifyRequest, re
         } catch (diagErr: any) {
           pushLog('refreshExpired', `  Error extracción manual: ${diagErr.message}`);
         }
-        failedChannels.push({ id: ch.id, error: 'No se obtuvo URL del proveedor' });
+        failedChannels.push({ id: ch.id, title: ch.title || ch.id, error: 'No se obtuvo URL del proveedor' });
         processed++;
         updateSyncProgress('refreshExpired', processed, `[${processed}/${totalToProcess}] ❌ ${ch.title || ch.id} — sin URL`, totalToProcess);
         continue;
       }
     } catch (error: any) {
       pushLog('refreshExpired', `  ❌ Error: ${error.message}`);
-      failedChannels.push({ id: ch.id, error: error.message });
+      failedChannels.push({ id: ch.id, title: ch.title || ch.id, error: error.message });
       processed++;
       updateSyncProgress('refreshExpired', processed, `[${processed}/${totalToProcess}] ❌ ${ch.title || ch.id} — ${error.message}`, totalToProcess);
       continue;
@@ -376,6 +376,10 @@ export async function refreshExpiredChannelsHandler(_request: FastifyRequest, re
       .map(([msg, n]) => `"${msg}" (${n})`)
       .join(', ');
     pushLog('refreshExpired', `⛔ Finalizado con errores: ${count} actualizados, ${failedChannels.length} fallos`);
+    pushLog('refreshExpired', `❌ Canales fallidos (usar id para corregir):`);
+    for (const f of failedChannels) {
+      pushLog('refreshExpired', `  - [${f.id}] ${f.title || f.id}: ${f.error}`);
+    }
     failSync('refreshExpired', `${count} actualizados, ${failedChannels.length} fallos: ${summary}`);
   } else {
     completeSync('refreshExpired', count);
@@ -407,7 +411,7 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
   pushLog('refreshAll', `Canales con refreshUrl: ${totalToProcess}`);
 
   const updatedChannels: LiveChannel[] = [];
-  const failedChannels: { id: string; error: string }[] = [];
+  const failedChannels: { id: string; title: string; error: string }[] = [];
   let processed = 0;
 
   for (const ch of channels) {
@@ -421,7 +425,7 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
     const provedor = (ch.proveedor || extractRefreshSource(ch.refreshUrl)) as string;
     if (provedor !== 'wsdeportes' && provedor !== 'cablevisionhd' && provedor !== 'tvporinternet2') {
       pushLog('refreshAll', `  ❌ Proveedor no soportado: ${provedor || '(none)'}`);
-      failedChannels.push({ id: ch.id, error: `Proveedor no soportado: ${provedor || '(none)'}` });
+      failedChannels.push({ id: ch.id, title: ch.title || ch.id, error: `Proveedor no soportado: ${provedor || '(none)'}` });
       processed++;
       updateSyncProgress('refreshAll', processed, `[${processed}/${totalToProcess}] ${ch.title || ch.id} — proveedor no soportado`, totalToProcess);
       continue;
@@ -432,7 +436,7 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
     const slug = extractSlugFromUrl(ch.refreshUrl, source);
     if (!slug) {
       pushLog('refreshAll', `  ❌ No se pudo extraer slug de refreshUrl`);
-      failedChannels.push({ id: ch.id, error: 'No se pudo extraer slug de refreshUrl' });
+      failedChannels.push({ id: ch.id, title: ch.title || ch.id, error: 'No se pudo extraer slug de refreshUrl' });
       processed++;
       updateSyncProgress('refreshAll', processed, `[${processed}/${totalToProcess}] ${ch.title || ch.id} — slug inválido`, totalToProcess);
       continue;
@@ -475,14 +479,14 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
         } catch (diagErr: any) {
           pushLog('refreshAll', `  Error extracción manual: ${diagErr.message}`);
         }
-        failedChannels.push({ id: ch.id, error: 'No se obtuvo URL del proveedor' });
+        failedChannels.push({ id: ch.id, title: ch.title || ch.id, error: 'No se obtuvo URL del proveedor' });
         processed++;
         updateSyncProgress('refreshAll', processed, `[${processed}/${totalToProcess}] ❌ ${ch.title || ch.id} — sin URL`, totalToProcess);
         continue;
       }
     } catch (error: any) {
       pushLog('refreshAll', `  ❌ Error: ${error.message}`);
-      failedChannels.push({ id: ch.id, error: error.message });
+      failedChannels.push({ id: ch.id, title: ch.title || ch.id, error: error.message });
       processed++;
       updateSyncProgress('refreshAll', processed, `[${processed}/${totalToProcess}] ❌ ${ch.title || ch.id} — ${error.message}`, totalToProcess);
       continue;
@@ -509,6 +513,10 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
       .map(([msg, n]) => `"${msg}" (${n})`)
       .join(', ');
     pushLog('refreshAll', `⛔ Finalizado con errores: ${count} actualizados, ${failedChannels.length} fallos`);
+    pushLog('refreshAll', `❌ Canales fallidos (usar id para corregir):`);
+    for (const f of failedChannels) {
+      pushLog('refreshAll', `  - [${f.id}] ${f.title || f.id}: ${f.error}`);
+    }
     failSync('refreshAll', `${count} actualizados, ${failedChannels.length} fallos: ${summary}`);
   } else {
     pushLog('refreshAll', `✅ Completado: ${count} canales actualizados`);
@@ -680,6 +688,7 @@ export async function getWsDeportesChannelHandler(request: FastifyRequest, reply
     const existing = await loadSyncData();
     const channels = existing?.channels || [];
 
+
     // Buscar si ya existe
     const existingIndex = channels.findIndex((ch) => ch.id === channelData.id);
     if (existingIndex !== -1) {
@@ -704,5 +713,74 @@ export async function getWsDeportesChannelHandler(request: FastifyRequest, reply
     return reply.send({ ok: true, channel: channelData, message: 'Channel added at the beginning of the list' });
   } catch (error) {
     return reply.status(500).send({ error: 'Failed to add channel' });
+  }
+}
+
+const UPDATABLE_CHANNEL_FIELDS = [
+  'country', 'group', 'logo', 'online', 'proveedor', 'refreshUrl', 'refreshOption', 'title', 'type', 'url',
+] as const;
+
+type UpdateableChannelField = typeof UPDATABLE_CHANNEL_FIELDS[number];
+
+export async function updateChannelHandler(request: FastifyRequest, reply: FastifyReply) {
+  const { id } = request.params as any;
+  const body = (request.body || {}) as Record<string, unknown>;
+
+  if (!id || typeof id !== 'string') {
+    return reply.status(400).send({ error: 'Channel id is required' });
+  }
+
+  const updates: Partial<LiveChannel> = {};
+  for (const field of UPDATABLE_CHANNEL_FIELDS) {
+    if (body[field] !== undefined) {
+      (updates as any)[field] = body[field];
+    }
+  }
+
+  if (Object.keys(updates).length === 0) {
+    return reply.status(400).send({
+      error: 'No updatable fields provided',
+      allowedFields: UPDATABLE_CHANNEL_FIELDS,
+    });
+  }
+
+  try {
+    const synced = await loadSyncData();
+    if (!synced || !Array.isArray(synced.channels)) {
+      return reply.status(404).send({ error: 'No sync data found' });
+    }
+
+    const channels = synced.channels;
+    const index = channels.findIndex((ch) => ch.id === id);
+    if (index === -1) {
+      return reply.status(404).send({ error: 'Channel not found', id });
+    }
+
+    const updatedChannel: LiveChannel = {
+      ...channels[index],
+      ...updates,
+      id,
+      type: (updates.type as any) || channels[index].type || 'live',
+      online: updates.online !== undefined ? Boolean(updates.online) : channels[index].online,
+    };
+
+    channels[index] = updatedChannel;
+
+    await saveSyncData({
+      movies: synced.movies || [],
+      series: synced.series || [],
+      channels,
+      popularMovies: synced.popularMovies || [],
+      popularSeries: synced.popularSeries || [],
+      estrenoMovies: synced.estrenoMovies || [],
+      estrenoSeries: synced.estrenoSeries || [],
+      updatedAt: Date.now(),
+    });
+
+    memoryCache.del('live:channels');
+    return reply.send({ ok: true, channel: updatedChannel, message: 'Channel updated' });
+  } catch (error: any) {
+    logger.error({ error: error.message, id }, 'Failed to update channel');
+    return reply.status(500).send({ error: 'Failed to update channel' });
   }
 }
