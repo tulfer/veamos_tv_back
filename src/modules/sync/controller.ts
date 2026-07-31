@@ -11,7 +11,7 @@ import { fetchHTML } from '../../utils/http';
 import { logger } from '../../utils/logger';
 import { memoryCache } from '../../cache/memory';
 import { SyncMovie, SyncSeries, SyncData, LiveChannel } from '../../types';
-import { startSync, completeSync, failSync, updateSyncProgress, getLogs, SyncType } from '../../services/sync-status';
+import { startSync, completeSync, failSync, updateSyncProgress, getLogs, clearLogs, SyncType } from '../../services/sync-status';
 
 interface MigrationStatus {
   running: boolean;
@@ -845,8 +845,16 @@ checkDone();
   return reply.send(logEntries);
 }
 
-function generateCodeEntryPage(): string {
-  return `<!DOCTYPE html>
+export async function clearLogsHandler(request: FastifyRequest, reply: FastifyReply) {
+  const { type } = request.params as { type: string };
+  if (!type) {
+    return reply.status(400).send({ error: 'type is required' });
+  }
+  clearLogs(type);
+  return reply.send({ ok: true, cleared: type });
+}
+
+function generateCodeEntryPage(): string {  return `<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="UTF-8">
@@ -1067,6 +1075,11 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
       ID del canal:
       <input type="text" id="idInput" placeholder="live_winsportsmas&op=2" style="width:100%;padding:.7rem;border-radius:6px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.05);color:#fff;font-size:.95rem;margin-bottom:1rem;margin-top:.4rem">
     </label>
+    <div id="channelPickWrap" style="display:none;margin-bottom:.4rem">
+      <label for="cpChannel">Buscar canal a refrescar:</label>
+      <input type="text" id="cpSearch" placeholder="🔍 Buscar canal por nombre, id o grupo..." oninput="cpFilterChannels()" style="width:100%;padding:.7rem;border-radius:6px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.05);color:#fff;font-size:.95rem;margin-bottom:.5rem">
+      <select id="cpChannel" onchange="cpSelectChannel(this)" style="width:100%;padding:.7rem;border-radius:6px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.05);color:#fff;font-size:.95rem;margin-bottom:.6rem"><option value="">Cargando canales...</option></select>
+    </div>
     <label id="jsonWrap" style="display:none">
       Body (JSON, opcional):
       <textarea id="jsonInput" rows="4" placeholder='{"country":"CO","group":"Canales Deportivos","online":true}' style="width:100%;padding:.7rem;border-radius:6px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.05);color:#fff;font-size:.85rem;margin-bottom:1rem;margin-top:.4rem;font-family:'Courier New',monospace"></textarea>
@@ -1147,6 +1160,11 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
     <div class="add-channel-log" id="chLog">
       <div class="log-empty">Aún no hay ejecuciones</div>
     </div>
+    <div style="margin-top:1rem;display:flex;justify-content:space-between;align-items:center">
+      <strong style="color:#a0a0c0;font-size:.85rem">📜 Log del servidor (URLs de extracción)</strong>
+      <button class="btn btn-secondary btn-sm" onclick="clearAddChannelLog()">🧹 Limpiar</button>
+    </div>
+    <div class="server-log" id="chServerLog"><div class="log-empty">Sin registros aún</div></div>
   </div>
 </div>
 
@@ -1167,6 +1185,11 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
 .log-entry.success{background:rgba(52,211,153,.12);color:#34d399}
 .log-entry.error{background:rgba(248,113,113,.12);color:#f87171}
 .log-empty{color:#555;font-size:.85rem;text-align:center;padding:.5rem}
+.server-log{margin-top:.5rem;background:#0d1117;border-radius:8px;padding:.6rem;max-height:260px;overflow-y:auto;
+  font-family:'Courier New',monospace;font-size:.75rem;color:#7ee787;border:1px solid rgba(255,255,255,.08);line-height:1.5}
+.server-log .line{padding:1px 0;word-break:break-all}
+.server-log .line.e{color:#f87171}
+.server-log .line.ok{color:#34d399}
 </style>
 
 <script>
@@ -1248,6 +1271,33 @@ async function addChannel() {
 }
 
 document.getElementById('chParam').addEventListener('keydown', function(e) { if (e.key === 'Enter') addChannel(); });
+
+// Log del servidor de extracción (urls tomadas por los proveedores)
+let addLogPrevLen = 0;
+async function refreshAddChannelLog() {
+  try {
+    const res = await fetch('/sync/detail/addChannel');
+    if (!res.ok) return;
+    const lines = await res.json();
+    const container = document.getElementById('chServerLog');
+    const hasNew = lines.length !== addLogPrevLen;
+    container.innerHTML = lines.map((line) => {
+      const cls = line.includes('❌') ? 'e' : (line.includes('✅') || line.includes('🔒')) ? 'ok' : '';
+      const html = line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      return '<div class="line' + (cls ? ' ' + cls : '') + '">' + html + '</div>';
+    }).join('') || '<div class="log-empty">Sin registros aún</div>';
+    if (hasNew) container.scrollTop = container.scrollHeight;
+    addLogPrevLen = lines.length;
+  } catch {}
+}
+async function clearAddChannelLog() {
+  try {
+    await fetch('/sync/clear-logs/addChannel', { method: 'POST' });
+    document.getElementById('chServerLog').innerHTML = '<div class="log-empty">Sin registros aún</div>';
+    addLogPrevLen = 0;
+  } catch {}
+}
+setInterval(refreshAddChannelLog, 2000);
 </script>
 
 <script>
@@ -1284,6 +1334,7 @@ function openParamsModal(key, route, label, method, needsId, needsJson) {
   document.getElementById('modalTitle').textContent = 'Parámetros - ' + key;
   document.getElementById('modalLabel').textContent = label;
   document.getElementById('idWrap').style.display = needsId ? 'block' : 'none';
+  document.getElementById('channelPickWrap').style.display = needsId ? 'block' : 'none';
   document.getElementById('jsonWrap').style.display = needsJson ? 'block' : 'none';
   document.getElementById('pagesHint').style.display = !needsId && !needsJson ? 'block' : 'none';
   document.getElementById('pagesInput').style.display = !needsId && !needsJson ? 'block' : 'none';
@@ -1291,6 +1342,11 @@ function openParamsModal(key, route, label, method, needsId, needsJson) {
   document.getElementById('pagesInput').value = '1-20';
   document.getElementById('idInput').value = '';
   document.getElementById('jsonInput').value = '';
+  if (needsId) {
+    document.getElementById('cpSearch').value = '';
+    document.getElementById('cpSearch').placeholder = '🔍 Buscar canal por nombre, id o grupo...';
+    loadChannelPicker();
+  }
   document.getElementById('pagesModal').classList.add('active');
 }
 
@@ -1467,6 +1523,62 @@ function ucBuildOptions(filter) {
 
 function ucFilterChannels() {
   ucBuildOptions(document.getElementById('ucSearch').value);
+}
+
+let cpChannels = [];
+
+function cpBuildOptions(filter) {
+  const sel = document.getElementById('cpChannel');
+  sel.innerHTML = '';
+  const f = (filter || '').trim().toLowerCase();
+  const byGroup = {};
+  for (const ch of cpChannels) {
+    if (f) {
+      const hay = ((ch.title || '') + ' ' + ch.id + ' ' + (ch.group || '')).toLowerCase();
+      if (!hay.includes(f)) continue;
+    }
+    const g = ch.group || 'Sin grupo';
+    (byGroup[g] = byGroup[g] || []).push(ch);
+  }
+  for (const g of Object.keys(byGroup).sort()) {
+    const og = document.createElement('optgroup');
+    og.label = g + ' (' + byGroup[g].length + ')';
+    for (const ch of byGroup[g]) {
+      const opt = document.createElement('option');
+      opt.value = ch.id;
+      opt.textContent = ch.title || ch.id;
+      og.appendChild(opt);
+    }
+    sel.appendChild(og);
+  }
+}
+
+function cpFilterChannels() {
+  cpBuildOptions(document.getElementById('cpSearch').value);
+}
+
+function cpSelectChannel(sel) {
+  if (sel.value) {
+    document.getElementById('idInput').value = sel.value;
+    document.getElementById('cpSearch').value = '';
+    document.getElementById('cpSearch').placeholder = '🔍 Buscar canal por nombre, id o grupo...';
+  }
+}
+
+async function loadChannelPicker() {
+  const sel = document.getElementById('cpChannel');
+  sel.innerHTML = '<option value="">Cargando canales...</option>';
+  sel.disabled = true;
+  try {
+    const res = await fetch('/live/channels?all=true&limit=1000');
+    const data = await res.json();
+    cpChannels = data.items || [];
+    cpBuildOptions('');
+    sel.disabled = false;
+  } catch (e) {
+    sel.innerHTML = '<option value="">Error cargando canales</option>';
+    sel.disabled = false;
+  }
 }
 
 async function openUpdateChannelModal() {

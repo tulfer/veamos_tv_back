@@ -14,6 +14,7 @@ import {
   syncStatusHandler,
   syncCountsHandler,
   syncDetailHandler,
+  clearLogsHandler,
   migrateToFirestoreHandler,
   migrationStatusHandler,
 } from './controller';
@@ -33,6 +34,7 @@ export async function syncRoutes(app: FastifyInstance) {
   app.get('/sync/status', syncStatusHandler);
   app.get('/sync/counts', syncCountsHandler);
   app.get('/sync/detail/:type', syncDetailHandler);
+  app.post('/sync/clear-logs/:type', clearLogsHandler);
   app.post('/sync/migrate-to-firestore', migrateToFirestoreHandler);
   app.get('/sync/migration-status', migrationStatusHandler);
 }

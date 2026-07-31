@@ -116,8 +116,9 @@ export async function getChatytvChannelHandler(request: FastifyRequest, reply: F
   }
 
   try {
-    const result = await getChannelStream('chatytv', channel);
+    const result = await getChannelStream('chatytv', channel, undefined, 'addChannel');
     if (!result) {
+      pushLog('addChannel', `❌ No se pudo agregar: ${channel} (sin stream)`);
       return reply.status(404).send({ error: 'Channel not found or unavailable' });
     }
 
@@ -153,8 +154,10 @@ export async function getChatytvChannelHandler(request: FastifyRequest, reply: F
     });
 
     memoryCache.del('live:channels');
+    pushLog('addChannel', `✅ Canal agregado: ${channelData.id}`);
     return reply.send({ ok: true, channel: channelData, message: 'Channel added at the beginning of the list' });
   } catch (error) {
+    pushLog('addChannel', '❌ Error al agregar canal');
     return reply.status(500).send({ error: 'Failed to add channel' });
   }
 }
@@ -580,7 +583,7 @@ export async function getTvPorInternet2Handler(request: FastifyRequest, reply: F
   }
 
   try {
-    const result = await getChannelStream('tvporinternet2', slug, option || undefined);
+    const result = await getChannelStream('tvporinternet2', slug, option || undefined, 'addChannel');
     if (!result || !result.url) {
       return reply.status(404).send({ error: 'Channel not found or unavailable' });
     }
@@ -625,8 +628,10 @@ export async function getTvPorInternet2Handler(request: FastifyRequest, reply: F
     });
 
     memoryCache.del('live:channels');
+    pushLog('addChannel', `✅ Canal agregado: ${channelData.id}`);
     return reply.send({ ok: true, channel: channelData, message: 'Channel added at the beginning of the list' });
   } catch (error) {
+    pushLog('addChannel', '❌ Error al agregar canal');
     return reply.status(500).send({ error: 'Failed to add channel' });
   }
 }
@@ -644,7 +649,7 @@ export async function getCablevisionHdHandler(request: FastifyRequest, reply: Fa
   }
 
   try {
-    const result = await getChannelStream('cablevisionhd', slug, option || undefined);
+    const result = await getChannelStream('cablevisionhd', slug, option || undefined, 'addChannel');
     if (!result || !result.url) {
       return reply.status(404).send({ error: 'Channel not found or unavailable' });
     }
@@ -689,8 +694,10 @@ export async function getCablevisionHdHandler(request: FastifyRequest, reply: Fa
     });
 
     memoryCache.del('live:channels');
+    pushLog('addChannel', `✅ Canal agregado: ${channelData.id}`);
     return reply.send({ ok: true, channel: channelData, message: 'Channel added at the beginning of the list' });
   } catch (error) {
+    pushLog('addChannel', '❌ Error al agregar canal');
     return reply.status(500).send({ error: 'Failed to add channel' });
   }
 }
@@ -708,7 +715,7 @@ export async function getWsDeportesChannelHandler(request: FastifyRequest, reply
   }
 
   try {
-    const result = await getChannelStream('wsdeportes', parameter);
+    const result = await getChannelStream('wsdeportes', parameter, undefined, 'addChannel');
     if (!result || !result.url) {
       return reply.status(404).send({ error: 'Channel not found or unavailable' });
     }
@@ -753,8 +760,10 @@ export async function getWsDeportesChannelHandler(request: FastifyRequest, reply
     });
 
     memoryCache.del('live:channels');
+    pushLog('addChannel', `✅ Canal agregado: ${channelData.id}`);
     return reply.send({ ok: true, channel: channelData, message: 'Channel added at the beginning of the list' });
   } catch (error) {
+    pushLog('addChannel', '❌ Error al agregar canal');
     return reply.status(500).send({ error: 'Failed to add channel' });
   }
 }

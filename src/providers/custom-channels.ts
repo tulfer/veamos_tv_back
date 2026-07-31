@@ -3,7 +3,16 @@ import { fetchHTML, fetchHTMLWithReferer, httpClient } from '../utils/http';
 import { logger } from '../utils/logger';
 import { memoryCache } from '../cache/memory';
 import { env } from '../config/env';
+import { pushLog } from '../services/sync-status';
 import { LiveChannel } from '../types';
+
+function elog(logType: string | undefined, msg: string): void {
+  if (logType) pushLog(logType, msg);
+}
+
+function isM3u8Url(u: string): boolean {
+  return /\.(?:m3u8|m3u)(?:[?#]|$)/i.test(u);
+}
 
 const CHATYTVGRATIS_BASE = 'https://www.chatytvgratis.net';
 const WSDEPORTES_BASE = 'https://wsdeportes.net';
@@ -22,13 +31,15 @@ function isBlacklistedIframe(src: string): boolean {
   return IFRAME_BLACKLIST.some((word) => lower.includes(word));
 }
 
-export async function getChatytv(channel: string): Promise<LiveChannel | null> {
+export async function getChatytv(channel: string, logType?: string): Promise<LiveChannel | null> {
   const cacheKey = `chatytv:${channel}`;
   const cached = memoryCache.get<LiveChannel>(cacheKey);
   if (cached) return cached;
 
   const url = `${CHATYTVGRATIS_BASE}/${channel}/`;
   logger.info({ channel, url }, 'Fetching channel from chatytvgratis');
+  elog(logType, `=== chatytv: ${channel} ===`);
+  elog(logType, `Consultando: ${url}`);
 
   // 1) Extracción por cadena HTTP (embed.php → menu → opciones) sin navegador
   let extracted: { stream: string; title: string } | null = null;
@@ -49,8 +60,11 @@ export async function getChatytv(channel: string): Promise<LiveChannel | null> {
 
   if (!extracted || !extracted.stream) {
     logger.warn({ channel, url }, 'No valid stream source found on chatytvgratis');
+    elog(logType, '❌ No se encontró stream en chatytv');
     return null;
   }
+
+  elog(logType, `✅ URL final: ${extracted.stream}`);
 
   const result: LiveChannel = {
     id: `live_${channel}`,
@@ -459,7 +473,7 @@ async function tryExtractWsDeportes(parameter: string, url: string): Promise<str
   return streamUrl;
 }
 
-export async function getWsDeportes(parameter: string): Promise<LiveChannel | null> {
+export async function getWsDeportes(parameter: string, logType?: string): Promise<LiveChannel | null> {
   const cacheKey = `wsdeportes:${parameter}`;
   const cached = memoryCache.get<LiveChannel>(cacheKey);
   if (cached) return cached;
@@ -468,6 +482,8 @@ export async function getWsDeportes(parameter: string): Promise<LiveChannel | nu
   try {
     const url = `${WSDEPORTES_BASE}/?v=${parameter}`;
     logger.info({ parameter, url }, 'Fetching channel from wsdeportes with Playwright');
+    elog(logType, `=== wsdeportes: ${parameter} ===`);
+    elog(logType, `Consultando: ${url}`);
 
     const { chromium: playwrightChromium } = await import('playwright');
 browser = await playwrightChromium.launch({ headless: true });
@@ -636,6 +652,7 @@ browser = await playwrightChromium.launch({ headless: true });
     // Verificar la URL del stream y hacer fallback por opciones si no funciona
     if (!streamUrl) {
       logger.warn({ parameter, url }, 'No valid stream source found on wsdeportes');
+      elog(logType, '❌ No se encontró stream en wsdeportes');
       return null;
     }
 
@@ -674,8 +691,10 @@ browser = await playwrightChromium.launch({ headless: true });
 
     if (!verifiedUrl) {
       logger.warn({ parameter, url }, 'No working stream URL found on wsdeportes after trying all ops');
+      elog(logType, '❌ Ninguna URL de stream funcionó en wsdeportes');
       return null;
     }
+    elog(logType, `✅ URL final: ${verifiedUrl}`);
 
     // Extraer título
     const title = $('h1').first().text().trim() ||
@@ -705,34 +724,39 @@ browser = await playwrightChromium.launch({ headless: true });
   }
 }
 
-async function extractTvPorInternet2Http(url: string): Promise<{ streamUrl?: string } | null> {
+async function extractTvPorInternet2Http(url: string, logType?: string): Promise<{ streamUrl?: string; hostPageUrl?: string } | null> {
   try {
     let streamUrl: string | undefined;
     let pageUrl: string = url;
     let lastIframeUrl: string = '';
+    let hostPageUrl: string | undefined;
+    elog(logType, `  [tvporinternet2] URL canal: ${url}`);
     for (let depth = 0; depth < 4 && pageUrl && !streamUrl; depth++) {
       const html = depth === 0 ? await fetchHTML(pageUrl) : await fetchHTMLWithReferer(pageUrl, url);
+      elog(logType, `  Nivel ${depth + 1}: ${pageUrl}`);
       const streamUrlVar = html.match(/STREAM_URL\s*=\s*["']((?:https?:\\\/\\\/|https:\/\/)[^"']+\.(?:m3u8|m3u)[^"']*?)["']/i);
       if (streamUrlVar) {
         streamUrl = streamUrlVar[1].replace(/\\\//g, '/');
-        logger.info({ url: streamUrl.substring(0, 150) }, 'Found STREAM_URL via HTTP fallback for tvporinternet2');
+        hostPageUrl = pageUrl;
+        elog(logType, `  ✅ STREAM_URL en JS: ${streamUrl}`);
         break;
       }
       const escapedM3u8 = html.match(/["']((?:https?:)?\\\/\\\/[^"']+\.(?:m3u8|m3u)[^"']*?)["']/i);
       if (escapedM3u8) {
         streamUrl = escapedM3u8[1].replace(/\\\//g, '/');
         if (!streamUrl.startsWith('http')) streamUrl = 'https:' + streamUrl;
-        logger.info({ url: streamUrl.substring(0, 150) }, 'Found escaped m3u8 via HTTP fallback for tvporinternet2');
+        hostPageUrl = pageUrl;
+        elog(logType, `  ✅ .m3u8 con slashes escapados: ${streamUrl}`);
         break;
       }
       const m3u8 = html.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|m3u)[^\s"'<>]*/i);
-      if (m3u8) { streamUrl = m3u8[0]; logger.info({ url: streamUrl.substring(0, 150) }, 'Found m3u8 via HTTP fallback for tvporinternet2'); break; }
+      if (m3u8) { streamUrl = m3u8[0]; hostPageUrl = pageUrl; elog(logType, `  ✅ .m3u8 nivel ${depth + 1}: ${streamUrl}`); break; }
       const fileMatch = html.match(/file["']?\s*:\s*["']([^"']+)["']/i);
       const srcMatch = html.match(/src["']?\s*:\s*["']([^"']+(?:m3u8|ts|mp4)[^"']*)["']/i);
       const sourceTag = html.match(/<source\s[^>]*src=["']([^"']+)["']/i);
-      if (fileMatch) { streamUrl = fileMatch[1]; logger.info({}, 'Found file: via HTTP fallback'); break; }
-      if (srcMatch) { streamUrl = srcMatch[1]; logger.info({}, 'Found src: via HTTP fallback'); break; }
-      if (sourceTag) { streamUrl = sourceTag[1]; logger.info({}, 'Found source tag via HTTP fallback'); break; }
+      if (fileMatch) { streamUrl = fileMatch[1]; hostPageUrl = pageUrl; elog(logType, `  ✅ file: ${streamUrl}`); break; }
+      if (srcMatch) { streamUrl = srcMatch[1]; hostPageUrl = pageUrl; elog(logType, `  ✅ src: ${streamUrl}`); break; }
+      if (sourceTag) { streamUrl = sourceTag[1]; hostPageUrl = pageUrl; elog(logType, `  ✅ <source>: ${streamUrl}`); break; }
       const iframeSrc = html.match(/<iframe[^>]+(?:name|id)="?player"?[^>]+(?:data-src|src)=["']([^"']+)["']/i)?.[1] ||
                         html.match(/<iframe[^>]+(?:data-src|src)=["']([^"']+(?:player|core|stream|embed|tv))[^"']*["']/i)?.[1] ||
                         html.match(/<iframe[^>]+data-src=["']([^"']+)["']/i)?.[1] ||
@@ -742,19 +766,24 @@ async function extractTvPorInternet2Http(url: string): Promise<{ streamUrl?: str
         lastIframeUrl = iframeSrc.replace(/&amp;/g, '&');
         if (!lastIframeUrl.startsWith('http')) lastIframeUrl = new URL(lastIframeUrl, pageUrl).href;
         pageUrl = lastIframeUrl;
+        elog(logType, `  → iframe: ${lastIframeUrl}`);
       } else {
         pageUrl = '';
       }
     }
-    if (!streamUrl && lastIframeUrl) streamUrl = lastIframeUrl;
-    return { streamUrl };
+    if (!streamUrl && lastIframeUrl) {
+      streamUrl = lastIframeUrl;
+      elog(logType, `  ⚠ Usando URL del último iframe: ${streamUrl}`);
+    }
+    return { streamUrl, hostPageUrl };
   } catch (fallbackErr: any) {
     logger.error({ error: fallbackErr.message }, 'HTTP fallback failed for tvporinternet2');
+    elog(logType, `  ❌ Error extracción HTTP: ${fallbackErr.message}`);
     return null;
   }
 }
 
-export async function getTvPorInternet2(slug: string, option?: string): Promise<LiveChannel | null> {
+export async function getTvPorInternet2(slug: string, option?: string, logType?: string): Promise<LiveChannel | null> {
   const cacheKey = `tvporinternet2:${slug}:${option || 'default'}`;
   const cached = memoryCache.get<LiveChannel>(cacheKey);
   if (cached) return cached;
@@ -763,6 +792,8 @@ export async function getTvPorInternet2(slug: string, option?: string): Promise<
   try {
     const url = `${TVPORINTERNET2_BASE}/${slug}.php`;
     logger.info({ slug, url, option }, 'Fetching channel from tvporinternet2');
+    elog(logType, `=== tvporinternet2: ${slug} ===`);
+    elog(logType, `Consultando: ${url}`);
 
     let playwrightAvailable = true;
     try {
@@ -771,21 +802,30 @@ export async function getTvPorInternet2(slug: string, option?: string): Promise<
     } catch (pwErr: any) {
       playwrightAvailable = false;
       logger.warn({ error: pwErr?.message, slug }, 'Playwright no disponible, usando fallback HTTP');
+      elog(logType, 'Playwright no disponible, usando fallback HTTP');
     }
 
     if (!playwrightAvailable) {
-      const httpResult = await extractTvPorInternet2Http(url);
+      const httpResult = await extractTvPorInternet2Http(url, logType);
       if (!httpResult?.streamUrl) {
         logger.warn({ slug, url }, 'No valid stream source found on tvporinternet2');
+        elog(logType, '❌ No se encontró stream en tvporinternet2');
         return null;
       }
+      let streamUrl = httpResult.streamUrl;
+      const refererUrl = (httpResult.hostPageUrl && httpResult.hostPageUrl.startsWith('http')) ? httpResult.hostPageUrl : url;
+      if (isM3u8Url(streamUrl)) {
+        elog(logType, `🔒 Stream m3u8 directo puede dar 403 → proxy con Referer`);
+        streamUrl = buildStreamProxyUrl(streamUrl, refererUrl);
+      }
+      elog(logType, `✅ URL final: ${streamUrl}`);
       const title = slug.replace(/-/g, ' ').replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
       const result: LiveChannel = {
         id: `live_${slug}`,
         title,
         logo: undefined,
         group: 'Canales TV',
-        url: httpResult.streamUrl,
+        url: streamUrl,
         type: 'live',
         online: true,
         refreshUrl: url,
@@ -801,11 +841,19 @@ export async function getTvPorInternet2(slug: string, option?: string): Promise<
 
     // Interceptar peticiones de red para capturar URLs de streaming
     const capturedUrls: string[] = [];
+    let m3u8HostFrameUrl: string | undefined;
     page.on('request', (request: any) => {
       const reqUrl = request.url();
       if (reqUrl.includes('.m3u8') || reqUrl.includes('.m3u') || reqUrl.includes('.ts') ||
           reqUrl.includes('mywebtv') || reqUrl.includes('tdtcloud') || reqUrl.includes('hls')) {
         capturedUrls.push(reqUrl);
+      }
+      // Guardar la URL del frame que aloja el .m3u8 para usarla como Referer del proxy
+      if (reqUrl.includes('.m3u8') || reqUrl.includes('.m3u')) {
+        const frameUrl = request.frame()?.url?.();
+        if (frameUrl && frameUrl !== 'about:blank' && frameUrl.startsWith('http') && !m3u8HostFrameUrl) {
+          m3u8HostFrameUrl = frameUrl;
+        }
       }
     });
     page.on('response', (response: any) => {
@@ -913,6 +961,7 @@ export async function getTvPorInternet2(slug: string, option?: string): Promise<
       const m3u8Url = capturedUrls.find((u) => u.includes('.m3u8') || u.includes('.m3u'));
       const streamingUrl = capturedUrls.find((u) => u.includes('mywebtv') || u.includes('tdtcloud') || u.includes('hls'));
       streamUrl = m3u8Url || streamingUrl || capturedUrls[0];
+      elog(logType, `✅ URL capturada por red: ${streamUrl}`);
       logger.info({ url: streamUrl.substring(0, 250), total: capturedUrls.length }, 'Using captured network URL');
     }
 
@@ -933,6 +982,7 @@ export async function getTvPorInternet2(slug: string, option?: string): Promise<
 
         if (src.startsWith('http') && src.length > 10 && (hasVideoFeatures || src.includes('embed') || src.includes('player') || src.includes('tv'))) {
           streamUrl = src;
+          elog(logType, `✅ iframe de video: ${src}`);
           logger.info({ src: src.substring(0, 250), allow }, 'Found video iframe');
           break;
         }
@@ -946,6 +996,7 @@ export async function getTvPorInternet2(slug: string, option?: string): Promise<
         if (src && src.startsWith('http') && src.length > 10 && !src.includes('jetpack') &&
             !src.includes('wordpress') && !src.includes('comment') && !src.includes('googleads')) {
           streamUrl = src;
+          elog(logType, `✅ iframe fallback: ${src}`);
           logger.info({ src: src.substring(0, 250) }, 'Found fallback iframe');
           break;
         }
@@ -958,6 +1009,7 @@ export async function getTvPorInternet2(slug: string, option?: string): Promise<
       const m3u8Matches = bodyHtml.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|m3u)[^\s"'<>]*/gi);
       if (m3u8Matches && m3u8Matches.length > 0) {
         streamUrl = m3u8Matches[0];
+        elog(logType, `✅ .m3u8 en HTML: ${streamUrl}`);
         logger.info({ url: streamUrl.substring(0, 250) }, 'Found m3u8 URL in page HTML');
       }
     }
@@ -971,6 +1023,7 @@ export async function getTvPorInternet2(slug: string, option?: string): Promise<
           const urlMatch = content.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|ts|mp4|m3u)[^\s"'<>]*/i);
           if (urlMatch) {
             streamUrl = urlMatch[0];
+            elog(logType, `✅ URL en script: ${streamUrl}`);
             logger.info({ url: streamUrl.substring(0, 250) }, 'Found stream URL in script');
             break;
           }
@@ -979,17 +1032,26 @@ export async function getTvPorInternet2(slug: string, option?: string): Promise<
     }
 
     if (!streamUrl) {
-      const httpResult = await extractTvPorInternet2Http(url);
+      const httpResult = await extractTvPorInternet2Http(url, logType);
       if (httpResult?.streamUrl) {
         streamUrl = httpResult.streamUrl;
       } else {
         logger.warn({ slug, url }, 'No valid stream source found on tvporinternet2');
+        elog(logType, '❌ No se encontró stream en tvporinternet2');
         return null;
       }
       if (!await verifyStreamUrl(streamUrl)) {
         logger.warn({ url: streamUrl.substring(0, 120) }, 'Tvporinternet2 stream URL failed HEAD check, returning anyway');
       }
     }
+
+    // tvporinternet2 protege sus .m3u8 con Referer: si el stream es un m3u8, servirlo por el proxy
+    if (streamUrl && isM3u8Url(streamUrl)) {
+      const refererUrl = (m3u8HostFrameUrl && m3u8HostFrameUrl.startsWith('http')) ? m3u8HostFrameUrl : url;
+      elog(logType, `🔒 Stream m3u8 directo puede dar 403 → proxy con Referer: ${refererUrl}`);
+      streamUrl = buildStreamProxyUrl(streamUrl, refererUrl);
+    }
+    elog(logType, `✅ URL final: ${streamUrl}`);
 
     // Extraer título (opcional, se usará el del body)
     const title = $('h1').first().text().trim() ||
@@ -1029,19 +1091,22 @@ function buildStreamProxyUrl(streamUrl: string, referer?: string): string {
   return `${base}/proxy/stream?${params.toString()}`;
 }
 
-async function extractCablevisionHdHttp(url: string): Promise<{ streamUrl?: string; m3u8HostFrameUrl?: string } | null> {
+async function extractCablevisionHdHttp(url: string, logType?: string): Promise<{ streamUrl?: string; m3u8HostFrameUrl?: string } | null> {
   try {
     let streamUrl: string | undefined;
     let m3u8HostFrameUrl: string | undefined;
     let pageUrl: string = url;
     let lastIframeUrl: string = '';
     let fallbackHostUrl: string | undefined;
+    elog(logType, `  [cablevisionhd] URL canal: ${url}`);
     for (let depth = 0; depth < 4 && pageUrl && !streamUrl; depth++) {
       const html = depth === 0 ? await fetchHTML(pageUrl) : await fetchHTMLWithReferer(pageUrl, url);
+      elog(logType, `  Nivel ${depth + 1}: ${pageUrl}`);
       const streamUrlVar = html.match(/STREAM_URL\s*=\s*["']((?:https?:\\\/\\\/|https:\/\/)[^"']+\.(?:m3u8|m3u)[^"']*?)["']/i);
       if (streamUrlVar) {
         streamUrl = streamUrlVar[1].replace(/\\\//g, '/');
         fallbackHostUrl = pageUrl;
+        elog(logType, `  ✅ STREAM_URL en JS: ${streamUrl}`);
         logger.info({ url: streamUrl.substring(0, 150) }, 'Found STREAM_URL via HTTP fallback for cablevisionhd');
         break;
       }
@@ -1050,17 +1115,18 @@ async function extractCablevisionHdHttp(url: string): Promise<{ streamUrl?: stri
         streamUrl = escapedM3u8[1].replace(/\\\//g, '/');
         if (!streamUrl.startsWith('http')) streamUrl = 'https:' + streamUrl;
         fallbackHostUrl = pageUrl;
+        elog(logType, `  ✅ .m3u8 escapado: ${streamUrl}`);
         logger.info({ url: streamUrl.substring(0, 150) }, 'Found escaped m3u8 via HTTP fallback for cablevisionhd');
         break;
       }
       const m3u8 = html.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|m3u)[^\s"'<>]*/i);
-      if (m3u8) { streamUrl = m3u8[0]; fallbackHostUrl = pageUrl; logger.info({ url: streamUrl.substring(0, 150) }, 'Found m3u8 via HTTP fallback for cablevisionhd'); break; }
+      if (m3u8) { streamUrl = m3u8[0]; fallbackHostUrl = pageUrl; elog(logType, `  ✅ .m3u8 nivel ${depth + 1}: ${streamUrl}`); logger.info({ url: streamUrl.substring(0, 150) }, 'Found m3u8 via HTTP fallback for cablevisionhd'); break; }
       const fileMatch = html.match(/file["']?\s*:\s*["']([^"']+)["']/i);
       const srcMatch = html.match(/src["']?\s*:\s*["']([^"']+(?:m3u8|ts|mp4)[^"']*)["']/i);
       const sourceTag = html.match(/<source\s[^>]*src=["']([^"']+)["']/i);
-      if (fileMatch) { streamUrl = fileMatch[1]; fallbackHostUrl = pageUrl; logger.info({}, 'Found file: via HTTP fallback'); break; }
-      if (srcMatch) { streamUrl = srcMatch[1]; fallbackHostUrl = pageUrl; logger.info({}, 'Found src: via HTTP fallback'); break; }
-      if (sourceTag) { streamUrl = sourceTag[1]; fallbackHostUrl = pageUrl; logger.info({}, 'Found source tag via HTTP fallback'); break; }
+      if (fileMatch) { streamUrl = fileMatch[1]; fallbackHostUrl = pageUrl; elog(logType, `  ✅ file: ${streamUrl}`); logger.info({}, 'Found file: via HTTP fallback'); break; }
+      if (srcMatch) { streamUrl = srcMatch[1]; fallbackHostUrl = pageUrl; elog(logType, `  ✅ src: ${streamUrl}`); logger.info({}, 'Found src: via HTTP fallback'); break; }
+      if (sourceTag) { streamUrl = sourceTag[1]; fallbackHostUrl = pageUrl; elog(logType, `  ✅ <source>: ${streamUrl}`); logger.info({}, 'Found source tag via HTTP fallback'); break; }
       const iframeSrc = html.match(/<iframe[^>]+(?:name|id)="?player"?[^>]+(?:data-src|src)=["']([^"']+)["']/i)?.[1] ||
                         html.match(/<iframe[^>]+(?:data-src|src)=["']([^"']+(?:player|core|stream|embed|tv))[^"']*["']/i)?.[1] ||
                         html.match(/<iframe[^>]+data-src=["']([^"']+)["']/i)?.[1] ||
@@ -1070,20 +1136,25 @@ async function extractCablevisionHdHttp(url: string): Promise<{ streamUrl?: stri
         lastIframeUrl = iframeSrc.replace(/&amp;/g, '&');
         if (!lastIframeUrl.startsWith('http')) lastIframeUrl = new URL(lastIframeUrl, pageUrl).href;
         pageUrl = lastIframeUrl;
+        elog(logType, `  → iframe: ${lastIframeUrl}`);
       } else {
         pageUrl = '';
       }
     }
-    if (!streamUrl && lastIframeUrl) streamUrl = lastIframeUrl;
+    if (!streamUrl && lastIframeUrl) {
+      streamUrl = lastIframeUrl;
+      elog(logType, `  ⚠ Usando URL del último iframe: ${streamUrl}`);
+    }
     if (streamUrl && !m3u8HostFrameUrl) m3u8HostFrameUrl = fallbackHostUrl;
     return { streamUrl, m3u8HostFrameUrl };
   } catch (fallbackErr: any) {
     logger.error({ error: fallbackErr.message }, 'HTTP fallback failed for cablevisionhd');
+    elog(logType, `  ❌ Error extracción HTTP: ${fallbackErr.message}`);
     return null;
   }
 }
 
-export async function getCablevisionHd(slug: string, option?: string): Promise<LiveChannel | null> {
+export async function getCablevisionHd(slug: string, option?: string, logType?: string): Promise<LiveChannel | null> {
   const cacheKey = `cablevisionhd:${slug}:${option || 'default'}`;
   const cached = memoryCache.get<LiveChannel>(cacheKey);
   if (cached) return cached;
@@ -1092,6 +1163,8 @@ export async function getCablevisionHd(slug: string, option?: string): Promise<L
   try {
     const url = `${CABLEVISIONHD_BASE}/${slug}.php`;
     logger.info({ slug, url, option }, 'Fetching channel from cablevisionhd');
+    elog(logType, `=== cablevisionhd: ${slug} ===`);
+    elog(logType, `Consultando: ${url}`);
 
     let playwrightAvailable = true;
     try {
@@ -1100,15 +1173,18 @@ export async function getCablevisionHd(slug: string, option?: string): Promise<L
     } catch (pwErr: any) {
       playwrightAvailable = false;
       logger.warn({ error: pwErr?.message, slug }, 'Playwright no disponible, usando fallback HTTP');
+      elog(logType, 'Playwright no disponible, usando fallback HTTP');
     }
 
     if (!playwrightAvailable) {
-      const httpResult = await extractCablevisionHdHttp(url);
+      const httpResult = await extractCablevisionHdHttp(url, logType);
       if (!httpResult?.streamUrl) {
         logger.warn({ slug, url }, 'No valid stream source found on cablevisionhd');
+        elog(logType, '❌ No se encontró stream en cablevisionhd');
         return null;
       }
       const proxyUrl = buildStreamProxyUrl(httpResult.streamUrl, httpResult.m3u8HostFrameUrl || url);
+      elog(logType, `✅ URL final: ${proxyUrl}`);
       const result: LiveChannel = {
         id: `live_${slug}`,
         title: slug.replace(/-/g, ' ').replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase()),
@@ -1332,12 +1408,13 @@ export async function getCablevisionHd(slug: string, option?: string): Promise<L
     }
 
     if (!streamUrl) {
-      const httpResult = await extractCablevisionHdHttp(url);
+      const httpResult = await extractCablevisionHdHttp(url, logType);
       if (httpResult?.streamUrl) {
         streamUrl = httpResult.streamUrl;
         m3u8HostFrameUrl = httpResult.m3u8HostFrameUrl;
       } else {
         logger.warn({ slug, url }, 'No valid stream source found on cablevisionhd');
+        elog(logType, '❌ No se encontró stream en cablevisionhd');
         return null;
       }
     }
@@ -1347,9 +1424,11 @@ export async function getCablevisionHd(slug: string, option?: string): Promise<L
     if (streamUrl) {
       const refererUrl = (m3u8HostFrameUrl && m3u8HostFrameUrl.startsWith('http')) ? m3u8HostFrameUrl : url;
       const proxyUrl = buildStreamProxyUrl(streamUrl, refererUrl);
+      elog(logType, `🔒 Stream m3u8 directo puede dar 403 → proxy con Referer: ${refererUrl}`);
       logger.info({ from: streamUrl.substring(0, 150), to: proxyUrl.substring(0, 200) }, 'cablevisionhd: usando proxy de streaming con Referer');
       streamUrl = proxyUrl;
     }
+    elog(logType, `✅ URL final: ${streamUrl}`);
 
     // Extraer título (opcional)
     const title = $('h1').first().text().trim() ||
@@ -1379,15 +1458,15 @@ export async function getCablevisionHd(slug: string, option?: string): Promise<L
   }
 }
 
-export async function getChannelStream(source: 'chatytv' | 'wsdeportes' | 'tvporinternet2' | 'cablevisionhd', parameter: string, option?: string): Promise<LiveChannel | null> {
+export async function getChannelStream(source: 'chatytv' | 'wsdeportes' | 'tvporinternet2' | 'cablevisionhd', parameter: string, option?: string, logType?: string): Promise<LiveChannel | null> {
   if (source === 'chatytv') {
-    return getChatytv(parameter);
+    return getChatytv(parameter, logType);
   } else if (source === 'wsdeportes') {
-    return getWsDeportes(parameter);
+    return getWsDeportes(parameter, logType);
   } else if (source === 'tvporinternet2') {
-    return getTvPorInternet2(parameter, option);
+    return getTvPorInternet2(parameter, option, logType);
   } else if (source === 'cablevisionhd') {
-    return getCablevisionHd(parameter, option);
+    return getCablevisionHd(parameter, option, logType);
   }
   return null;
 }
