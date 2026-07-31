@@ -1,5 +1,5 @@
 import * as cheerio from 'cheerio';
-import { fetchHTML, fetchHTMLWithReferer } from '../utils/http';
+import { fetchHTML, fetchHTMLWithReferer, httpClient } from '../utils/http';
 import { logger } from '../utils/logger';
 import { memoryCache } from '../cache/memory';
 import { LiveChannel } from '../types';
@@ -243,6 +243,49 @@ browser = await playwrightChromium.launch({ headless: true });
   }
 }
 
+async function verifyStreamUrl(testUrl: string): Promise<boolean> {
+  try {
+    const res = await httpClient.head(testUrl, { timeout: 10000 });
+    return res.status === 200;
+  } catch {
+    return false;
+  }
+}
+
+async function tryExtractWsDeportes(parameter: string, url: string): Promise<string | null> {
+  let streamUrl: string | null = null;
+  try {
+    let pageUrl: string = url;
+    let lastIframeUrl: string = '';
+    for (let depth = 0; depth < 3 && pageUrl && !streamUrl; depth++) {
+      const html = depth === 0 ? await fetchHTML(pageUrl) : await fetchHTMLWithReferer(pageUrl, url);
+      const streamUrlVar = html.match(/STREAM_URL\s*=\s*["']((?:https?:\\\/\\\/|https:\/\/)[^"']+\.(?:m3u8|m3u)[^"']*?)["']/i);
+      if (streamUrlVar) { streamUrl = streamUrlVar[1].replace(/\\\//g, '/'); break; }
+      const escapedM3u8 = html.match(/["']((?:https?:)?\\\/\\\/[^"']+\.(?:m3u8|m3u)[^"']*?)["']/i);
+      if (escapedM3u8) {
+        streamUrl = escapedM3u8[1].replace(/\\\//g, '/');
+        if (!streamUrl.startsWith('http')) streamUrl = 'https:' + streamUrl;
+        break;
+      }
+      const m3u8 = html.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|m3u)[^\s"'<>]*/i);
+      if (m3u8) { streamUrl = m3u8[0]; break; }
+      const iframeSrc = html.match(/<iframe[^>]+(?:data-src|src)=["']([^"']+(?:player|core|stream|embed|tv))[^"']*["']/i)?.[1] ||
+                        html.match(/<iframe[^>]+data-src=["']([^"']+)["']/i)?.[1];
+      if (iframeSrc) {
+        lastIframeUrl = iframeSrc.replace(/&amp;/g, '&');
+        if (!lastIframeUrl.startsWith('http')) lastIframeUrl = new URL(lastIframeUrl, pageUrl).href;
+        pageUrl = lastIframeUrl;
+      } else {
+        pageUrl = '';
+      }
+    }
+    if (!streamUrl && lastIframeUrl) streamUrl = lastIframeUrl;
+  } catch (e: any) {
+    logger.error({ error: e.message, parameter }, 'HTTP extract failed for wsdeportes');
+  }
+  return streamUrl;
+}
+
 export async function getWsDeportes(parameter: string): Promise<LiveChannel | null> {
   const cacheKey = `wsdeportes:${parameter}`;
   const cached = memoryCache.get<LiveChannel>(cacheKey);
@@ -414,44 +457,51 @@ browser = await playwrightChromium.launch({ headless: true });
 
     if (!streamUrl) {
       logger.warn({ parameter, url, capturedUrls }, 'No valid stream source found on wsdeportes via Playwright, trying HTTP fallback');
-      try {
-        let pageUrl: string = url;
-        let lastIframeUrl: string = '';
-        for (let depth = 0; depth < 3 && pageUrl && !streamUrl; depth++) {
-          const html = depth === 0 ? await fetchHTML(pageUrl) : await fetchHTMLWithReferer(pageUrl, url);
-          const streamUrlVar = html.match(/STREAM_URL\s*=\s*["']((?:https?:\\\/\\\/|https:\/\/)[^"']+\.(?:m3u8|m3u)[^"']*?)["']/i);
-          if (streamUrlVar) {
-            streamUrl = streamUrlVar[1].replace(/\\\//g, '/');
-            logger.info({ url: streamUrl.substring(0, 150) }, 'Found STREAM_URL via HTTP fallback');
+      streamUrl = await tryExtractWsDeportes(parameter, url);
+    }
+
+    // Verificar la URL del stream y hacer fallback por opciones si no funciona
+    if (!streamUrl) {
+      logger.warn({ parameter, url }, 'No valid stream source found on wsdeportes');
+      return null;
+    }
+
+    const opMatch = parameter.match(/^(.*?)&op=(\d+)$/);
+    const baseSlug = opMatch ? opMatch[1] : null;
+    const currentOp = opMatch ? parseInt(opMatch[2]) : 0;
+    let verifiedUrl: string | null = null;
+
+    if (baseSlug && currentOp > 0) {
+      const opsToTry = [currentOp, 1, 3].filter((v, i, a) => a.indexOf(v) === i); // current first, then 1, 3
+      for (const op of opsToTry) {
+        if (op === currentOp) {
+          if (await verifyStreamUrl(streamUrl)) {
+            verifiedUrl = streamUrl;
+            logger.info({ op, url: streamUrl.substring(0, 120) }, 'Stream URL verified OK');
             break;
           }
-          const escapedM3u8 = html.match(/["']((?:https?:)?\\\/\\\/[^"']+\.(?:m3u8|m3u)[^"']*?)["']/i);
-          if (escapedM3u8) {
-            streamUrl = escapedM3u8[1].replace(/\\\//g, '/');
-            if (!streamUrl.startsWith('http')) streamUrl = 'https:' + streamUrl;
-            logger.info({ url: streamUrl.substring(0, 150) }, 'Found escaped m3u8 via HTTP fallback');
+          logger.warn({ op, url: streamUrl.substring(0, 120) }, 'Stream URL failed, trying next op');
+        } else {
+          const newParam = baseSlug + (op !== 1 ? `&op=${op}` : '');
+          const newUrl = `${WSDEPORTES_BASE}/?v=${newParam}`;
+          logger.info({ op, url: newUrl }, 'Trying alternative op via HTTP extraction');
+          const extracted = await tryExtractWsDeportes(newParam, newUrl);
+          if (extracted && await verifyStreamUrl(extracted)) {
+            verifiedUrl = extracted;
+            logger.info({ op, url: extracted.substring(0, 120) }, 'Alternative op stream URL verified OK');
             break;
-          }
-          const m3u8 = html.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|m3u)[^\s"'<>]*/i);
-          if (m3u8) { streamUrl = m3u8[0]; logger.info({ url: streamUrl.substring(0, 150) }, 'Found m3u8 via HTTP fallback'); break; }
-          const iframeSrc = html.match(/<iframe[^>]+(?:data-src|src)=["']([^"']+(?:player|core|stream|embed|tv))[^"']*["']/i)?.[1] ||
-                            html.match(/<iframe[^>]+data-src=["']([^"']+)["']/i)?.[1];
-          if (iframeSrc) {
-            lastIframeUrl = iframeSrc.replace(/&amp;/g, '&');
-            if (!lastIframeUrl.startsWith('http')) lastIframeUrl = new URL(lastIframeUrl, pageUrl).href;
-            pageUrl = lastIframeUrl;
-          } else {
-            pageUrl = '';
           }
         }
-        if (!streamUrl && lastIframeUrl) streamUrl = lastIframeUrl;
-      } catch (fallbackErr: any) {
-        logger.error({ error: fallbackErr.message }, 'HTTP fallback failed for wsdeportes');
       }
-      if (!streamUrl) {
-        logger.warn({ parameter, url }, 'No valid stream source found on wsdeportes');
-        return null;
+    } else {
+      if (await verifyStreamUrl(streamUrl)) {
+        verifiedUrl = streamUrl;
       }
+    }
+
+    if (!verifiedUrl) {
+      logger.warn({ parameter, url }, 'No working stream URL found on wsdeportes after trying all ops');
+      return null;
     }
 
     // Extraer título
@@ -464,7 +514,7 @@ browser = await playwrightChromium.launch({ headless: true });
       title: title || parameter,
       logo: undefined,
       group: 'Canales Deportivos',
-      url: streamUrl,
+      url: verifiedUrl,
       type: 'live',
       online: true,
       refreshUrl: url,
@@ -726,6 +776,9 @@ browser = await playwrightChromium.launch({ headless: true });
       if (!streamUrl) {
         logger.warn({ slug, url }, 'No valid stream source found on tvporinternet2');
         return null;
+      }
+      if (!await verifyStreamUrl(streamUrl)) {
+        logger.warn({ url: streamUrl.substring(0, 120) }, 'Tvporinternet2 stream URL failed HEAD check, returning anyway');
       }
     }
 
@@ -1019,6 +1072,10 @@ browser = await playwrightChromium.launch({ headless: true });
       if (!streamUrl) {
         logger.warn({ slug, url }, 'No valid stream source found on cablevisionhd');
         return null;
+      }
+      // Verify the stream URL works
+      if (!await verifyStreamUrl(streamUrl)) {
+        logger.warn({ url: streamUrl.substring(0, 120) }, 'Cablevisionhd stream URL failed HEAD check, returning anyway');
       }
     }
 
