@@ -12,9 +12,10 @@ const CACHE_KEY = 'live:channels';
 const PAGE_SIZE = 10;
 
 export async function getChannelsHandler(request: FastifyRequest, reply: FastifyReply) {
-  const { group, country, all, page = '1' } = request.query as any;
+  const { group, country, all, page = '1', limit } = request.query as any;
   const pageNum = parseInt(page) || 1;
   const showAll = all === 'true' || all === '1';
+  const pageSize = limit ? (parseInt(limit) || PAGE_SIZE) : PAGE_SIZE;
 
   const synced = await loadSyncData();
   const syncedChannels = synced?.channels;
@@ -42,9 +43,9 @@ export async function getChannelsHandler(request: FastifyRequest, reply: Fastify
   }
 
   const total = channels.length;
-  const totalPages = Math.ceil(total / PAGE_SIZE) || 1;
-  const start = (pageNum - 1) * PAGE_SIZE;
-  const items = channels.slice(start, start + PAGE_SIZE);
+  const totalPages = Math.ceil(total / pageSize) || 1;
+  const start = (pageNum - 1) * pageSize;
+  const items = channels.slice(start, start + pageSize);
 
   return reply.send({
     page: pageNum,

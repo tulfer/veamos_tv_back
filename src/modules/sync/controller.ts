@@ -1007,6 +1007,17 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
 .modal input[type=text]{width:100%;padding:.7rem;border-radius:6px;border:1px solid rgba(255,255,255,.15);
   background:rgba(255,255,255,.05);color:#fff;font-size:.95rem;margin-bottom:1rem}
 .modal input[type=text]:focus{outline:none;border-color:#667eea}
+.modal select{width:100%;padding:.7rem;border-radius:6px;border:1px solid rgba(255,255,255,.15);
+  background:rgba(255,255,255,.05);color:#fff;font-size:.95rem;margin-bottom:1rem}
+.modal select option{background:#1e1b4b;color:#fff}
+.uc-field-row{display:flex;gap:.5rem;margin-bottom:.6rem;align-items:center}
+.uc-field-row select{flex:0 0 150px;margin-bottom:0;padding:.5rem}
+.uc-field-row .uc-field-value{flex:1;padding:.5rem;border-radius:6px;border:1px solid rgba(255,255,255,.15);
+  background:rgba(255,255,255,.05);color:#fff;font-size:.9rem}
+.uc-field-row .uc-field-value:focus{outline:none;border-color:#667eea}
+.modal-actions{margin-top:.5rem}
+.modal-actions .btn-sm{padding:.35rem .7rem;font-size:.8rem}
+#ucChannelInfo{margin-top:-.6rem;margin-bottom:.6rem}
 .modal-actions{display:flex;gap:.7rem;margin-top:.5rem}
 .form-hint{font-size:.8rem;color:#888;margin-top:-.5rem;margin-bottom:.8rem}
 </style>
@@ -1062,6 +1073,25 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
     <div class="modal-actions">
       <button class="btn btn-primary" onclick="confirmPagesSync()">✅ Ejecutar</button>
       <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal para Actualizar Canal -->
+<div class="modal-overlay" id="ucModal">
+  <div class="modal" style="max-width:560px">
+    <h2>Actualizar Canal</h2>
+    <label for="ucChannel">Canal a actualizar:</label>
+    <select id="ucChannel"><option value="">Cargando canales...</option></select>
+    <div id="ucChannelInfo" class="form-hint" style="display:none"></div>
+    <label>Campos a actualizar:</label>
+    <div id="ucFields"></div>
+    <div class="modal-actions" style="margin-top:.7rem">
+      <button class="btn btn-secondary btn-sm" onclick="addChannelFieldRow()">➕ Agregar campo</button>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" id="ucSaveBtn" onclick="confirmUpdateChannel()">✅ Guardar</button>
+      <button class="btn btn-secondary" onclick="closeUpdateChannelModal()">Cancelar</button>
     </div>
   </div>
 </div>
@@ -1221,6 +1251,10 @@ let pendingMethod = '';
 let pendingParamType = '';
 
 async function runSync(key, route, method, paramType) {
+  if (key === 'updateChannel') {
+    openUpdateChannelModal();
+    return;
+  }
   if (paramType === 'pages') {
     openParamsModal(key, route, 'Páginas (ej: 1-20 o 1,3,5):', method, false, false);
     return;
@@ -1326,7 +1360,157 @@ function closeModal() {
 }
 
 function showParamsModal(key, route, label, method, needsId, needsJson) {
+  if (key === 'updateChannel') {
+    openUpdateChannelModal();
+    return;
+  }
   openParamsModal(key, route, 'Parámetros - ' + label, method, needsId === '1', needsJson === '1');
+}
+
+// ---------- Actualizar Canal (multi-campo) ----------
+let ucChannels = [];
+
+const UC_FIELD_OPTIONS = [
+  ['', '— campo —'],
+  ['title', 'Título'],
+  ['logo', 'Logo'],
+  ['group', 'Grupo'],
+  ['country', 'País'],
+  ['url', 'URL'],
+  ['type', 'Tipo'],
+  ['online', 'Online (bool)'],
+  ['proveedor', 'Proveedor'],
+  ['refreshUrl', 'Refresh URL'],
+  ['refreshOption', 'Refresh Opción'],
+];
+
+function ucFieldRowHtml() {
+  const options = UC_FIELD_OPTIONS.map(([v, l]) => '<option value="' + v + '">' + l + '</option>').join('');
+  return '<div class="uc-field-row">' +
+    '<select class="uc-field-select" onchange="onFieldChange(this)">' + options + '</select>' +
+    '<input type="text" class="uc-field-value" placeholder="Valor">' +
+    '<button type="button" class="btn btn-secondary btn-sm" onclick="removeChannelFieldRow(this)">✕</button>' +
+  '</div>';
+}
+
+function addChannelFieldRow() {
+  document.getElementById('ucFields').insertAdjacentHTML('beforeend', ucFieldRowHtml());
+}
+
+function removeChannelFieldRow(btn) {
+  btn.closest('.uc-field-row').remove();
+}
+
+function onFieldChange(sel) {
+  const row = sel.closest('.uc-field-row');
+  const valWrap = row.querySelector('.uc-field-value');
+  if (sel.value === 'online') {
+    if (valWrap.tagName === 'SELECT') return;
+    const s = document.createElement('select');
+    s.className = 'uc-field-value';
+    s.innerHTML = '<option value="true">true</option><option value="false">false</option>';
+    valWrap.replaceWith(s);
+  } else {
+    if (valWrap.tagName === 'INPUT') return;
+    const inp = document.createElement('input');
+    inp.type = 'text';
+    inp.className = 'uc-field-value';
+    inp.placeholder = 'Valor';
+    valWrap.replaceWith(inp);
+  }
+}
+
+function showUcChannelInfo() {
+  const sel = document.getElementById('ucChannel');
+  const ch = ucChannels.find((c) => c.id === sel.value);
+  const info = document.getElementById('ucChannelInfo');
+  if (ch) {
+    info.style.display = 'block';
+    info.textContent = 'Grupo: ' + (ch.group || '—') + ' | País: ' + (ch.country || '—') + ' | Proveedor: ' + (ch.proveedor || '—') + ' | Online: ' + (ch.online ? 'sí' : 'no');
+  } else {
+    info.style.display = 'none';
+  }
+}
+
+async function openUpdateChannelModal() {
+  document.getElementById('ucFields').innerHTML = '';
+  addChannelFieldRow();
+  document.getElementById('ucModal').classList.add('active');
+
+  const sel = document.getElementById('ucChannel');
+  sel.innerHTML = '<option value="">Cargando canales...</option>';
+  sel.disabled = true;
+  try {
+    const res = await fetch('/live/channels?all=true&limit=1000');
+    const data = await res.json();
+    ucChannels = data.items || [];
+    const byGroup = {};
+    for (const ch of ucChannels) {
+      const g = ch.group || 'Sin grupo';
+      (byGroup[g] = byGroup[g] || []).push(ch);
+    }
+    sel.innerHTML = '';
+    for (const g of Object.keys(byGroup).sort()) {
+      const og = document.createElement('optgroup');
+      og.label = g;
+      for (const ch of byGroup[g]) {
+        const opt = document.createElement('option');
+        opt.value = ch.id;
+        opt.textContent = ch.title || ch.id;
+        og.appendChild(opt);
+      }
+      sel.appendChild(og);
+    }
+    sel.disabled = false;
+    sel.onchange = showUcChannelInfo;
+    showUcChannelInfo();
+  } catch (e) {
+    sel.innerHTML = '<option value="">Error cargando canales</option>';
+    sel.disabled = false;
+  }
+}
+
+function closeUpdateChannelModal() {
+  document.getElementById('ucModal').classList.remove('active');
+}
+
+async function confirmUpdateChannel() {
+  const id = document.getElementById('ucChannel').value;
+  if (!id) { alert('Selecciona un canal'); return; }
+
+  const body = {};
+  const rows = document.querySelectorAll('#ucFields .uc-field-row');
+  let hasFields = false;
+  for (const row of rows) {
+    const field = row.querySelector('.uc-field-select').value;
+    if (!field) continue;
+    let value = row.querySelector('.uc-field-value').value;
+    if (field === 'online') value = value === 'true';
+    body[field] = value;
+    hasFields = true;
+  }
+  if (!hasFields) { alert('Agrega al menos un campo'); return; }
+
+  const btn = document.getElementById('ucSaveBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Guardando...'; }
+  try {
+    const res = await fetch('/live/channels/' + encodeURIComponent(id), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      alert('✅ Canal actualizado: ' + (data.channel?.title || id));
+      closeUpdateChannelModal();
+    } else {
+      alert('❌ ' + (data.error || 'Error') + (data.allowedFields ? '\nCampos permitidos: ' + data.allowedFields.join(', ') : ''));
+    }
+  } catch (e) {
+    alert('Error de red');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '✅ Guardar'; }
+  }
 }
 
 // Fetch database counts and update cards
