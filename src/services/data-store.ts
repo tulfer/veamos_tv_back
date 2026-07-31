@@ -17,6 +17,22 @@ async function getCollectionAsArray<T>(colRef: admin.firestore.CollectionReferen
   });
 }
 
+function stripUndefined<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.filter((item) => item !== undefined).map((item) => stripUndefined(item)) as unknown as T;
+  }
+  if (value !== null && typeof value === 'object') {
+    const clean: Record<string, unknown> = {};
+    for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
+      if (v !== undefined) {
+        clean[key] = stripUndefined(v);
+      }
+    }
+    return clean as unknown as T;
+  }
+  return value;
+}
+
 async function replaceCollection<T extends { id: string }>(
   colRef: admin.firestore.CollectionReference,
   items: T[],
@@ -28,7 +44,7 @@ async function replaceCollection<T extends { id: string }>(
     ...existing.docs.map((doc) => ({ ref: doc.ref, type: 'delete' as const })),
     ...items.map((item) => {
       const { id, ...data } = item;
-      return { ref: colRef.doc(id), type: 'set' as const, data };
+      return { ref: colRef.doc(id), type: 'set' as const, data: stripUndefined(data) };
     }),
   ];
 

@@ -1001,7 +1001,10 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
   background:rgba(0,0,0,.7);z-index:1000;align-items:center;justify-content:center}
 .modal-overlay.active{display:flex}
 .modal{background:#1e1b4b;border-radius:12px;padding:2rem;width:90%;max-width:420px;
-  border:1px solid rgba(255,255,255,.1)}
+  border:1px solid rgba(255,255,255,.1);position:relative}
+.modal-close{position:absolute;top:.6rem;right:.6rem;background:none;border:none;color:#aaa;
+  font-size:1.2rem;cursor:pointer;padding:.3rem .55rem;border-radius:6px}
+.modal-close:hover{background:rgba(255,255,255,.1);color:#fff}
 .modal h2{margin-bottom:1rem;font-size:1.2rem}
 .modal label{display:block;margin-bottom:.5rem;color:#aaa;font-size:.9rem}
 .modal input[type=text]{width:100%;padding:.7rem;border-radius:6px;border:1px solid rgba(255,255,255,.15);
@@ -1055,6 +1058,7 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
 <!-- Modal para páginas -->
 <div class="modal-overlay" id="pagesModal">
   <div class="modal">
+    <button class="modal-close" onclick="closeModal()" title="Cerrar">✕</button>
     <h2 id="modalTitle">Parámetros</h2>
     <label for="pagesInput" id="modalLabel">Páginas (ej: 1-20 o 1,3,5):</label>
     <input type="text" id="pagesInput" placeholder="1-20" value="1-20">
@@ -1080,8 +1084,10 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
 <!-- Modal para Actualizar Canal -->
 <div class="modal-overlay" id="ucModal">
   <div class="modal" style="max-width:560px">
+    <button class="modal-close" onclick="closeUpdateChannelModal()" title="Cerrar">✕</button>
     <h2>Actualizar Canal</h2>
     <label for="ucChannel">Canal a actualizar:</label>
+    <input type="text" id="ucSearch" placeholder="🔍 Buscar canal por nombre, id o grupo..." oninput="ucFilterChannels()">
     <select id="ucChannel"><option value="">Cargando canales...</option></select>
     <div id="ucChannelInfo" class="form-hint" style="display:none"></div>
     <label>Campos a actualizar:</label>
@@ -1432,10 +1438,42 @@ function showUcChannelInfo() {
   }
 }
 
+function ucBuildOptions(filter) {
+  const sel = document.getElementById('ucChannel');
+  sel.innerHTML = '';
+  const f = (filter || '').trim().toLowerCase();
+  const byGroup = {};
+  for (const ch of ucChannels) {
+    if (f) {
+      const hay = ((ch.title || '') + ' ' + ch.id + ' ' + (ch.group || '')).toLowerCase();
+      if (!hay.includes(f)) continue;
+    }
+    const g = ch.group || 'Sin grupo';
+    (byGroup[g] = byGroup[g] || []).push(ch);
+  }
+  for (const g of Object.keys(byGroup).sort()) {
+    const og = document.createElement('optgroup');
+    og.label = g + ' (' + byGroup[g].length + ')';
+    for (const ch of byGroup[g]) {
+      const opt = document.createElement('option');
+      opt.value = ch.id;
+      opt.textContent = ch.title || ch.id;
+      og.appendChild(opt);
+    }
+    sel.appendChild(og);
+  }
+  showUcChannelInfo();
+}
+
+function ucFilterChannels() {
+  ucBuildOptions(document.getElementById('ucSearch').value);
+}
+
 async function openUpdateChannelModal() {
   document.getElementById('ucFields').innerHTML = '';
   addChannelFieldRow();
   document.getElementById('ucModal').classList.add('active');
+  document.getElementById('ucSearch').value = '';
 
   const sel = document.getElementById('ucChannel');
   sel.innerHTML = '<option value="">Cargando canales...</option>';
@@ -1444,23 +1482,7 @@ async function openUpdateChannelModal() {
     const res = await fetch('/live/channels?all=true&limit=1000');
     const data = await res.json();
     ucChannels = data.items || [];
-    const byGroup = {};
-    for (const ch of ucChannels) {
-      const g = ch.group || 'Sin grupo';
-      (byGroup[g] = byGroup[g] || []).push(ch);
-    }
-    sel.innerHTML = '';
-    for (const g of Object.keys(byGroup).sort()) {
-      const og = document.createElement('optgroup');
-      og.label = g;
-      for (const ch of byGroup[g]) {
-        const opt = document.createElement('option');
-        opt.value = ch.id;
-        opt.textContent = ch.title || ch.id;
-        og.appendChild(opt);
-      }
-      sel.appendChild(og);
-    }
+    ucBuildOptions('');
     sel.disabled = false;
     sel.onchange = showUcChannelInfo;
     showUcChannelInfo();
