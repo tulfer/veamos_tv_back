@@ -6,7 +6,7 @@ import { loadSyncData, saveSyncData } from '../../services/data-store';
 import { LiveChannel } from '../../types';
 import { logger } from '../../utils/logger';
 import { startSync, completeSync, failSync, updateSyncProgress, pushLog, clearLogs } from '../../services/sync-status';
-import { fetchHTML, fetchHTMLWithReferer } from '../../utils/http';
+import { fetchHTML, fetchHTMLWithReferer, httpClient } from '../../utils/http';
 
 const CACHE_KEY = 'live:channels';
 const PAGE_SIZE = 10;
@@ -165,6 +165,7 @@ async function manualExtractStream(
   let pageUrl: string = fetchUrl;
   let lastIframeUrl: string = '';
   let foundStream: string | null = null;
+  let hostPageUrl: string | undefined;
   for (let depth = 0; depth < 4 && pageUrl && !foundStream; depth++) {
     pushLog(logPrefix, `  Nivel ${depth + 1}: ${pageUrl.substring(0, 150)}`);
     const html = depth === 0 ? await fetchHTML(pageUrl) : await fetchHTMLWithReferer(pageUrl, fetchUrl);
@@ -173,6 +174,7 @@ async function manualExtractStream(
     const streamUrlVar = html.match(/STREAM_URL\s*=\s*["']((?:https?:\\\/\\\/|https:\/\/)[^"']+\.(?:m3u8|m3u)[^"']*?)["']/i);
     if (streamUrlVar) {
       foundStream = streamUrlVar[1].replace(/\\\//g, '/');
+      hostPageUrl = pageUrl;
       pushLog(logPrefix, `  ✅ STREAM_URL en JS`);
       break;
     }
@@ -182,18 +184,19 @@ async function manualExtractStream(
     if (escapedM3u8) {
       foundStream = escapedM3u8[1].replace(/\\\//g, '/');
       if (!foundStream.startsWith('http')) foundStream = 'https:' + foundStream;
+      hostPageUrl = pageUrl;
       pushLog(logPrefix, `  ✅ .m3u8 con slashes escapados`);
       break;
     }
 
     const m3u8 = html.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|m3u)[^\s"'<>]*/i);
-    if (m3u8) { foundStream = m3u8[0]; pushLog(logPrefix, `  ✅ .m3u8 nivel ${depth + 1}`); break; }
+    if (m3u8) { foundStream = m3u8[0]; hostPageUrl = pageUrl; pushLog(logPrefix, `  ✅ .m3u8 nivel ${depth + 1}`); break; }
     const fileMatch = html.match(/file["']?\s*:\s*["']([^"']+)["']/i);
     const srcMatch = html.match(/src["']?\s*:\s*["']([^"']+(?:m3u8|ts|mp4)[^"']*)["']/i);
     const sourceTag = html.match(/<source\s[^>]*src=["']([^"']+)["']/i);
-    if (fileMatch) { foundStream = fileMatch[1]; break; }
-    if (srcMatch) { foundStream = srcMatch[1]; break; }
-    if (sourceTag) { foundStream = sourceTag[1]; break; }
+    if (fileMatch) { foundStream = fileMatch[1]; hostPageUrl = pageUrl; break; }
+    if (srcMatch) { foundStream = srcMatch[1]; hostPageUrl = pageUrl; break; }
+    if (sourceTag) { foundStream = sourceTag[1]; hostPageUrl = pageUrl; break; }
 
     // Buscar iframe con src O data-src
     const iframeSrc = html.match(/<iframe[^>]+(?:name|id)="?player"?[^>]+(?:data-src|src)=["']([^"']+)["']/i)?.[1] ||
@@ -213,10 +216,12 @@ async function manualExtractStream(
       if (scriptM3u8) {
         pushLog(logPrefix, `  ✅ .m3u8 en script/data`);
         foundStream = scriptM3u8[1];
+        hostPageUrl = pageUrl;
         break;
       }
       if (scriptM3u8Escaped) {
         foundStream = scriptM3u8Escaped[1].replace(/\\\//g, '/');
+        hostPageUrl = pageUrl;
         pushLog(logPrefix, `  ✅ .m3u8 con slashes escapados en script`);
         break;
       }
@@ -227,6 +232,32 @@ async function manualExtractStream(
   if (!foundStream && lastIframeUrl) {
     pushLog(logPrefix, `  ⚠ Usando URL del último iframe como stream`);
     foundStream = lastIframeUrl;
+  }
+  if (foundStream) {
+    pushLog(logPrefix, `  Verificando URL: ${foundStream.substring(0, 120)}...`);
+    let streamOk = false;
+    try {
+      const res = await httpClient.head(foundStream, { timeout: 10000 });
+      streamOk = res.status === 200;
+      pushLog(logPrefix, `  HEAD: ${res.status}`);
+    } catch (e: any) {
+      pushLog(logPrefix, `  HEAD falló: ${(e.response?.status || e.code || e.message || '').toString().substring(0, 60)}`);
+    }
+    // Si el stream da 403/404, usar la URL del nivel que lo aloja (si da 200)
+    if (!streamOk && hostPageUrl && hostPageUrl.startsWith('http')) {
+      pushLog(logPrefix, `  Intentando URL del nivel anterior (nivel 3): ${hostPageUrl.substring(0, 120)}...`);
+      try {
+        const res = await httpClient.get(hostPageUrl, { timeout: 10000, headers: { Referer: fetchUrl } });
+        if (res.status === 200) {
+          pushLog(logPrefix, `  ✅ Usando URL del nivel anterior: ${hostPageUrl.substring(0, 120)}`);
+          foundStream = hostPageUrl;
+        } else {
+          pushLog(logPrefix, `  ⚠ Nivel anterior no da 200 (${res.status}), manteniendo URL original`);
+        }
+      } catch (e: any) {
+        pushLog(logPrefix, `  ⚠ No se pudo verificar nivel anterior: ${(e.message || '').substring(0, 60)}`);
+      }
+    }
   }
   return foundStream;
 }
