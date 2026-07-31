@@ -1504,7 +1504,7 @@ async function confirmUpdateChannel() {
       alert('✅ Canal actualizado: ' + (data.channel?.title || id));
       closeUpdateChannelModal();
     } else {
-      alert('❌ ' + (data.error || 'Error') + (data.allowedFields ? '\nCampos permitidos: ' + data.allowedFields.join(', ') : ''));
+      alert('❌ ' + (data.error || 'Error') + (data.allowedFields ? '\\nCampos permitidos: ' + data.allowedFields.join(', ') : ''));
     }
   } catch (e) {
     alert('Error de red');

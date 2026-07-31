@@ -22,15 +22,30 @@ async function replaceCollection<T extends { id: string }>(
   items: T[],
 ): Promise<void> {
   const existing = await colRef.get();
-  const batch = getDb().batch();
-  for (const doc of existing.docs) {
-    batch.delete(doc.ref);
+  const db = getDb();
+
+  const ops: Array<{ ref: admin.firestore.DocumentReference; type: 'delete' | 'set'; data?: unknown }> = [
+    ...existing.docs.map((doc) => ({ ref: doc.ref, type: 'delete' as const })),
+    ...items.map((item) => {
+      const { id, ...data } = item;
+      return { ref: colRef.doc(id), type: 'set' as const, data };
+    }),
+  ];
+
+  // Firestore allows max 500 operations per batch; use 400 to stay safe
+  const BATCH_LIMIT = 400;
+  for (let i = 0; i < ops.length; i += BATCH_LIMIT) {
+    const chunk = ops.slice(i, i + BATCH_LIMIT);
+    const batch = db.batch();
+    for (const op of chunk) {
+      if (op.type === 'delete') {
+        batch.delete(op.ref);
+      } else {
+        batch.set(op.ref, op.data);
+      }
+    }
+    await batch.commit();
   }
-  for (const item of items) {
-    const { id, ...data } = item;
-    batch.set(colRef.doc(id), data);
-  }
-  await batch.commit();
 }
 
 export async function loadSyncData(): Promise<SyncData | null> {
@@ -83,6 +98,7 @@ export async function saveSyncData(data: SyncData): Promise<void> {
     );
   } catch (error) {
     logger.error({ error }, 'Failed to save sync data to Firestore');
+    throw error;
   }
 }
 
