@@ -19,6 +19,8 @@ const envSchema = z.object({
 
   REDIS_URL: z.string().optional(),
 
+  PUBLIC_BASE_URL: z.string().optional(),
+
   SCRAPE_INTERVAL_MINUTES: z.coerce.number().default(30),
 });
 

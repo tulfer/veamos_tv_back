@@ -2,6 +2,7 @@ import * as cheerio from 'cheerio';
 import { fetchHTML, fetchHTMLWithReferer, httpClient } from '../utils/http';
 import { logger } from '../utils/logger';
 import { memoryCache } from '../cache/memory';
+import { env } from '../config/env';
 import { LiveChannel } from '../types';
 
 const CHATYTVGRATIS_BASE = 'https://www.chatytvgratis.net';
@@ -984,6 +985,14 @@ browser = await playwrightChromium.launch({ headless: true });
 
 const CABLEVISIONHD_BASE = 'https://www.cablevisionhd.com';
 
+function buildStreamProxyUrl(streamUrl: string, referer?: string): string {
+  const base = env.PUBLIC_BASE_URL || '';
+  const params = new URLSearchParams();
+  params.set('url', streamUrl);
+  if (referer) params.set('referer', referer);
+  return `${base}/proxy/stream?${params.toString()}`;
+}
+
 export async function getCablevisionHd(slug: string, option?: string): Promise<LiveChannel | null> {
   const cacheKey = `cablevisionhd:${slug}:${option || 'default'}`;
   const cached = memoryCache.get<LiveChannel>(cacheKey);
@@ -1259,24 +1268,13 @@ browser = await playwrightChromium.launch({ headless: true });
       }
     }
 
-    // Nivel-3 fallback: si la URL capturada da 403/404, usar la URL del frame que aloja el .m3u8
-    if (streamUrl && !await verifyStreamUrl(streamUrl)) {
-      const hostUrl = (m3u8HostFrameUrl && m3u8HostFrameUrl.startsWith('http')) ? m3u8HostFrameUrl : undefined;
-      if (hostUrl) {
-        try {
-          const res = await httpClient.get(hostUrl, { timeout: 10000, headers: { Referer: url } });
-          if (res.status === 200) {
-            logger.info({ from: streamUrl.substring(0, 120), to: hostUrl.substring(0, 150) }, 'cablevisionhd: URL daba 403/404, usando frame nivel 3');
-            streamUrl = hostUrl;
-          } else {
-            logger.warn({ url: streamUrl.substring(0, 120), status: res.status }, 'cablevisionhd: frame nivel 3 no da 200, manteniendo URL original');
-          }
-        } catch (e: any) {
-          logger.warn({ error: e.message, url: streamUrl.substring(0, 120) }, 'cablevisionhd: fallo al verificar frame nivel 3');
-        }
-      } else {
-        logger.warn({ url: streamUrl.substring(0, 120) }, 'cablevisionhd: URL da 403/404 y no hay frame nivel 3 disponible');
-      }
+    // Nivel-3 fallback: cablevisionhd protege sus .m3u8 con Referer, así que siempre
+    // servimos el stream a través del proxy de streaming con el Referer del frame que lo aloja
+    if (streamUrl) {
+      const refererUrl = (m3u8HostFrameUrl && m3u8HostFrameUrl.startsWith('http')) ? m3u8HostFrameUrl : url;
+      const proxyUrl = buildStreamProxyUrl(streamUrl, refererUrl);
+      logger.info({ from: streamUrl.substring(0, 150), to: proxyUrl.substring(0, 200) }, 'cablevisionhd: usando proxy de streaming con Referer');
+      streamUrl = proxyUrl;
     }
 
     // Extraer título (opcional)

@@ -14,6 +14,7 @@ import { searchRoutes } from './modules/search/routes';
 import { homeRoutes } from './modules/home/routes';
 import { contentRoutes } from './modules/content/routes';
 import { syncRoutes } from './modules/sync/routes';
+import { proxyRoutes } from './modules/proxy/routes';
 
 process.stderr.write('=== Veamos TV API starting ===\n');
 process.stderr.write(`Node version: ${process.version}\n`);
@@ -78,6 +79,9 @@ async function buildServer() {
 
   process.stderr.write('buildServer: registering syncRoutes...\n');
   await app.register(syncRoutes);
+
+  process.stderr.write('buildServer: registering proxyRoutes...\n');
+  await app.register(proxyRoutes);
 
   process.stderr.write('buildServer: registering root routes...\n');
 

@@ -41,6 +41,10 @@ env:
     value: "30"
     availability:
       - RUNTIME
+  - variable: PUBLIC_BASE_URL
+    value: https://veamostv.site
+    availability:
+      - RUNTIME
 
   - variable: JWT_SECRET
     secret: JWT_SECRET
