@@ -104,6 +104,10 @@ export async function proxyRoutes(app: FastifyInstance) {
         const content = Buffer.concat(chunks).toString('utf-8');
         const rewritten = rewritePlaylist(content, finalUrl, referer);
         reply.header('Content-Type', 'application/vnd.apple.mpegurl');
+        // Los playlists HLS en vivo deben recargarse siempre: no cachear nunca
+        // (un cache intermedio serviría un playlist viejo y cortaría el stream).
+        reply.header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+        reply.header('Pragma', 'no-cache');
         return reply.send(rewritten);
       }
 
