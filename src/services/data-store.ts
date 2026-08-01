@@ -120,22 +120,48 @@ export async function saveSyncData(data: SyncData): Promise<void> {
 
 const AUTO_REFRESH_DOC = 'autoRefresh/config';
 
-export async function getAutoRefreshEnabled(): Promise<boolean> {
+export interface AutoRefreshConfig {
+  enabled: boolean;
+  intervalMinutes: number;
+}
+
+const DEFAULT_AUTO_REFRESH: AutoRefreshConfig = { enabled: true, intervalMinutes: 5 };
+
+function normalizeInterval(interval: unknown): number {
+  const n = Number(interval);
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : DEFAULT_AUTO_REFRESH.intervalMinutes;
+}
+
+export async function getAutoRefreshConfig(): Promise<AutoRefreshConfig> {
   try {
     const db = getDb();
     const doc = await db.doc(AUTO_REFRESH_DOC).get();
-    if (!doc.exists) return true;
+    if (!doc.exists) return { ...DEFAULT_AUTO_REFRESH };
     const data = doc.data() || {};
-    return data.enabled !== false;
+    return {
+      enabled: data.enabled !== false,
+      intervalMinutes: normalizeInterval(data.intervalMinutes),
+    };
   } catch (error) {
     logger.error({ error }, 'Failed to read autoRefresh config');
-    return true;
+    return { ...DEFAULT_AUTO_REFRESH };
   }
 }
 
-export async function setAutoRefreshEnabled(enabled: boolean): Promise<void> {
+export async function setAutoRefreshConfig(config: { enabled?: boolean; intervalMinutes?: number }): Promise<AutoRefreshConfig> {
+  const current = await getAutoRefreshConfig();
+  const next: AutoRefreshConfig = {
+    enabled: config.enabled !== undefined ? Boolean(config.enabled) : current.enabled,
+    intervalMinutes: config.intervalMinutes !== undefined ? normalizeInterval(config.intervalMinutes) : current.intervalMinutes,
+  };
   const db = getDb();
-  await db.doc(AUTO_REFRESH_DOC).set({ enabled: Boolean(enabled), updatedAt: Date.now() }, { merge: true });
+  await db.doc(AUTO_REFRESH_DOC).set({ enabled: next.enabled, intervalMinutes: next.intervalMinutes, updatedAt: Date.now() }, { merge: true });
+  return next;
+}
+
+export async function setAutoRefreshLastRunAt(timestamp: number): Promise<void> {
+  const db = getDb();
+  await db.doc(AUTO_REFRESH_DOC).set({ lastRunAt: timestamp }, { merge: true });
 }
 
 export async function getSyncStats(): Promise<{

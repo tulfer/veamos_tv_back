@@ -3,7 +3,7 @@ import path from 'path';
 import { FastifyRequest, FastifyReply } from 'fastify';
 import { scrapeMovies, scrapeMovieDetail, scrapePopularMovies } from '../../providers/movies';
 import { scrapeSeries, scrapeSeriesDetail, scrapePopularSeries } from '../../providers/series';
-import { saveSyncData, loadSyncData, saveHomeData, loadHomeData, getCollectionCounts, getAutoRefreshEnabled, setAutoRefreshEnabled } from '../../services/data-store';
+import { saveSyncData, loadSyncData, saveHomeData, loadHomeData, getCollectionCounts, getAutoRefreshConfig, setAutoRefreshConfig } from '../../services/data-store';
 import { fetchItemDetails } from '../../providers/cineby';
 import { closeBrowser } from '../../services/video-resolver';
 import { fetchLiveChannels, parseM3U, validateBatch } from '../../providers/live-tv';
@@ -745,15 +745,17 @@ export async function syncCountsHandler(_request: FastifyRequest, reply: Fastify
 }
 
 export async function getAutoRefreshHandler(_request: FastifyRequest, reply: FastifyReply) {
-  const enabled = await getAutoRefreshEnabled();
-  return reply.send({ enabled });
+  const config = await getAutoRefreshConfig();
+  return reply.send(config);
 }
 
 export async function setAutoRefreshHandler(request: FastifyRequest, reply: FastifyReply) {
-  const body = (request.body || {}) as { enabled?: unknown };
-  const enabled = body.enabled === true;
-  await setAutoRefreshEnabled(enabled);
-  return reply.send({ ok: true, enabled });
+  const body = (request.body || {}) as { enabled?: unknown; intervalMinutes?: unknown };
+  const config = await setAutoRefreshConfig({
+    enabled: typeof body.enabled === 'boolean' ? body.enabled : undefined,
+    intervalMinutes: typeof body.intervalMinutes === 'number' ? body.intervalMinutes : undefined,
+  });
+  return reply.send({ ok: true, ...config });
 }
 
 export async function syncDetailHandler(request: FastifyRequest, reply: FastifyReply) {
@@ -1061,9 +1063,14 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
     </div>
     <div class="card-body">
       <label style="display:flex;align-items:center;gap:.8rem;cursor:pointer">
-        <input type="checkbox" id="arToggle" onchange="toggleAutoRefresh()" style="width:22px;height:22px;accent-color:#667eea">
+        <input type="checkbox" id="arToggle" onchange="saveAutoRefresh()" style="width:22px;height:22px;accent-color:#667eea">
         <span id="arLabel" style="font-size:.95rem">Cargando estado...</span>
       </label>
+      <div style="display:flex;align-items:center;gap:.8rem;margin-top:.8rem">
+        <label for="arInterval" style="font-size:.95rem;flex:0 0 auto">Intervalo (minutos):</label>
+        <input type="number" id="arInterval" min="1" step="1" value="5" onchange="saveAutoRefresh()" style="width:90px;padding:.5rem;border-radius:6px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.05);color:#fff;font-size:.95rem">
+        <span id="arIntervalHint" style="font-size:.8rem;color:#888">—</span>
+      </div>
     </div>
   </div>
 </div>
@@ -1775,24 +1782,30 @@ async function refreshAutoRefreshState() {
     const res = await fetch('/sync/auto-refresh');
     const data = await res.json();
     const on = data.enabled === true;
+    const interval = data.intervalMinutes || 5;
     const toggle = document.getElementById('arToggle');
     const label = document.getElementById('arLabel');
     const badge = document.getElementById('arBadge');
     const statusText = document.getElementById('arStatus');
+    const intervalInput = document.getElementById('arInterval');
+    const intervalHint = document.getElementById('arIntervalHint');
     toggle.checked = on;
-    label.textContent = on ? 'Activado — se refrescará cada 5 minutos' : 'Pausado';
+    intervalInput.value = interval;
+    intervalHint.textContent = on ? 'Próxima ejecución automática en ~' + interval + ' min' : 'Pausado por el dashboard';
+    label.textContent = on ? 'Activado' : 'Pausado';
     badge.textContent = on ? '🟢' : '🔴';
     statusText.textContent = on ? 'activo' : 'pausado';
     statusText.className = 'status-text ' + (on ? 'completed' : 'failed');
   } catch {}
 }
-async function toggleAutoRefresh() {
-  const on = document.getElementById('arToggle').checked;
+async function saveAutoRefresh() {
+  const enabled = document.getElementById('arToggle').checked;
+  const intervalMinutes = parseInt(document.getElementById('arInterval').value, 10) || 5;
   try {
     const res = await fetch('/sync/auto-refresh', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled: on }),
+      body: JSON.stringify({ enabled, intervalMinutes }),
     });
     await res.json();
   } catch {}

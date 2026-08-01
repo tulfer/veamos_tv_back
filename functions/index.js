@@ -4,10 +4,11 @@ const { getFirestore } = require('firebase-admin/firestore');
 
 const REFRESH_ALL_URL = 'https://veamostv.site/live/channels/refresh-all';
 const AUTO_REFRESH_DOC = 'autoRefresh/config';
+const DEFAULT_INTERVAL_MINUTES = 5;
 
 exports.refreshAllChannels = onSchedule(
   {
-    schedule: '*/5 * * * *',
+    schedule: '* * * * *',
     timeZone: 'America/Bogota',
     region: 'us-central1',
     maxInstances: 1,
@@ -20,16 +21,28 @@ exports.refreshAllChannels = onSchedule(
       // ya inicializada
     }
 
+    let db;
     try {
-      const db = getFirestore();
+      db = getFirestore();
       const snap = await db.doc(AUTO_REFRESH_DOC).get();
-      const enabled = !snap.exists || snap.data().enabled !== false;
+      const data = snap.exists ? snap.data() : {};
+      const enabled = data.enabled !== false;
       if (!enabled) {
         console.log('refresh-all skipped (autoRefresh disabled)');
         return null;
       }
+
+      const intervalMinutes = Number(data.intervalMinutes) || DEFAULT_INTERVAL_MINUTES;
+      const lastRunAt = Number(data.lastRunAt) || 0;
+      const dueInMs = intervalMinutes * 60 * 1000;
+      if (Date.now() - lastRunAt < dueInMs) {
+        console.log(`refresh-all not due yet (every ${intervalMinutes} min)`);
+        return null;
+      }
+
+      await db.doc(AUTO_REFRESH_DOC).set({ lastRunAt: Date.now() }, { merge: true });
     } catch (err) {
-      console.error('refresh-all failed to read autoRefresh config:', err);
+      console.error('refresh-all failed to read/update autoRefresh config:', err);
       return null;
     }
 
