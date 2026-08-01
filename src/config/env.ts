@@ -21,6 +21,12 @@ const envSchema = z.object({
 
   PUBLIC_BASE_URL: z.string().optional(),
 
+  // Fallback de extracción en Cloud Run (último recurso cuando la extracción
+  // local/HTTP falla). App Hosting es el principal; solo se usa Cloud Run si
+  // FALLBACK_EXTRACT_URL está configurada y la extracción normal no dio URL.
+  FALLBACK_EXTRACT_URL: z.string().optional(),
+  FALLBACK_EXTRACT_KEY: z.string().optional(),
+
   SCRAPE_INTERVAL_MINUTES: z.coerce.number().default(30),
 });
 

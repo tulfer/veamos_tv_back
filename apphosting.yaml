@@ -47,6 +47,17 @@ env:
     availability:
       - RUNTIME
 
+  # Último recurso: extracción delegada a Cloud Run (que sí tiene Chromium)
+  - variable: FALLBACK_EXTRACT_URL
+    value: https://veamos-tv-backend-3gvodpcsvq-uc.a.run.app
+    availability:
+      - RUNTIME
+
+  - variable: FALLBACK_EXTRACT_KEY
+    secret: FALLBACK_EXTRACT_KEY
+    availability:
+      - RUNTIME
+
   - variable: JWT_SECRET
     secret: JWT_SECRET
     availability:

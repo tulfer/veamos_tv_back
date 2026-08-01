@@ -1,0 +1,29 @@
+# Build alternativo vía Cloud Build (gcloud builds submit).
+# Uso:
+#   gcloud builds submit --config cloudbuild.yaml \
+#     --substitutions=_REGION=us-central1,_SERVICE=veamos-tv-backend,_IMAGE=gcr.io/veamos-tv/veamos-tv-backend,_PUBLIC_BASE_URL=https://veamos-tv-backend-XXXX-uc.a.run.app
+# NOTA: _PUBLIC_BASE_URL debe ser la URL propia del servicio Cloud Run
+# (el proxy de los streams extraídos aquí corre en la misma IP del token).
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', '${_IMAGE}', '.']
+  - name: 'gcr.io/cloud-builders/gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - '${_SERVICE}'
+      - '--image=${_IMAGE}'
+      - '--region=${_REGION}'
+      - '--platform=managed'
+      - '--allow-unauthenticated'
+      - '--memory=2Gi'
+      - '--cpu=2'
+      - '--concurrency=20'
+      - '--min-instances=1'
+      - '--max-instances=3'
+      - '--timeout=300'
+      - '--no-cpu-throttling'
+      - '--set-env-vars=NODE_ENV=production,FIREBASE_PROJECT_ID=veamos-tv,JWT_EXPIRES_IN=7d,JWT_REFRESH_EXPIRES_IN=30d,SCRAPE_INTERVAL_MINUTES=30,LOG_TIMEZONE=America/Bogota,PUBLIC_BASE_URL=${_PUBLIC_BASE_URL}'
+      - '--set-secrets=JWT_SECRET=JWT_SECRET:latest,FALLBACK_EXTRACT_KEY=FALLBACK_EXTRACT_KEY:latest'
+images:
+  - '${_IMAGE}'

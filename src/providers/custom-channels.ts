@@ -5,6 +5,8 @@ import { memoryCache } from '../cache/memory';
 import { env } from '../config/env';
 import { pushLog } from '../services/sync-status';
 import { LiveChannel } from '../types';
+import { launchChromium } from './launch';
+import { signCookies } from '../utils/cookie-token';
 
 function elog(logType: string | undefined, msg: string): void {
   if (logType) pushLog(logType, msg);
@@ -12,6 +14,21 @@ function elog(logType: string | undefined, msg: string): void {
 
 function isM3u8Url(u: string): boolean {
   return /\.(?:m3u8|m3u)(?:[?#]|$)/i.test(u);
+}
+
+/**
+ * Captura las cookies del contexto de Playwright que el host de la URL
+ * recibiría, para que el proxy de streaming pueda reenviarlas al reproducir
+ * el m3u8 (algunos players las exigen). Devuelve el header Cookie o undefined.
+ */
+async function captureCookiesFromContext(context: any, url: string): Promise<string | undefined> {
+  try {
+    const cookies = await context.cookies(url);
+    if (!cookies || cookies.length === 0) return undefined;
+    return cookies.map((c: any) => `${c.name}=${c.value}`).join('; ');
+  } catch {
+    return undefined;
+  }
 }
 
 const CHATYTVGRATIS_BASE = 'https://www.chatytvgratis.net';
@@ -88,8 +105,8 @@ async function extractChatyTvPlaywright(channel: string, url: string): Promise<{
   let browser: any = null;
   try {
     // Usar Playwright para renderizar JavaScript
-    const { chromium: playwrightChromium } = await import('playwright');
-browser = await playwrightChromium.launch({ headless: true });
+    await import('playwright');
+browser = await launchChromium();
     const context = await browser.newContext({
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     });
@@ -472,7 +489,7 @@ async function tryExtractWsDeportes(parameter: string, url: string, logType?: st
         elog(logType, `  ✅ .m3u8 en HTML: ${streamUrl}`);
         break;
       }
-      const iframeSrc = html.match(/<iframe[^>]+(?:data-src|src)=["']([^"']+(?:player|core|stream|embed|tv))[^"']*["']/i)?.[1] ||
+      const iframeSrc = html.match(/<iframe[^>]+(?:data-src|src)=["']([^"']+(?:player|core|stream|embed|tv)[^"']*)["']/i)?.[1] ||
                         html.match(/<iframe[^>]+data-src=["']([^"']+)["']/i)?.[1];
       if (iframeSrc) {
         lastIframeUrl = iframeSrc.replace(/&amp;/g, '&');
@@ -493,7 +510,7 @@ async function tryExtractWsDeportes(parameter: string, url: string, logType?: st
   return streamUrl ? { streamUrl, hostPageUrl } : null;
 }
 
-async function extractWsDeportesWithPlaywright(browser: any, url: string, logType?: string): Promise<{ streamUrl?: string; m3u8HostFrameUrl?: string } | null> {
+async function extractWsDeportesWithPlaywright(browser: any, url: string, logType?: string): Promise<{ streamUrl?: string; m3u8HostFrameUrl?: string; cookies?: string } | null> {
   try {
     const context = await browser.newContext({
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -577,11 +594,13 @@ async function extractWsDeportesWithPlaywright(browser: any, url: string, logTyp
     const m3u8Url = capturedUrls.find((u) => u.includes('.m3u8') || u.includes('.m3u'));
     if (m3u8Url) {
       logger.info({ url: m3u8Url.substring(0, 250) }, 'Using captured m3u8 URL from wsdeportes');
-      return { streamUrl: m3u8Url, m3u8HostFrameUrl };
+      const cookies = await captureCookiesFromContext(context, m3u8Url);
+      return { streamUrl: m3u8Url, m3u8HostFrameUrl, cookies };
     }
     const tdtStream = capturedUrls.find((u) => u.includes('tdtcloud') || u.includes('mywebtv'));
     if (tdtStream) {
-      return { streamUrl: tdtStream, m3u8HostFrameUrl };
+      const cookies = await captureCookiesFromContext(context, tdtStream);
+      return { streamUrl: tdtStream, m3u8HostFrameUrl, cookies };
     }
     return null;
   } catch (e: any) {
@@ -604,8 +623,8 @@ export async function getWsDeportes(parameter: string, logType?: string): Promis
 
     let playwrightAvailable = true;
     try {
-      const { chromium: playwrightChromium } = await import('playwright');
-      browser = await playwrightChromium.launch({ headless: true });
+      await import('playwright');
+      browser = await launchChromium();
     } catch (pwErr: any) {
       playwrightAvailable = false;
       logger.warn({ error: pwErr?.message, parameter }, 'Playwright no disponible, usando fallback HTTP');
@@ -618,6 +637,7 @@ export async function getWsDeportes(parameter: string, logType?: string): Promis
 
     let streamUrl: string | null = null;
     let refererUrl: string = url;
+    let streamCookies: string | undefined;
 
     for (const op of opsToTry) {
       const tryParam = baseSlug && op !== 0 ? baseSlug + (op !== 1 ? `&op=${op}` : '') : parameter;
@@ -638,6 +658,7 @@ export async function getWsDeportes(parameter: string, logType?: string): Promis
         if (pwResult?.streamUrl) {
           streamUrl = pwResult.streamUrl;
           refererUrl = pwResult.m3u8HostFrameUrl && pwResult.m3u8HostFrameUrl.startsWith('http') ? pwResult.m3u8HostFrameUrl : url;
+          streamCookies = pwResult.cookies;
           break;
         }
       }
@@ -651,7 +672,7 @@ export async function getWsDeportes(parameter: string, logType?: string): Promis
 
     if (isM3u8Url(streamUrl)) {
       elog(logType, `🔒 Stream m3u8 directo puede dar 403 → proxy con Referer`);
-      streamUrl = buildStreamProxyUrl(streamUrl, refererUrl);
+      streamUrl = buildStreamProxyUrl(streamUrl, refererUrl, streamCookies);
     }
 
     // Verificación informativa (no bloquea el alta)
@@ -723,7 +744,7 @@ async function extractTvPorInternet2Http(url: string, logType?: string): Promise
       if (srcMatch) { streamUrl = srcMatch[1]; hostPageUrl = pageUrl; elog(logType, `  ✅ src: ${streamUrl}`); break; }
       if (sourceTag) { streamUrl = sourceTag[1]; hostPageUrl = pageUrl; elog(logType, `  ✅ <source>: ${streamUrl}`); break; }
       const iframeSrc = html.match(/<iframe[^>]+(?:name|id)="?player"?[^>]+(?:data-src|src)=["']([^"']+)["']/i)?.[1] ||
-                        html.match(/<iframe[^>]+(?:data-src|src)=["']([^"']+(?:player|core|stream|embed|tv))[^"']*["']/i)?.[1] ||
+                        html.match(/<iframe[^>]+(?:data-src|src)=["']([^"']+(?:player|core|stream|embed|tv)[^"']*)["']/i)?.[1] ||
                         html.match(/<iframe[^>]+data-src=["']([^"']+)["']/i)?.[1] ||
                         html.match(/<embed[^>]+src=["']([^"']+)["']/i)?.[1] ||
                         html.match(/<video[^>]+src=["']([^"']+)["']/i)?.[1];
@@ -762,8 +783,8 @@ export async function getTvPorInternet2(slug: string, option?: string, logType?:
 
     let playwrightAvailable = true;
     try {
-      const { chromium: playwrightChromium } = await import('playwright');
-      browser = await playwrightChromium.launch({ headless: true });
+      await import('playwright');
+      browser = await launchChromium();
     } catch (pwErr: any) {
       playwrightAvailable = false;
       logger.warn({ error: pwErr?.message, slug }, 'Playwright no disponible, usando fallback HTTP');
@@ -1013,8 +1034,9 @@ export async function getTvPorInternet2(slug: string, option?: string, logType?:
     // tvporinternet2 protege sus .m3u8 con Referer: si el stream es un m3u8, servirlo por el proxy
     if (streamUrl && isM3u8Url(streamUrl)) {
       const refererUrl = (m3u8HostFrameUrl && m3u8HostFrameUrl.startsWith('http')) ? m3u8HostFrameUrl : url;
+      const streamCookies = await captureCookiesFromContext(context, streamUrl);
       elog(logType, `🔒 Stream m3u8 directo puede dar 403 → proxy con Referer: ${refererUrl}`);
-      streamUrl = buildStreamProxyUrl(streamUrl, refererUrl);
+      streamUrl = buildStreamProxyUrl(streamUrl, refererUrl, streamCookies);
     }
     elog(logType, `✅ URL final: ${streamUrl}`);
 
@@ -1048,11 +1070,13 @@ export async function getTvPorInternet2(slug: string, option?: string, logType?:
 
 const CABLEVISIONHD_BASE = 'https://www.cablevisionhd.com';
 
-function buildStreamProxyUrl(streamUrl: string, referer?: string): string {
+function buildStreamProxyUrl(streamUrl: string, referer?: string, cookies?: string): string {
   const base = env.PUBLIC_BASE_URL || '';
   const params = new URLSearchParams();
   params.set('url', streamUrl);
   if (referer) params.set('referer', referer);
+  const token = signCookies(cookies);
+  if (token) params.set('cookies', token);
   return `${base}/proxy/stream?${params.toString()}`;
 }
 
@@ -1093,7 +1117,7 @@ async function extractCablevisionHdHttp(url: string, logType?: string): Promise<
       if (srcMatch) { streamUrl = srcMatch[1]; fallbackHostUrl = pageUrl; elog(logType, `  ✅ src: ${streamUrl}`); logger.info({}, 'Found src: via HTTP fallback'); break; }
       if (sourceTag) { streamUrl = sourceTag[1]; fallbackHostUrl = pageUrl; elog(logType, `  ✅ <source>: ${streamUrl}`); logger.info({}, 'Found source tag via HTTP fallback'); break; }
       const iframeSrc = html.match(/<iframe[^>]+(?:name|id)="?player"?[^>]+(?:data-src|src)=["']([^"']+)["']/i)?.[1] ||
-                        html.match(/<iframe[^>]+(?:data-src|src)=["']([^"']+(?:player|core|stream|embed|tv))[^"']*["']/i)?.[1] ||
+                        html.match(/<iframe[^>]+(?:data-src|src)=["']([^"']+(?:player|core|stream|embed|tv)[^"']*)["']/i)?.[1] ||
                         html.match(/<iframe[^>]+data-src=["']([^"']+)["']/i)?.[1] ||
                         html.match(/<embed[^>]+src=["']([^"']+)["']/i)?.[1] ||
                         html.match(/<video[^>]+src=["']([^"']+)["']/i)?.[1];
@@ -1133,8 +1157,8 @@ export async function getCablevisionHd(slug: string, option?: string, logType?: 
 
     let playwrightAvailable = true;
     try {
-      const { chromium: playwrightChromium } = await import('playwright');
-      browser = await playwrightChromium.launch({ headless: true });
+      await import('playwright');
+      browser = await launchChromium();
     } catch (pwErr: any) {
       playwrightAvailable = false;
       logger.warn({ error: pwErr?.message, slug }, 'Playwright no disponible, usando fallback HTTP');
@@ -1388,7 +1412,8 @@ export async function getCablevisionHd(slug: string, option?: string, logType?: 
     // servimos el stream a través del proxy de streaming con el Referer del frame que lo aloja
     if (streamUrl) {
       const refererUrl = (m3u8HostFrameUrl && m3u8HostFrameUrl.startsWith('http')) ? m3u8HostFrameUrl : url;
-      const proxyUrl = buildStreamProxyUrl(streamUrl, refererUrl);
+      const streamCookies = await captureCookiesFromContext(context, streamUrl);
+      const proxyUrl = buildStreamProxyUrl(streamUrl, refererUrl, streamCookies);
       elog(logType, `🔒 Stream m3u8 directo puede dar 403 → proxy con Referer: ${refererUrl}`);
       logger.info({ from: streamUrl.substring(0, 150), to: proxyUrl.substring(0, 200) }, 'cablevisionhd: usando proxy de streaming con Referer');
       streamUrl = proxyUrl;

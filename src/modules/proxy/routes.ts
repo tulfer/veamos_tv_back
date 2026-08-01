@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { httpClient } from '../../utils/http';
 import { logger } from '../../utils/logger';
+import { signCookies, verifyCookies } from '../../utils/cookie-token';
 import { refreshExpiredChannelUrl } from '../live-tv/controller';
 
 const STREAM_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
@@ -18,10 +19,12 @@ function isPlaylist(url: string, contentType: string): boolean {
     PLAYLIST_TYPES.some((t) => contentType.toLowerCase().includes(t));
 }
 
-function buildProxyUrl(target: string, referer?: string): string {
+function buildProxyUrl(target: string, referer?: string, cookies?: string): string {
   const params = new URLSearchParams();
   params.set('url', target);
   if (referer) params.set('referer', referer);
+  const token = signCookies(cookies);
+  if (token) params.set('cookies', token);
   return `/proxy/stream?${params.toString()}`;
 }
 
@@ -33,17 +36,17 @@ function resolveUrl(base: string, target: string): string {
   }
 }
 
-function rewritePlaylist(content: string, baseUrl: string, referer?: string): string {
+function rewritePlaylist(content: string, baseUrl: string, referer?: string, cookies?: string): string {
   return content
     .split('\n')
     .map((line) => {
       const trimmed = line.trim();
       if (!trimmed.startsWith('#') && trimmed.length > 0) {
-        return buildProxyUrl(resolveUrl(baseUrl, trimmed), referer);
+        return buildProxyUrl(resolveUrl(baseUrl, trimmed), referer, cookies);
       }
       if (trimmed.includes('URI="')) {
         return line.replace(/URI="([^"]+)"/g, (_m, uri: string) =>
-          `URI="${buildProxyUrl(resolveUrl(baseUrl, uri), referer)}"`);
+          `URI="${buildProxyUrl(resolveUrl(baseUrl, uri), referer, cookies)}"`);
       }
       return line;
     })
@@ -56,13 +59,16 @@ interface UpstreamResult {
   contentType: string;
 }
 
-async function fetchUpstream(target: string, referer?: string): Promise<UpstreamResult> {
+async function fetchUpstream(target: string, referer?: string, cookies?: string): Promise<UpstreamResult> {
   const headers: Record<string, string> = {
     'User-Agent': STREAM_UA,
     'Accept': '*/*',
   };
   if (referer) {
     headers['Referer'] = referer;
+  }
+  if (cookies) {
+    headers['Cookie'] = cookies;
   }
 
   const res = await httpClient.get(target, {
@@ -80,7 +86,7 @@ async function fetchUpstream(target: string, referer?: string): Promise<Upstream
 
 export async function proxyRoutes(app: FastifyInstance) {
   app.get('/proxy/stream', async (request, reply) => {
-    const { url, referer } = request.query as Record<string, string>;
+    const { url, referer, cookies } = request.query as Record<string, string>;
 
     if (!url || typeof url !== 'string') {
       return reply.status(400).send({ error: 'url param is required' });
@@ -98,10 +104,11 @@ export async function proxyRoutes(app: FastifyInstance) {
 
     let target = url;
     let effectiveReferer = referer && typeof referer === 'string' ? referer : undefined;
+    let effectiveCookies = verifyCookies(cookies);
     const requestedIsPlaylist = isPlaylist(url, '');
 
     try {
-      let upstream = await fetchUpstream(target, effectiveReferer);
+      let upstream = await fetchUpstream(target, effectiveReferer, effectiveCookies);
 
       // Si el playlist (m3u8) expiró (4xx), refrescar el canal y servir la URL nueva vigente
       if (upstream.res.status >= 400 && requestedIsPlaylist) {
@@ -111,11 +118,13 @@ export async function proxyRoutes(app: FastifyInstance) {
             const rp = new URL(refreshed, 'http://localhost');
             const newUrl = rp.searchParams.get('url');
             const newReferer = rp.searchParams.get('referer') || undefined;
+            const newCookies = verifyCookies(rp.searchParams.get('cookies'));
             if (newUrl) {
               upstream.res.data.resume();
-              upstream = await fetchUpstream(newUrl, newReferer);
+              upstream = await fetchUpstream(newUrl, newReferer, newCookies);
               target = newUrl;
               effectiveReferer = newReferer;
+              effectiveCookies = newCookies;
               logger.info({ url: target.substring(0, 200) }, 'Proxy: stream re-extracted after expiry');
             }
           } catch {
@@ -139,7 +148,7 @@ export async function proxyRoutes(app: FastifyInstance) {
           chunks.push(Buffer.from(chunk));
         }
         const content = Buffer.concat(chunks).toString('utf-8');
-        const rewritten = rewritePlaylist(content, upstream.finalUrl, effectiveReferer);
+        const rewritten = rewritePlaylist(content, upstream.finalUrl, effectiveReferer, effectiveCookies);
         reply.header('Content-Type', 'application/vnd.apple.mpegurl');
         // Los playlists HLS en vivo deben recargarse siempre: no cachear nunca
         // (un cache intermedio serviría un playlist viejo y cortaría el stream).

@@ -1,4 +1,4 @@
-import { chromium } from 'playwright';
+import { launchChromium } from './launch';
 import { logger } from '../utils/logger';
 
 export interface CinebyItem {
@@ -163,7 +163,7 @@ function parseSections(raw: string) {
 }
 
 export async function scrapeCinebyHome(): Promise<CinebyHomeData> {
-  const browser = await chromium.launch({ headless: true });
+  const browser = await launchChromium();
   const startTime = Date.now();
   try {
     const context = await browser.newContext({
@@ -455,8 +455,7 @@ export async function fetchItemDetails(items: { id: number; mediaType: string; s
 
     let videoUrl = '';
     try {
-      const { chromium: pw } = await import('playwright');
-      const browser = await pw.launch({ headless: true });
+      const browser = await launchChromium();
       const ctx = await browser.newContext({
         userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
         viewport: { width: 1920, height: 1080 },

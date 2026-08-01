@@ -1,0 +1,15 @@
+node_modules
+dist
+.git
+.env
+.env.local
+*.log
+server.err
+server.log
+data
+dataconnect
+functions
+test-import.mjs
+test-import-full.mjs
+firebase-debug.*
+.firebase

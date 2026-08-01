@@ -14,6 +14,7 @@ import {
   refreshAllChannelsHandler,
   updateChannelHandler,
   refreshChannelHandler,
+  internalExtractHandler,
 } from './controller';
 
 export async function liveTVRoutes(app: FastifyInstance) {
@@ -31,4 +32,5 @@ export async function liveTVRoutes(app: FastifyInstance) {
   app.post('/live/channels/refresh-expired', refreshExpiredChannelsHandler);
   app.post('/live/channels/refresh-all', refreshAllChannelsHandler);
   app.post('/live/channels/refresh', refreshChannelHandler);
+  app.post('/internal/extract', internalExtractHandler);
 }

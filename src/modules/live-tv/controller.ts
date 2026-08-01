@@ -1,4 +1,5 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
+import { env } from '../../config/env';
 import { fetchLiveChannels, getChannelsByGroup, getChannelsByCountry, getChannelGroups } from '../../providers/live-tv';
 import { getChannelStream } from '../../providers/custom-channels';
 import { getCachedOrFetch, memoryCache } from '../../cache';
@@ -328,7 +329,7 @@ async function manualExtractStream(
 
     // Buscar iframe con src O data-src
     const iframeSrc = html.match(/<iframe[^>]+(?:name|id)="?player"?[^>]+(?:data-src|src)=["']([^"']+)["']/i)?.[1] ||
-                      html.match(/<iframe[^>]+(?:data-src|src)=["']([^"']+(?:player|core|stream|embed|tv))[^"']*["']/i)?.[1] ||
+                      html.match(/<iframe[^>]+(?:data-src|src)=["']([^"']+(?:player|core|stream|embed|tv)[^"']*)["']/i)?.[1] ||
                       html.match(/<iframe[^>]+data-src=["']([^"']+)["']/i)?.[1] ||
                       html.match(/<embed[^>]+src=["']([^"']+)["']/i)?.[1] ||
                       html.match(/<video[^>]+src=["']([^"']+)["']/i)?.[1];
@@ -414,6 +415,73 @@ function extractSlugFromUrl(refreshUrl?: string, proveedor?: string): string | n
   } catch {
     return null;
   }
+}
+
+const VALID_SOURCES = ['wsdeportes', 'cablevisionhd', 'tvporinternet2', 'chatytv', 'senalcolombia'] as const;
+
+/**
+ * Último recurso: delega la extracción a Cloud Run (que sí tiene Chromium de
+ * Playwright). Solo se usa cuando la extracción local/HTTP falló. Devuelve la
+ * URL del stream o null.
+ */
+async function extractViaFallback(
+  source: string,
+  slug: string,
+  option: string | undefined,
+  logPrefix: string,
+): Promise<string | null> {
+  const base = env.FALLBACK_EXTRACT_URL;
+  if (!base) {
+    pushLog(logPrefix, `  ⚠ Fallback Cloud Run no configurado (env FALLBACK_EXTRACT_URL)`);
+    return null;
+  }
+  pushLog(logPrefix, `  🔁 Último recurso: extracción en Cloud Run (${base})`);
+  try {
+    const res = await httpClient.post(
+      `${base}/internal/extract`,
+      { source, slug, option: option || undefined },
+      {
+        timeout: 120000,
+        headers: {
+          'Content-Type': 'application/json',
+          'x-internal-key': env.FALLBACK_EXTRACT_KEY || '',
+        },
+      },
+    );
+    if (res.data && res.data.url) {
+      pushLog(logPrefix, `  ✅ Cloud Run: ${res.data.url.substring(0, 120)}...`);
+      return res.data.url;
+    }
+    pushLog(logPrefix, `  ❌ Cloud Run no devolvió URL`);
+  } catch (e: any) {
+    pushLog(logPrefix, `  ❌ Fallback Cloud Run error: ${e?.message || e}`);
+  }
+  return null;
+}
+
+/**
+ * Endpoint interno (solo para ser llamado por la instancia principal de App
+ * Hosting como último recurso). Valida con x-internal-key. Corre Playwright
+ * en Cloud Run para extraer el stream de proveedores que requieren navegador.
+ */
+export async function internalExtractHandler(request: FastifyRequest, reply: FastifyReply) {
+  const key = request.headers['x-internal-key'];
+  if (!env.FALLBACK_EXTRACT_KEY || key !== env.FALLBACK_EXTRACT_KEY) {
+    return reply.status(403).send({ error: 'Forbidden' });
+  }
+  const body = (request.body || {}) as { source?: string; slug?: string; option?: string };
+  const { source, slug } = body;
+  if (!source || !slug) {
+    return reply.status(400).send({ error: 'source and slug are required' });
+  }
+  if (!(VALID_SOURCES as readonly string[]).includes(source)) {
+    return reply.status(400).send({ error: `Unknown source: ${source}` });
+  }
+  const result = await getChannelStream(source as any, slug, body.option || undefined, 'fallback');
+  if (!result || !result.url) {
+    return reply.status(404).send({ error: 'No stream found' });
+  }
+  return reply.send({ url: result.url, title: result.title });
 }
 
 export async function refreshExpiredChannelsHandler(_request: FastifyRequest, reply: FastifyReply) {
@@ -504,6 +572,15 @@ export async function refreshExpiredChannelsHandler(_request: FastifyRequest, re
           pushLog('refreshExpired', `  ❌ No se encontró stream en la cadena de iframes`);
         } catch (diagErr: any) {
           pushLog('refreshExpired', `  Error extracción manual: ${diagErr.message}`);
+        }
+        const fallbackUrl = await extractViaFallback(source, slug, ch.refreshOption || undefined, 'refreshExpired');
+        if (fallbackUrl) {
+          ch.url = fallbackUrl;
+          applyExpiration(ch);
+          updatedChannels.push(ch);
+          processed++;
+          updateSyncProgress('refreshExpired', processed, `[${processed}/${totalToProcess}] ✅ ${ch.title || ch.id} (Cloud Run)`, totalToProcess);
+          continue;
         }
         failedChannels.push({ id: ch.id, title: ch.title || ch.id, error: 'No se obtuvo URL del proveedor' });
         processed++;
@@ -645,6 +722,16 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
           pushLog('refreshAll', `  ❌ No se encontró stream en la cadena de iframes`);
         } catch (diagErr: any) {
           pushLog('refreshAll', `  Error extracción manual: ${diagErr.message}`);
+        }
+        const fallbackUrl = await extractViaFallback(source, slug, ch.refreshOption || undefined, 'refreshAll');
+        if (fallbackUrl) {
+          ch.url = fallbackUrl;
+          applyExpiration(ch);
+          if (!ch.proveedor) ch.proveedor = source;
+          updatedChannels.push(ch);
+          processed++;
+          updateSyncProgress('refreshAll', processed, `[${processed}/${totalToProcess}] ✅ ${ch.title || ch.id} (Cloud Run)`, totalToProcess);
+          continue;
         }
         failedChannels.push({ id: ch.id, title: ch.title || ch.id, error: 'No se obtuvo URL del proveedor' });
         processed++;
@@ -1100,6 +1187,7 @@ export async function refreshChannelHandler(request: FastifyRequest, reply: Fast
           pushLog(REFRESH_ONE_TYPE, 'Stream manual: ' + foundStream.substring(0, 120));
         } else {
           pushLog(REFRESH_ONE_TYPE, 'No se encontro stream en la cadena de iframes');
+          newUrl = await extractViaFallback(source, slug, ch.refreshOption || undefined, REFRESH_ONE_TYPE);
         }
       }
     } catch (error: any) {
