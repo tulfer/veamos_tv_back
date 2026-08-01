@@ -1128,6 +1128,7 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
             <option value="wsdeportes">WsDeportes</option>
             <option value="tvporinternet2">TVporInternet2</option>
             <option value="cablevisionhd">CablevisionHD</option>
+            <option value="senalcolombia">Señal Colombia</option>
           </select>
         </div>
         <div class="form-group">
@@ -1211,6 +1212,11 @@ document.getElementById('chProvider').addEventListener('change', function() {
     document.getElementById('chParam').placeholder = 'ej: winsportsmas&op=2';
     titleField.required = true;
     optionField.style.display = 'none';
+  } else if (provider === 'senalcolombia') {
+    label.textContent = 'Slug';
+    document.getElementById('chParam').placeholder = 'ej: senal-en-vivo';
+    titleField.required = true;
+    optionField.style.display = 'none';
   } else {
     label.textContent = 'Slug';
     document.getElementById('chParam').placeholder = 'ej: fox-sports-en-vivo';
@@ -1229,7 +1235,7 @@ async function addChannel() {
   const option = document.getElementById('chOption').value.trim();
 
   if (!param) { alert('Ingresa el parámetro del canal'); return; }
-  if ((provider === 'wsdeportes' || provider === 'tvporinternet2' || provider === 'cablevisionhd') && !title) {
+  if ((provider === 'wsdeportes' || provider === 'tvporinternet2' || provider === 'cablevisionhd' || provider === 'senalcolombia') && !title) {
     alert('Ingresa el título del canal'); return;
   }
 
