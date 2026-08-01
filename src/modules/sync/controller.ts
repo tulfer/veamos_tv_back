@@ -798,9 +798,19 @@ a:hover{text-decoration:underline}
 <body>
 <a href="/sync/status?code=1992">← Volver al Dashboard</a>
 <h1>📋 Detalle: ${type}</h1>
+<div class="auto-refresh" id="dbCount" style="color:#7ee787"></div>
 <div class="auto-refresh" id="status">Actualizando automáticamente... <button id="toggleBtn" onclick="togglePause()" style="margin-left:.5rem;cursor:pointer;background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:4px;padding:2px 8px;font-size:.7rem">⏸ Pausar</button></div>
 <div class="terminal" id="logContainer">${logHtml || '<div class="line" style="color:#8b949e">Sin registros aún</div>'}</div>
 <script>
+// Consulta UN solo conteo de Firestore al abrir el Detalle (por eso el dashboard ya no consulta nada)
+(function loadDbCount(){
+  const map = { refreshAll:'channels', refreshExpired:'channels', refreshOne:'channels', importM3U:'channels', updateChannel:'channels', channels:'channels', movies:'movies', series:'series', popularMovies:'popularMovies', popularSeries:'popularSeries', estrenoMovies:'estrenoMovies', estrenoSeries:'estrenoSeries' };
+  const coll = map['${type}'];
+  if (!coll) return;
+  fetch('/sync/count/' + coll).then(function(r){ return r.json(); }).then(function(d){
+    if (d && d.count != null) document.getElementById('dbCount').textContent = 'Total en BD (' + coll + '): ' + d.count;
+  }).catch(function(){});
+})();
 let prevLen = 0;
 let autoScroll = true;
 let paused = false;
@@ -1073,9 +1083,10 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
     <div class="card-body">
       <label style="display:flex;align-items:center;gap:.8rem;cursor:pointer">
         <input type="checkbox" id="arToggle" onchange="saveAutoRefresh()" style="width:22px;height:22px;accent-color:#667eea">
-        <span id="arLabel" style="font-size:.95rem">Cargando estado...</span>
+        <span id="arLabel" style="font-size:.95rem">Estado no consultado</span>
       </label>
       <div style="display:flex;align-items:center;gap:.8rem;margin-top:.8rem">
+        <button class="btn btn-secondary btn-sm" onclick="refreshAutoRefreshState()">🔄 Consultar estado</button>
         <label for="arInterval" style="font-size:.95rem;flex:0 0 auto">Intervalo (minutos):</label>
         <input type="number" id="arInterval" min="1" step="1" value="5" onchange="saveAutoRefresh()" style="width:90px;padding:.5rem;border-radius:6px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.05);color:#fff;font-size:.95rem">
         <span id="arIntervalHint" style="font-size:.8rem;color:#888">—</span>
@@ -1703,33 +1714,6 @@ async function confirmUpdateChannel() {
   }
 }
 
-// Fetch database counts and update cards
-async function refreshCounts() {
-  try {
-    const res = await fetch('/sync/counts');
-    if (res.ok) {
-      const counts = await res.json();
-      for (const key of Object.keys(counts)) {
-        const countVal = document.querySelector(\`#card-\${key} .count-val\`);
-        if (countVal) countVal.textContent = counts[key];
-      }
-    }
-  } catch {}
-}
-
-// Actualiza SOLO la tarjeta indicada con su conteo real (1 lectura en Firestore)
-async function refreshCountFor(key) {
-  try {
-    const res = await fetch('/sync/count/' + key);
-    if (res.ok) {
-      const data = await res.json();
-      const countVal = document.querySelector(\`#card-\${key} .count-val\`);
-      if (countVal) countVal.textContent = data.count;
-    }
-  } catch {}
-}
-
-const prevStatuses = {};
 // Auto-refresh status + progress cada 3s (en memoria, sin Firestore)
 async function refreshStatus() {
   try {
@@ -1740,11 +1724,6 @@ async function refreshStatus() {
         const s = data[key];
         const card = document.getElementById('card-' + key);
         if (!card) continue;
-        // Al terminar una ejecución, refrescar SOLO esa tarjeta (1 lectura)
-        if (prevStatuses[key] === 'running' && s.status === 'completed') {
-          refreshCountFor(key);
-        }
-        prevStatuses[key] = s.status;
         const badge = card.querySelector('.badge');
         const statusText = card.querySelector('.status-text');
         const btn = card.querySelector('.btn-primary');
@@ -1799,10 +1778,9 @@ async function refreshStatus() {
     }
   } catch {}
 }
-refreshCounts();
 setInterval(refreshStatus, 3000);
 
-// Refresh automático (función programada de Firebase)
+// Refresh automático (función programada de Firebase): estado se consulta SOLO al pulsar "Consultar"
 async function refreshAutoRefreshState() {
   try {
     const res = await fetch('/sync/auto-refresh');
@@ -1837,8 +1815,6 @@ async function saveAutoRefresh() {
   } catch {}
   refreshAutoRefreshState();
 }
-refreshAutoRefreshState();
-setInterval(refreshAutoRefreshState, 60000);
 </script>
 </body>
 </html>`;

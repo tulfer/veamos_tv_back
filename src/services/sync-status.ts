@@ -38,10 +38,18 @@ const defaultStatus: SyncJobStatus = { status: 'idle', lastRun: null };
 const logs: Record<string, string[]> = {};
 const LOG_MAX = 500;
 
+function logTimestamp(): string {
+  const tz = process.env.LOG_TIMEZONE || 'America/Bogota';
+  try {
+    return new Date().toLocaleTimeString('en-US', { timeZone: tz, hour12: false });
+  } catch {
+    return new Date().toLocaleTimeString();
+  }
+}
+
 export function pushLog(type: string, message: string): void {
   if (!logs[type]) logs[type] = [];
-  const timestamp = new Date().toLocaleTimeString();
-  logs[type].push(`[${timestamp}] ${message}`);
+  logs[type].push(`[${logTimestamp()}] ${message}`);
   if (logs[type].length > LOG_MAX) logs[type].splice(0, logs[type].length - LOG_MAX);
 }
 

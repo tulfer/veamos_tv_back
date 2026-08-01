@@ -481,7 +481,7 @@ export async function refreshExpiredChannelsHandler(_request: FastifyRequest, re
 
     pushLog('refreshExpired', `  Consultando a ${source}...`);
     try {
-      const result = await getChannelStream(source, slug, ch.refreshOption || undefined);
+      const result = await getChannelStream(source, slug, ch.refreshOption || undefined, 'refreshExpired');
       if (result && result.url) {
         pushLog('refreshExpired', `  ✅ URL obtenida: ${result.url.substring(0, 120)}...`);
         ch.url = result.url;
@@ -620,7 +620,7 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
 
     pushLog('refreshAll', `  Consultando a ${source}...`);
     try {
-      const result = await getChannelStream(source, slug, ch.refreshOption || undefined);
+      const result = await getChannelStream(source, slug, ch.refreshOption || undefined, 'refreshAll');
       if (result && result.url) {
         pushLog('refreshAll', `  ✅ URL obtenida: ${result.url.substring(0, 120)}...`);
         ch.url = result.url;
@@ -1087,7 +1087,7 @@ export async function refreshChannelHandler(request: FastifyRequest, reply: Fast
     pushLog(REFRESH_ONE_TYPE, 'Consultando a ' + source + '...');
     let newUrl: string | null = null;
     try {
-      const result = await getChannelStream(source as any, slug, ch.refreshOption || undefined);
+      const result = await getChannelStream(source as any, slug, ch.refreshOption || undefined, REFRESH_ONE_TYPE);
       if (result && result.url) {
         newUrl = result.url;
         pushLog(REFRESH_ONE_TYPE, 'URL obtenida: ' + result.url.substring(0, 120) + '...');
