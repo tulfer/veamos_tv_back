@@ -98,6 +98,10 @@ export interface LiveChannel {
   refreshOption?: string;
   /** Proveedor del canal: wsdeportes, cablevisionhd, tvporinternet2 */
   proveedor?: string;
+  /** Fecha de expiración del stream (timestamp unix segundos) tal como viene en la URL, si la tiene */
+  expires?: number;
+  /** Fecha de expiración del stream en formato legible, si la tiene */
+  expiresDate?: string;
 }
 
 export interface UserProfile {

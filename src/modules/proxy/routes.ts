@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { httpClient } from '../../utils/http';
 import { logger } from '../../utils/logger';
+import { refreshExpiredChannelUrl } from '../live-tv/controller';
 
 const STREAM_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
 
@@ -49,6 +50,34 @@ function rewritePlaylist(content: string, baseUrl: string, referer?: string): st
     .join('\n');
 }
 
+interface UpstreamResult {
+  res: import('axios').AxiosResponse;
+  finalUrl: string;
+  contentType: string;
+}
+
+async function fetchUpstream(target: string, referer?: string): Promise<UpstreamResult> {
+  const headers: Record<string, string> = {
+    'User-Agent': STREAM_UA,
+    'Accept': '*/*',
+  };
+  if (referer) {
+    headers['Referer'] = referer;
+  }
+
+  const res = await httpClient.get(target, {
+    headers,
+    responseType: 'stream',
+    timeout: 20000,
+    maxRedirects: 5,
+    validateStatus: () => true,
+  });
+
+  const finalUrl = String(res.request?.res?.responseUrl || res.request?.responseURL || target);
+  const contentType = String(res.headers['content-type'] || '');
+  return { res, finalUrl, contentType };
+}
+
 export async function proxyRoutes(app: FastifyInstance) {
   app.get('/proxy/stream', async (request, reply) => {
     const { url, referer } = request.query as Record<string, string>;
@@ -67,42 +96,50 @@ export async function proxyRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: 'Only http(s) URLs are allowed' });
     }
 
-    const headers: Record<string, string> = {
-      'User-Agent': STREAM_UA,
-      'Accept': '*/*',
-    };
-    if (referer && typeof referer === 'string') {
-      headers['Referer'] = referer;
-    }
+    let target = url;
+    let effectiveReferer = referer && typeof referer === 'string' ? referer : undefined;
+    const requestedIsPlaylist = isPlaylist(url, '');
 
     try {
-      const upstream = await httpClient.get(url, {
-        headers,
-        responseType: 'stream',
-        timeout: 20000,
-        maxRedirects: 5,
-        validateStatus: () => true,
-      });
+      let upstream = await fetchUpstream(target, effectiveReferer);
 
-      if (upstream.status >= 400) {
-        logger.warn({ url: url.substring(0, 200), status: upstream.status }, 'Proxy: upstream error');
-        upstream.data.resume();
-        return reply.status(upstream.status).send({ error: `Upstream error ${upstream.status}` });
+      // Si el playlist (m3u8) expiró (4xx), refrescar el canal y servir la URL nueva vigente
+      if (upstream.res.status >= 400 && requestedIsPlaylist) {
+        const refreshed = await refreshExpiredChannelUrl(url);
+        if (refreshed) {
+          try {
+            const rp = new URL(refreshed, 'http://localhost');
+            const newUrl = rp.searchParams.get('url');
+            const newReferer = rp.searchParams.get('referer') || undefined;
+            if (newUrl) {
+              upstream.res.data.resume();
+              upstream = await fetchUpstream(newUrl, newReferer);
+              target = newUrl;
+              effectiveReferer = newReferer;
+              logger.info({ url: target.substring(0, 200) }, 'Proxy: stream re-extracted after expiry');
+            }
+          } catch {
+            // Si falla la re-extracción, se responde el error original
+          }
+        }
       }
 
-      const finalUrl = String(upstream.request?.res?.responseUrl || upstream.request?.responseURL || url);
-      const contentType = String(upstream.headers['content-type'] || '');
+      if (upstream.res.status >= 400) {
+        logger.warn({ url: target.substring(0, 200), status: upstream.res.status }, 'Proxy: upstream error');
+        upstream.res.data.resume();
+        return reply.status(upstream.res.status).send({ error: `Upstream error ${upstream.res.status}` });
+      }
 
       reply.header('Access-Control-Allow-Origin', '*');
       reply.header('Cache-Control', 'public, max-age=3600');
 
-      if (isPlaylist(finalUrl, contentType)) {
+      if (isPlaylist(upstream.finalUrl, upstream.contentType)) {
         const chunks: Buffer[] = [];
-        for await (const chunk of upstream.data) {
+        for await (const chunk of upstream.res.data) {
           chunks.push(Buffer.from(chunk));
         }
         const content = Buffer.concat(chunks).toString('utf-8');
-        const rewritten = rewritePlaylist(content, finalUrl, referer);
+        const rewritten = rewritePlaylist(content, upstream.finalUrl, effectiveReferer);
         reply.header('Content-Type', 'application/vnd.apple.mpegurl');
         // Los playlists HLS en vivo deben recargarse siempre: no cachear nunca
         // (un cache intermedio serviría un playlist viejo y cortaría el stream).
@@ -111,14 +148,14 @@ export async function proxyRoutes(app: FastifyInstance) {
         return reply.send(rewritten);
       }
 
-      const outType = contentType || 'application/octet-stream';
+      const outType = upstream.contentType || 'application/octet-stream';
       reply.header('Content-Type', outType);
-      if (upstream.headers['content-length']) {
-        reply.header('Content-Length', String(upstream.headers['content-length']));
+      if (upstream.res.headers['content-length']) {
+        reply.header('Content-Length', String(upstream.res.headers['content-length']));
       }
-      return reply.send(upstream.data);
+      return reply.send(upstream.res.data);
     } catch (error: any) {
-      logger.error({ error: error.message, url: url.substring(0, 200) }, 'Proxy: fetch failed');
+      logger.error({ error: error.message, url: target.substring(0, 200) }, 'Proxy: fetch failed');
       return reply.status(502).send({ error: 'Proxy fetch failed' });
     }
   });

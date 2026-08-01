@@ -11,6 +11,121 @@ import { fetchHTML, fetchHTMLWithReferer, httpClient } from '../../utils/http';
 const CACHE_KEY = 'live:channels';
 const PAGE_SIZE = 10;
 
+/**
+ * Extrae el parámetro `expires` de la URL del stream (tokens de m3u8).
+ * Acepta tanto la URL directa como la URL del proxy (donde el m3u8 está
+ * codificado en el query param `url`).
+ */
+function extractExpiration(url?: string): { expires?: number; expiresDate?: string } {
+  if (!url) return {};
+  let target = url;
+  try {
+    if (url.includes('/proxy/stream')) {
+      const parsed = new URL(url, 'http://localhost');
+      const inner = parsed.searchParams.get('url');
+      if (inner) target = inner;
+    }
+  } catch {
+    // ignore
+  }
+  const match = target.match(/[?&]expires=(\d+)/i);
+  if (!match) return {};
+  const ts = Number(match[1]);
+  if (!Number.isFinite(ts) || ts <= 0) return {};
+  const date = new Date(ts * 1000);
+  if (Number.isNaN(date.getTime())) return {};
+  return {
+    expires: ts,
+    expiresDate: date.toISOString().replace('T', ' ').slice(0, 19) + ' UTC',
+  };
+}
+
+/** Calcula y guarda expires/expiresDate en el canal a partir de su url. */
+function applyExpiration(ch: LiveChannel): void {
+  const exp = extractExpiration(ch.url);
+  ch.expires = exp.expires;
+  ch.expiresDate = exp.expiresDate;
+}
+
+const inflightRefresh = new Map<string, Promise<string | null>>();
+const lastRefreshAttempt = new Map<string, number>();
+const REFRESH_COOLDOWN_MS = 2 * 60 * 1000;
+
+/**
+ * Re-extrae el stream de un canal cuya URL expiró (el m3u8 devolvió 4xx).
+ * Busca el canal por la URL interna del proxy, vuelve a consultar al proveedor,
+ * guarda la URL nueva vigente y devuelve la nueva url del proxy (o null).
+ * Evita refrescos concurrentes para la misma URL y aplica un cooldown de 2 min
+ * para no bombardear al proveedor si el canal sigue caído.
+ */
+export async function refreshExpiredChannelUrl(targetUrl: string): Promise<string | null> {
+  const now = Date.now();
+  const last = lastRefreshAttempt.get(targetUrl);
+  if (last && now - last < REFRESH_COOLDOWN_MS) return null;
+  lastRefreshAttempt.set(targetUrl, now);
+
+  const existing = inflightRefresh.get(targetUrl);
+  if (existing) return existing;
+  const task = doRefreshExpiredChannel(targetUrl).finally(() => inflightRefresh.delete(targetUrl));
+  inflightRefresh.set(targetUrl, task);
+  return task;
+}
+
+async function doRefreshExpiredChannel(targetUrl: string): Promise<string | null> {
+  try {
+    const synced = await loadSyncData();
+    if (!synced || !Array.isArray(synced.channels)) return null;
+
+    const ch = synced.channels.find((c) => {
+      if (!c?.url || !c.url.includes('/proxy/stream')) return false;
+      try {
+        const u = new URL(c.url, 'http://localhost');
+        return u.searchParams.get('url') === targetUrl;
+      } catch {
+        return false;
+      }
+    });
+
+    if (!ch) {
+      logger.warn({ url: targetUrl.substring(0, 120) }, 'Stream expirado sin canal correspondiente, no se puede refrescar');
+      return null;
+    }
+
+    const source = (ch.proveedor as any) || extractRefreshSource(ch.refreshUrl);
+    if (!source || !ch.refreshUrl) {
+      logger.warn({ id: ch.id }, 'Canal expirado sin proveedor/refreshUrl, no se puede refrescar');
+      return null;
+    }
+
+    const slug = extractSlugFromUrl(ch.refreshUrl, source);
+    if (!slug) {
+      logger.warn({ id: ch.id, refreshUrl: ch.refreshUrl }, 'No se pudo extraer slug para refrescar canal expirado');
+      return null;
+    }
+
+    pushLog('addChannel', `🔁 URL expirada detectada por proxy → refrescando ${ch.id}...`);
+    memoryCache.del(`${source}:${slug}`);
+    memoryCache.del(`${source}:${slug}:default`);
+    if (ch.refreshOption) memoryCache.del(`${source}:${slug}:${ch.refreshOption}`);
+
+    const result = await getChannelStream(source, slug, ch.refreshOption || undefined);
+    if (!result?.url) {
+      pushLog('addChannel', `❌ No se pudo refrescar ${ch.id} (el proveedor no devolvió URL)`);
+      return null;
+    }
+
+    ch.url = result.url;
+    applyExpiration(ch);
+    await saveSyncData({ ...synced, channels: synced.channels, updatedAt: Date.now() });
+    memoryCache.del('live:channels');
+    pushLog('addChannel', `✅ Canal refrescado por proxy: ${ch.id} ${ch.expiresDate || ''}`);
+    return result.url;
+  } catch (error: any) {
+    logger.error({ error: error.message, url: targetUrl.substring(0, 120) }, 'Fallo al refrescar canal expirado desde proxy');
+    return null;
+  }
+}
+
 export async function getChannelsHandler(request: FastifyRequest, reply: FastifyReply) {
   const { group, country, all, page = '1', limit } = request.query as any;
   const pageNum = parseInt(page) || 1;
@@ -128,6 +243,7 @@ export async function getChatytvChannelHandler(request: FastifyRequest, reply: F
       logo: logo || result.logo,
       country: country || result.country,
     };
+    applyExpiration(channelData);
 
     // Agregar a la lista de canales sincronizados
     const existing = await loadSyncData();
@@ -369,6 +485,7 @@ export async function refreshExpiredChannelsHandler(_request: FastifyRequest, re
       if (result && result.url) {
         pushLog('refreshExpired', `  ✅ URL obtenida: ${result.url.substring(0, 120)}...`);
         ch.url = result.url;
+        applyExpiration(ch);
         updatedChannels.push(ch);
       } else {
         pushLog('refreshExpired', `  ❌ El proveedor no devolvió URL`);
@@ -378,6 +495,7 @@ export async function refreshExpiredChannelsHandler(_request: FastifyRequest, re
           if (foundStream) {
             pushLog('refreshExpired', `  ✅ Stream: ${foundStream.substring(0, 120)}`);
             ch.url = foundStream;
+            applyExpiration(ch);
             updatedChannels.push(ch);
             processed++;
             updateSyncProgress('refreshExpired', processed, `[${processed}/${totalToProcess}] ✅ ${ch.title || ch.id}`, totalToProcess);
@@ -505,6 +623,7 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
       if (result && result.url) {
         pushLog('refreshAll', `  ✅ URL obtenida: ${result.url.substring(0, 120)}...`);
         ch.url = result.url;
+        applyExpiration(ch);
         if (!ch.proveedor) ch.proveedor = source;
         updatedChannels.push(ch);
       } else {
@@ -515,6 +634,7 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
           if (foundStream) {
             pushLog('refreshAll', `  ✅ Stream: ${foundStream.substring(0, 120)}`);
             ch.url = foundStream;
+            applyExpiration(ch);
             if (!ch.proveedor) ch.proveedor = source;
             updatedChannels.push(ch);
             processed++;
@@ -602,6 +722,7 @@ export async function getTvPorInternet2Handler(request: FastifyRequest, reply: F
       refreshOption: option || undefined,
       proveedor: 'tvporinternet2',
     };
+    applyExpiration(channelData);
 
     // Agregar a la lista de canales sincronizados
     const existing = await loadSyncData();
@@ -668,6 +789,7 @@ export async function getCablevisionHdHandler(request: FastifyRequest, reply: Fa
       refreshOption: option || undefined,
       proveedor: 'cablevisionhd',
     };
+    applyExpiration(channelData);
 
     // Agregar a la lista de canales sincronizados
     const existing = await loadSyncData();
@@ -733,6 +855,7 @@ export async function getWsDeportesChannelHandler(request: FastifyRequest, reply
       refreshUrl: result.refreshUrl,
       proveedor: 'wsdeportes',
     };
+    applyExpiration(channelData);
 
     // Agregar a la lista de canales sincronizados
     const existing = await loadSyncData();
@@ -927,6 +1050,7 @@ export async function refreshChannelHandler(request: FastifyRequest, reply: Fast
     }
 
     channels[index] = { ...ch, url: newUrl, online: true };
+    applyExpiration(channels[index]);
     await saveSyncData({
       movies: synced.movies || [],
       series: synced.series || [],
