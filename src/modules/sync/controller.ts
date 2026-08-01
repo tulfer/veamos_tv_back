@@ -3,7 +3,7 @@ import path from 'path';
 import { FastifyRequest, FastifyReply } from 'fastify';
 import { scrapeMovies, scrapeMovieDetail, scrapePopularMovies } from '../../providers/movies';
 import { scrapeSeries, scrapeSeriesDetail, scrapePopularSeries } from '../../providers/series';
-import { saveSyncData, loadSyncData, saveHomeData, loadHomeData, getCollectionCounts } from '../../services/data-store';
+import { saveSyncData, loadSyncData, saveHomeData, loadHomeData, getCollectionCounts, getAutoRefreshEnabled, setAutoRefreshEnabled } from '../../services/data-store';
 import { fetchItemDetails } from '../../providers/cineby';
 import { closeBrowser } from '../../services/video-resolver';
 import { fetchLiveChannels, parseM3U, validateBatch } from '../../providers/live-tv';
@@ -744,6 +744,18 @@ export async function syncCountsHandler(_request: FastifyRequest, reply: Fastify
   return reply.send(counts);
 }
 
+export async function getAutoRefreshHandler(_request: FastifyRequest, reply: FastifyReply) {
+  const enabled = await getAutoRefreshEnabled();
+  return reply.send({ enabled });
+}
+
+export async function setAutoRefreshHandler(request: FastifyRequest, reply: FastifyReply) {
+  const body = (request.body || {}) as { enabled?: unknown };
+  const enabled = body.enabled === true;
+  await setAutoRefreshEnabled(enabled);
+  return reply.send({ ok: true, enabled });
+}
+
 export async function syncDetailHandler(request: FastifyRequest, reply: FastifyReply) {
   const { type } = request.params as { type: string };
   const logEntries = getLogs(type);
@@ -1037,6 +1049,23 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
 <h1>🔄 Panel de Sincronización</h1>
 <div class="dashboard" id="dashboard">
   ${rows}
+</div>
+
+<div class="migration-section">
+  <h2 style="margin-bottom:1rem;font-size:1.2rem;color:#a0a0c0">⏱️ Refresh automático</h2>
+  <div class="migration-card">
+    <div class="card-header">
+      <span class="badge" id="arBadge">⚪</span>
+      <span class="card-title">Refrescar canales automáticamente (cada 5 min)</span>
+      <span class="status-text" id="arStatus">—</span>
+    </div>
+    <div class="card-body">
+      <label style="display:flex;align-items:center;gap:.8rem;cursor:pointer">
+        <input type="checkbox" id="arToggle" onchange="toggleAutoRefresh()" style="width:22px;height:22px;accent-color:#667eea">
+        <span id="arLabel" style="font-size:.95rem">Cargando estado...</span>
+      </label>
+    </div>
+  </div>
 </div>
 
 <div class="migration-section">
@@ -1739,6 +1768,38 @@ async function refreshStatus() {
 refreshCounts();
 setInterval(refreshStatus, 3000);
 setInterval(refreshCounts, 3000);
+
+// Refresh automático (función programada de Firebase)
+async function refreshAutoRefreshState() {
+  try {
+    const res = await fetch('/sync/auto-refresh');
+    const data = await res.json();
+    const on = data.enabled === true;
+    const toggle = document.getElementById('arToggle');
+    const label = document.getElementById('arLabel');
+    const badge = document.getElementById('arBadge');
+    const statusText = document.getElementById('arStatus');
+    toggle.checked = on;
+    label.textContent = on ? 'Activado — se refrescará cada 5 minutos' : 'Pausado';
+    badge.textContent = on ? '🟢' : '🔴';
+    statusText.textContent = on ? 'activo' : 'pausado';
+    statusText.className = 'status-text ' + (on ? 'completed' : 'failed');
+  } catch {}
+}
+async function toggleAutoRefresh() {
+  const on = document.getElementById('arToggle').checked;
+  try {
+    const res = await fetch('/sync/auto-refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: on }),
+    });
+    await res.json();
+  } catch {}
+  refreshAutoRefreshState();
+}
+refreshAutoRefreshState();
+setInterval(refreshAutoRefreshState, 30000);
 </script>
 </body>
 </html>`;

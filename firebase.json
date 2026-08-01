@@ -3,7 +3,7 @@
     "location": "us-central1"
   },
   "functions": {
-    "source": ".",
+    "source": "functions",
     "runtime": "nodejs20",
     "ignore": [
       ".git",

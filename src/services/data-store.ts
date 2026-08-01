@@ -118,6 +118,26 @@ export async function saveSyncData(data: SyncData): Promise<void> {
   }
 }
 
+const AUTO_REFRESH_DOC = 'autoRefresh/config';
+
+export async function getAutoRefreshEnabled(): Promise<boolean> {
+  try {
+    const db = getDb();
+    const doc = await db.doc(AUTO_REFRESH_DOC).get();
+    if (!doc.exists) return true;
+    const data = doc.data() || {};
+    return data.enabled !== false;
+  } catch (error) {
+    logger.error({ error }, 'Failed to read autoRefresh config');
+    return true;
+  }
+}
+
+export async function setAutoRefreshEnabled(enabled: boolean): Promise<void> {
+  const db = getDb();
+  await db.doc(AUTO_REFRESH_DOC).set({ enabled: Boolean(enabled), updatedAt: Date.now() }, { merge: true });
+}
+
 export async function getSyncStats(): Promise<{
   movies: number;
   series: number;

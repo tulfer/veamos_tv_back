@@ -17,6 +17,8 @@ import {
   clearLogsHandler,
   migrateToFirestoreHandler,
   migrationStatusHandler,
+  getAutoRefreshHandler,
+  setAutoRefreshHandler,
 } from './controller';
 
 export async function syncRoutes(app: FastifyInstance) {
@@ -37,4 +39,6 @@ export async function syncRoutes(app: FastifyInstance) {
   app.post('/sync/clear-logs/:type', clearLogsHandler);
   app.post('/sync/migrate-to-firestore', migrateToFirestoreHandler);
   app.get('/sync/migration-status', migrationStatusHandler);
+  app.get('/sync/auto-refresh', getAutoRefreshHandler);
+  app.post('/sync/auto-refresh', setAutoRefreshHandler);
 }
