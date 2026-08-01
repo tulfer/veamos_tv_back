@@ -28,10 +28,10 @@ function extractExpiration(url?: string): { expires?: number; expiresDate?: stri
   } catch {
     // ignore
   }
-  const match = target.match(/[?&]expires=(\d+)/i);
+  const match = target.match(/[?&](?:expires|exp)=(\d+)/i);
   if (!match) return {};
   const ts = Number(match[1]);
-  if (!Number.isFinite(ts) || ts <= 0) return {};
+  if (!Number.isFinite(ts) || ts < 1000000000) return {};
   const date = new Date(ts * 1000);
   if (Number.isNaN(date.getTime())) return {};
   return {
