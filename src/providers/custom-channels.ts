@@ -17,6 +17,8 @@ function isM3u8Url(u: string): boolean {
 const CHATYTVGRATIS_BASE = 'https://www.chatytvgratis.net';
 const WSDEPORTES_BASE = 'https://wsdeportes.net';
 const TVPORINTERNET2_BASE = 'https://www.tvporinternet2.com';
+const SENALCOLOMBIA_BASE = 'https://www.senalcolombia.tv';
+const SENALCOLOMBIA_STREAM_FALLBACK = 'https://streaming.rtvc.gov.co/TV_Senal_Colombia_live/smil:live.smil/playlist.m3u8';
 
 // Palabras clave para identificar iframes de no-video (comentarios, redes, anuncios)
 const IFRAME_BLACKLIST = [
@@ -1421,7 +1423,78 @@ export async function getCablevisionHd(slug: string, option?: string, logType?: 
   }
 }
 
-export async function getChannelStream(source: 'chatytv' | 'wsdeportes' | 'tvporinternet2' | 'cablevisionhd', parameter: string, option?: string, logType?: string): Promise<LiveChannel | null> {
+async function extractSenalColombia(url: string, logType?: string): Promise<string | null> {
+  try {
+    elog(logType, `  Nivel 1: ${url}`);
+    const html = await fetchHTML(url);
+
+    // envivosrc:"https:\/\/media.rtvc.gov.co\/kalturartvc\/indexSC.html"
+    const envivoMatch = html.match(/envivosrc"\s*:\s*"([^"]+?)"/i);
+    if (envivoMatch) {
+      let playerUrl = envivoMatch[1].replace(/\\\//g, '/');
+      if (playerUrl.startsWith('//')) playerUrl = 'https:' + playerUrl;
+      elog(logType, `  → player Kaltura: ${playerUrl}`);
+      const playerHtml = await fetchHTMLWithReferer(playerUrl, url);
+      const m3u8Match = playerHtml.match(/https?:\/\/[^"'\s<>]+\.(?:m3u8|m3u)[^"'\s<>]*/i);
+      if (m3u8Match) {
+        elog(logType, `  ✅ .m3u8 en player: ${m3u8Match[0]}`);
+        return m3u8Match[0];
+      }
+    }
+
+    const directMatch = html.match(/https?:\/\/[^"'\s<>]+\.(?:m3u8|m3u)[^"'\s<>]*/i);
+    if (directMatch) {
+      elog(logType, `  ✅ .m3u8 en página: ${directMatch[0]}`);
+      return directMatch[0];
+    }
+
+    logger.warn({ url }, 'No m3u8 found on senalcolombia, usando fallback');
+    elog(logType, `  ⚠ Usando URL conocida de Señal Colombia`);
+    return SENALCOLOMBIA_STREAM_FALLBACK;
+  } catch (e: any) {
+    logger.error({ error: e.message, url }, 'HTTP extract failed for senalcolombia');
+    return SENALCOLOMBIA_STREAM_FALLBACK;
+  }
+}
+
+export async function getSenalColombia(slug: string, logType?: string): Promise<LiveChannel | null> {
+  const cacheKey = `senalcolombia:${slug}`;
+  const cached = memoryCache.get<LiveChannel>(cacheKey);
+  if (cached) return cached;
+
+  const url = `${SENALCOLOMBIA_BASE}/${slug}`;
+  logger.info({ slug, url }, 'Fetching channel from senalcolombia');
+  elog(logType, `=== senalcolombia: ${slug} ===`);
+  elog(logType, `Consultando: ${url}`);
+
+  const streamUrl = await extractSenalColombia(url, logType);
+  if (!streamUrl) {
+    logger.warn({ slug, url }, 'No valid stream source found on senalcolombia');
+    elog(logType, '❌ No se encontró stream en senalcolombia');
+    return null;
+  }
+
+  // Stream público y estable, pero se sirve vía proxy por CORS/consistencia
+  const proxied = buildStreamProxyUrl(streamUrl, url);
+  elog(logType, `✅ URL final: ${proxied}`);
+
+  const result: LiveChannel = {
+    id: `live_${slug}`,
+    title: slug.replace(/-/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase()),
+    logo: undefined,
+    group: 'Canales TV',
+    url: proxied,
+    type: 'live',
+    online: true,
+    refreshUrl: url,
+    proveedor: 'senalcolombia',
+  };
+
+  memoryCache.set(cacheKey, result, 3600000);
+  return result;
+}
+
+export async function getChannelStream(source: 'chatytv' | 'wsdeportes' | 'tvporinternet2' | 'cablevisionhd' | 'senalcolombia', parameter: string, option?: string, logType?: string): Promise<LiveChannel | null> {
   if (source === 'chatytv') {
     return getChatytv(parameter, logType);
   } else if (source === 'wsdeportes') {
@@ -1430,6 +1503,8 @@ export async function getChannelStream(source: 'chatytv' | 'wsdeportes' | 'tvpor
     return getTvPorInternet2(parameter, option, logType);
   } else if (source === 'cablevisionhd') {
     return getCablevisionHd(parameter, option, logType);
+  } else if (source === 'senalcolombia') {
+    return getSenalColombia(parameter, logType);
   }
   return null;
 }
