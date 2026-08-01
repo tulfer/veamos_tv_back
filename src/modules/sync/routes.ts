@@ -13,6 +13,7 @@ import {
   fetchDetailsHandler,
   syncStatusHandler,
   syncCountsHandler,
+  syncCountHandler,
   syncDetailHandler,
   clearLogsHandler,
   migrateToFirestoreHandler,
@@ -35,6 +36,7 @@ export async function syncRoutes(app: FastifyInstance) {
   app.post('/sync/fetch-details', fetchDetailsHandler);
   app.get('/sync/status', syncStatusHandler);
   app.get('/sync/counts', syncCountsHandler);
+  app.get('/sync/count/:type', syncCountHandler);
   app.get('/sync/detail/:type', syncDetailHandler);
   app.post('/sync/clear-logs/:type', clearLogsHandler);
   app.post('/sync/migrate-to-firestore', migrateToFirestoreHandler);

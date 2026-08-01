@@ -3,7 +3,7 @@ import path from 'path';
 import { FastifyRequest, FastifyReply } from 'fastify';
 import { scrapeMovies, scrapeMovieDetail, scrapePopularMovies } from '../../providers/movies';
 import { scrapeSeries, scrapeSeriesDetail, scrapePopularSeries } from '../../providers/series';
-import { saveSyncData, loadSyncData, saveHomeData, loadHomeData, getCollectionCounts, getAutoRefreshConfig, setAutoRefreshConfig } from '../../services/data-store';
+import { saveSyncData, loadSyncData, saveHomeData, loadHomeData, getCollectionCounts, getCollectionCount, getAutoRefreshConfig, setAutoRefreshConfig } from '../../services/data-store';
 import { fetchItemDetails } from '../../providers/cineby';
 import { closeBrowser } from '../../services/video-resolver';
 import { fetchLiveChannels, parseM3U, validateBatch } from '../../providers/live-tv';
@@ -742,6 +742,15 @@ export async function syncStatusHandler(request: FastifyRequest, reply: FastifyR
 export async function syncCountsHandler(_request: FastifyRequest, reply: FastifyReply) {
   const counts = await getCollectionCounts();
   return reply.send(counts);
+}
+
+export async function syncCountHandler(request: FastifyRequest, reply: FastifyReply) {
+  const { type } = request.params as { type: string };
+  const count = await getCollectionCount(type);
+  if (count == null) {
+    return reply.status(404).send({ error: 'Unknown collection', type });
+  }
+  return reply.send({ key: type, count });
 }
 
 export async function getAutoRefreshHandler(_request: FastifyRequest, reply: FastifyReply) {
@@ -1708,7 +1717,20 @@ async function refreshCounts() {
   } catch {}
 }
 
-// Auto-refresh status + progress + counts every 3s
+// Actualiza SOLO la tarjeta indicada con su conteo real (1 lectura en Firestore)
+async function refreshCountFor(key) {
+  try {
+    const res = await fetch('/sync/count/' + key);
+    if (res.ok) {
+      const data = await res.json();
+      const countVal = document.querySelector(\`#card-\${key} .count-val\`);
+      if (countVal) countVal.textContent = data.count;
+    }
+  } catch {}
+}
+
+const prevStatuses = {};
+// Auto-refresh status + progress cada 3s (en memoria, sin Firestore)
 async function refreshStatus() {
   try {
     const res = await fetch('/sync/status');
@@ -1718,6 +1740,11 @@ async function refreshStatus() {
         const s = data[key];
         const card = document.getElementById('card-' + key);
         if (!card) continue;
+        // Al terminar una ejecución, refrescar SOLO esa tarjeta (1 lectura)
+        if (prevStatuses[key] === 'running' && s.status === 'completed') {
+          refreshCountFor(key);
+        }
+        prevStatuses[key] = s.status;
         const badge = card.querySelector('.badge');
         const statusText = card.querySelector('.status-text');
         const btn = card.querySelector('.btn-primary');
@@ -1774,7 +1801,6 @@ async function refreshStatus() {
 }
 refreshCounts();
 setInterval(refreshStatus, 3000);
-setInterval(refreshCounts, 3000);
 
 // Refresh automático (función programada de Firebase)
 async function refreshAutoRefreshState() {
@@ -1812,7 +1838,7 @@ async function saveAutoRefresh() {
   refreshAutoRefreshState();
 }
 refreshAutoRefreshState();
-setInterval(refreshAutoRefreshState, 30000);
+setInterval(refreshAutoRefreshState, 60000);
 </script>
 </body>
 </html>`;

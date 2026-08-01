@@ -2,7 +2,37 @@ import admin from 'firebase-admin';
 import { getFirestore } from '../config/firebase';
 import { collections } from './firestore';
 import { logger } from '../utils/logger';
+import { memoryCache } from '../cache/memory';
 import { SyncData, SyncMovie, SyncSeries, LiveChannel, MediaItem } from '../types';
+
+const SYNC_DATA_CACHE_KEY = 'sync:data';
+const SYNC_DATA_CACHE_TTL_MS = 6 * 60 * 60_000;
+const CHANNELS_CACHE_KEY = 'live:channels:data';
+const CHANNELS_CACHE_TTL_MS = 6 * 60 * 60_000;
+const COUNTS_CACHE_KEY = 'sync:counts';
+const COUNTS_CACHE_TTL_MS = 5 * 60_000;
+const COUNTS_PER_KEY_PREFIX = 'sync:count:';
+const COUNTS_PER_KEY_TTL_MS = 60_000;
+
+const COUNTABLE_COLLECTIONS: Record<string, () => admin.firestore.CollectionReference> = {
+  movies: () => collections.movies(),
+  series: () => collections.series(),
+  estrenoMovies: () => collections.estrenoMovies(),
+  estrenoSeries: () => collections.estrenoSeries(),
+  channels: () => collections.channels(),
+  popularMovies: () => collections.popularMovies(),
+  popularSeries: () => collections.popularSeries(),
+};
+
+/** Clon profundo: evita que los handlers muten el snapshot cacheado
+ *  (la data sincronizada solo cambia vía saveSyncData, que invalida el caché). */
+function cloneDeep<T>(value: T): T {
+  try {
+    return structuredClone(value);
+  } catch {
+    return JSON.parse(JSON.stringify(value)) as T;
+  }
+}
 
 function getDb() {
   return getFirestore();
@@ -37,16 +67,28 @@ async function replaceCollection<T extends { id: string }>(
   colRef: admin.firestore.CollectionReference,
   items: T[],
 ): Promise<void> {
-  const existing = await colRef.get();
   const db = getDb();
 
-  const ops: Array<{ ref: admin.firestore.DocumentReference; type: 'delete' | 'set'; data?: unknown }> = [
-    ...existing.docs.map((doc) => ({ ref: doc.ref, type: 'delete' as const })),
-    ...items.map((item) => {
-      const { id, ...data } = item;
-      return { ref: colRef.doc(id), type: 'set' as const, data: stripUndefined(data) };
-    }),
-  ];
+  const newIds = new Set(items.map((item) => item.id));
+  const ops: Array<{ ref: admin.firestore.DocumentReference; type: 'delete' | 'set'; data?: unknown }> = [];
+
+  // Usar listDocuments (solo referencias/IDs) en vez de get() (docs completos):
+  // cada sync lee mucho menos de Firestore. Si falla, se omite el borrado de huérfanos.
+  try {
+    const existingRefs = await colRef.listDocuments();
+    for (const ref of existingRefs) {
+      if (!newIds.has(ref.id)) {
+        ops.push({ ref, type: 'delete' as const });
+      }
+    }
+  } catch (error) {
+    logger.warn({ error: (error as Error).message, col: colRef.id }, 'replaceCollection: no se pudieron listar existentes, se omiten borrados');
+  }
+
+  for (const item of items) {
+    const { id, ...data } = item;
+    ops.push({ ref: colRef.doc(id), type: 'set' as const, data: stripUndefined(data) });
+  }
 
   // Firestore allows max 500 operations per batch; use 400 to stay safe
   const BATCH_LIMIT = 400;
@@ -65,6 +107,9 @@ async function replaceCollection<T extends { id: string }>(
 }
 
 export async function loadSyncData(): Promise<SyncData | null> {
+  const cached = memoryCache.get<SyncData>(SYNC_DATA_CACHE_KEY);
+  if (cached) return cloneDeep(cached);
+
   try {
     const [movies, series, channels, popularMovies, popularSeries, estrenoMovies, estrenoSeries, metaSnap] =
       await Promise.all([
@@ -80,7 +125,7 @@ export async function loadSyncData(): Promise<SyncData | null> {
 
     const meta = metaSnap.exists ? (metaSnap.data() as { updatedAt?: number }) : null;
 
-    return {
+    const result: SyncData = {
       movies,
       series,
       channels,
@@ -90,10 +135,24 @@ export async function loadSyncData(): Promise<SyncData | null> {
       estrenoSeries,
       updatedAt: meta?.updatedAt ?? Date.now(),
     };
+
+    memoryCache.set(SYNC_DATA_CACHE_KEY, result, SYNC_DATA_CACHE_TTL_MS);
+    return result;
   } catch (error) {
     logger.error({ error }, 'Failed to load sync data from Firestore');
     return null;
   }
+}
+
+/** Carga solo la colección de canales (barata), con caché en memoria para no
+ *  leer Firestore en cada request de /live/channels. */
+export async function loadChannels(): Promise<LiveChannel[]> {
+  const cached = memoryCache.get<LiveChannel[]>(CHANNELS_CACHE_KEY);
+  if (cached) return cloneDeep(cached);
+
+  const channels = await getCollectionAsArray<LiveChannel>(collections.channels());
+  memoryCache.set(CHANNELS_CACHE_KEY, channels, CHANNELS_CACHE_TTL_MS);
+  return channels;
 }
 
 export async function saveSyncData(data: SyncData): Promise<void> {
@@ -108,6 +167,12 @@ export async function saveSyncData(data: SyncData): Promise<void> {
       replaceCollection(collections.estrenoSeries(), data.estrenoSeries),
       collections.syncMeta().doc('data').set({ updatedAt: data.updatedAt }, { merge: true }),
     ]);
+    memoryCache.del(SYNC_DATA_CACHE_KEY);
+    memoryCache.del(CHANNELS_CACHE_KEY);
+    memoryCache.del(COUNTS_CACHE_KEY);
+    for (const key of Object.keys(COUNTABLE_COLLECTIONS)) {
+      memoryCache.del(COUNTS_PER_KEY_PREFIX + key);
+    }
     logger.info(
       { movies: data.movies.length, series: data.series.length, channels: data.channels.length },
       'Sync data saved to Firestore',
@@ -190,6 +255,9 @@ export async function getSyncStats(): Promise<{
 }
 
 export async function getCollectionCounts(): Promise<Record<string, number>> {
+  const cached = memoryCache.get<Record<string, number>>(COUNTS_CACHE_KEY);
+  if (cached) return cached;
+
   try {
     const counts: Record<string, number> = {};
     const collections_to_count = [
@@ -220,10 +288,30 @@ export async function getCollectionCounts(): Promise<Record<string, number>> {
     counts['importM3U'] = counts['channels'] ?? 0;
     counts['refreshAll'] = counts['channels'] ?? 0;
     counts['refreshExpired'] = counts['channels'] ?? 0;
+    memoryCache.set(COUNTS_CACHE_KEY, counts, COUNTS_CACHE_TTL_MS);
     return counts;
   } catch (error) {
     logger.error({ error }, 'Failed to get collection counts');
     return {};
+  }
+}
+
+/** Cuenta una sola colección (1 lectura) con caché por clave. */
+export async function getCollectionCount(key: string): Promise<number | null> {
+  const cacheKey = COUNTS_PER_KEY_PREFIX + key;
+  const cached = memoryCache.get<number>(cacheKey);
+  if (cached != null) return cached;
+
+  const getRef = COUNTABLE_COLLECTIONS[key];
+  if (!getRef) return null;
+
+  try {
+    const docs = await getRef().listDocuments();
+    memoryCache.set(cacheKey, docs.length, COUNTS_PER_KEY_TTL_MS);
+    return docs.length;
+  } catch (error) {
+    logger.error({ error, key }, 'Failed to count collection');
+    return null;
   }
 }
 

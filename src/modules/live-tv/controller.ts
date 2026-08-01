@@ -2,7 +2,7 @@ import { FastifyRequest, FastifyReply } from 'fastify';
 import { fetchLiveChannels, getChannelsByGroup, getChannelsByCountry, getChannelGroups } from '../../providers/live-tv';
 import { getChannelStream } from '../../providers/custom-channels';
 import { getCachedOrFetch, memoryCache } from '../../cache';
-import { loadSyncData, saveSyncData } from '../../services/data-store';
+import { loadSyncData, saveSyncData, loadChannels } from '../../services/data-store';
 import { LiveChannel } from '../../types';
 import { logger } from '../../utils/logger';
 import { startSync, completeSync, failSync, updateSyncProgress, pushLog, clearLogs } from '../../services/sync-status';
@@ -132,8 +132,7 @@ export async function getChannelsHandler(request: FastifyRequest, reply: Fastify
   const showAll = all === 'true' || all === '1';
   const pageSize = limit ? (parseInt(limit) || PAGE_SIZE) : PAGE_SIZE;
 
-  const synced = await loadSyncData();
-  const syncedChannels = synced?.channels;
+  const syncedChannels = await loadChannels();
 
   let channels: LiveChannel[];
   if (syncedChannels && syncedChannels.length > 0) {
@@ -173,9 +172,8 @@ export async function getChannelsHandler(request: FastifyRequest, reply: Fastify
 export async function getChannelDetailHandler(request: FastifyRequest, reply: FastifyReply) {
   const { id } = request.params as any;
 
-  // Intentar obtener el canal desde los datos sincronizados primero
-  const synced = await loadSyncData();
-  const syncedChannels = synced?.channels;
+  // Intentar obtener el canal desde los canales sincronizados primero
+  const syncedChannels = await loadChannels();
   let channel: LiveChannel | undefined;
 
   if (syncedChannels && syncedChannels.length > 0) {
