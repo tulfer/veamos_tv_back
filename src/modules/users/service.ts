@@ -1,11 +1,28 @@
-import { collections } from '../../services/firestore';
 import { UserProfile, FavoriteItem, ContinueWatchingItem, HistoryItem, MediaItem } from '../../types';
+import { storeKeys, getRow, setRow } from '../../services/store';
+
+interface UserRow {
+  uid: string;
+  email: string;
+  displayName?: string;
+  photoURL?: string;
+  createdAt: number;
+  profiles: UserProfile[];
+}
+
+interface ItemsRow<T> {
+  items: T[];
+}
+
+async function getUserRow(uid: string): Promise<UserRow | null> {
+  return getRow<UserRow>(storeKeys.user(uid));
+}
 
 export async function getOrCreateUser(uid: string, email: string, displayName?: string) {
-  const doc = await collections.users().doc(uid).get();
-  if (doc.exists) return { id: doc.id, ...doc.data() } as any;
+  const existing = await getUserRow(uid);
+  if (existing) return existing;
 
-  const user = {
+  const user: UserRow = {
     uid,
     email,
     displayName: displayName || email.split('@')[0],
@@ -15,74 +32,79 @@ export async function getOrCreateUser(uid: string, email: string, displayName?: 
     ],
   };
 
-  await collections.users().doc(uid).set(user);
+  await setRow(storeKeys.user(uid), user);
   return user;
 }
 
 export async function getProfiles(uid: string): Promise<UserProfile[]> {
-  const doc = await collections.users().doc(uid).get();
-  return doc.data()?.profiles || [];
+  const user = await getUserRow(uid);
+  return user?.profiles || [];
 }
 
 export async function updateProfiles(uid: string, profiles: UserProfile[]) {
-  await collections.users().doc(uid).update({ profiles });
+  const user = await getUserRow(uid);
+  if (!user) return;
+  await setRow(storeKeys.user(uid), { ...user, profiles });
 }
 
 export async function addProfile(uid: string, profile: UserProfile) {
-  const doc = await collections.users().doc(uid).get();
-  const profiles = doc.data()?.profiles || [];
+  const user = await getUserRow(uid);
+  if (!user) return;
+  const profiles = user.profiles || [];
   profiles.push(profile);
-  await doc.ref?.update({ profiles }) || await collections.users().doc(uid).update({ profiles });
+  await setRow(storeKeys.user(uid), { ...user, profiles });
+}
+
+async function getProfileItems<T>(key: string): Promise<T[]> {
+  const row = await getRow<ItemsRow<T>>(key);
+  return row?.items || [];
+}
+
+async function setProfileItems<T>(key: string, items: T[]): Promise<void> {
+  await setRow<ItemsRow<T>>(key, { items });
 }
 
 export async function getFavorites(uid: string, profileId: string): Promise<FavoriteItem[]> {
-  const doc = await collections.users().doc(uid).collection('favorites').doc(profileId).get();
-  return doc.data()?.items || [];
+  return getProfileItems<FavoriteItem>(storeKeys.favorites(uid, profileId));
 }
 
 export async function addFavorite(uid: string, profileId: string, item: FavoriteItem) {
-  const ref = collections.users().doc(uid).collection('favorites').doc(profileId);
-  const doc = await ref.get();
-  const items = doc.data()?.items || [];
-  const exists = items.some((i: any) => i.id === item.id);
+  const key = storeKeys.favorites(uid, profileId);
+  const items = await getProfileItems<FavoriteItem>(key);
+  const exists = items.some((i) => i.id === item.id);
   if (!exists) {
     items.push({ ...item, addedAt: Date.now() });
-    await ref.set({ items }, { merge: true });
+    await setProfileItems(key, items);
   }
 }
 
 export async function removeFavorite(uid: string, profileId: string, itemId: string) {
-  const ref = collections.users().doc(uid).collection('favorites').doc(profileId);
-  const doc = await ref.get();
-  const items = (doc.data()?.items || []).filter((i: any) => i.id !== itemId);
-  await ref.set({ items }, { merge: true });
+  const key = storeKeys.favorites(uid, profileId);
+  const items = (await getProfileItems<FavoriteItem>(key)).filter((i) => i.id !== itemId);
+  await setProfileItems(key, items);
 }
 
 export async function getContinueWatching(uid: string, profileId: string): Promise<ContinueWatchingItem[]> {
-  const doc = await collections.users().doc(uid).collection('continue-watching').doc(profileId).get();
-  return doc.data()?.items || [];
+  return getProfileItems<ContinueWatchingItem>(storeKeys.continueWatching(uid, profileId));
 }
 
 export async function upsertContinueWatching(uid: string, profileId: string, item: ContinueWatchingItem) {
-  const ref = collections.users().doc(uid).collection('continue-watching').doc(profileId);
-  const doc = await ref.get();
-  let items = doc.data()?.items || [];
-  const idx = items.findIndex((i: any) => i.id === item.id);
+  const key = storeKeys.continueWatching(uid, profileId);
+  const items = await getProfileItems<ContinueWatchingItem>(key);
+  const idx = items.findIndex((i) => i.id === item.id);
   if (idx >= 0) {
     items[idx] = { ...item, updatedAt: Date.now() };
   } else {
     items.push({ ...item, updatedAt: Date.now() });
   }
-  items.sort((a: any, b: any) => b.updatedAt - a.updatedAt);
-  await ref.set({ items }, { merge: true });
+  items.sort((a, b) => b.updatedAt - a.updatedAt);
+  await setProfileItems(key, items);
 }
 
 export async function getHistory(uid: string, profileId: string): Promise<HistoryItem[]> {
-  const doc = await collections.users().doc(uid).collection('history').doc(profileId).get();
-  return doc.data()?.items || [];
+  return getProfileItems<HistoryItem>(storeKeys.history(uid, profileId));
 }
 
 export async function getRecommendations(uid: string, profileId: string): Promise<MediaItem[]> {
-  const doc = await collections.recommendations().doc(profileId).get();
-  return doc.data()?.items || [];
+  return getProfileItems<MediaItem>(storeKeys.recommendations(profileId));
 }

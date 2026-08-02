@@ -12,6 +12,7 @@ import { logger } from '../../utils/logger';
 import { memoryCache } from '../../cache/memory';
 import { SyncMovie, SyncSeries, SyncData, LiveChannel } from '../../types';
 import { startSync, completeSync, failSync, updateSyncProgress, getLogs, clearLogs, SyncType } from '../../services/sync-status';
+import { firestoreMigrationStatus, getFirestoreMigrationStatus, runFirestoreToSupabase, FirestoreMigrationStatus } from '../../services/firestore-migrate';
 
 interface MigrationStatus {
   running: boolean;
@@ -736,7 +737,7 @@ export async function syncStatusHandler(request: FastifyRequest, reply: FastifyR
     { key: 'updateChannel', label: 'Actualizar Canal (PATCH)', route: '/live/channels/{id}', method: 'PATCH', needsId: true, needsJson: true },
   ];
 
-  return reply.type('text/html').send(generateSyncDashboard(status, syncDefs, migrationStatus));
+  return reply.type('text/html').send(generateSyncDashboard(status, syncDefs, migrationStatus, firestoreMigrationStatus));
 }
 
 export async function syncCountsHandler(_request: FastifyRequest, reply: FastifyReply) {
@@ -943,6 +944,7 @@ function generateSyncDashboard(
   status: Record<string, { status: string; lastRun: number | null; duration?: number; count?: number; error?: string; progress?: { current: number; total?: number; message: string } }>,
   syncDefs: { key: string; label: string; route: string; method: string; needsPages?: boolean; needsUrl?: boolean; needsBody?: boolean; needsId?: boolean; needsJson?: boolean }[],
   migStatus: MigrationStatus,
+  fsMigStatus: FirestoreMigrationStatus,
 ): string {
   const statusBadge = (s: string) => {
     const map: Record<string, string> = { idle: '⚪', running: '🟡', completed: '🟢', failed: '🔴' };
@@ -986,6 +988,11 @@ function generateSyncDashboard(
   const migRunning = migStatus.running;
   const migBadge = migRunning ? '🟡' : migStatus.progress === 'completed' ? '🟢' : migStatus.progress === 'error' ? '🔴' : '⚪';
   const migMsg = migRunning ? 'Migrando...' : migStatus.progress === 'completed' ? 'Completado' : migStatus.progress === 'error' ? 'Error' : 'Inactivo';
+
+  const fsRunning = fsMigStatus.running;
+  const fsBadge = fsRunning ? '🟡' : fsMigStatus.progress === 'completed' ? '🟢' : fsMigStatus.progress === 'error' ? '🔴' : '⚪';
+  const fsMsg = fsRunning ? 'Migrando...' : fsMigStatus.progress === 'completed' ? 'Completado' : fsMigStatus.progress === 'error' ? 'Error' : fsMigStatus.progress === 'reading' || fsMigStatus.progress === 'writing' ? 'En curso' : 'Inactivo';
+  const fsBarWidth = fsMigStatus.progress === 'idle' ? 0 : fsMigStatus.progress === 'completed' || fsMigStatus.progress === 'error' ? 100 : 55;
 
   return `<!DOCTYPE html>
 <html lang="es">
@@ -1115,6 +1122,28 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
         ${migRunning ? 'Migrando...' : '▶ Ejecutar Migración'}
       </button>
       <a href="/sync/migration-status" class="btn btn-secondary" style="text-decoration:none">📊 Detalle</a>
+    </div>
+  </div>
+</div>
+
+<div class="migration-section">
+  <h2 style="margin-bottom:1rem;font-size:1.2rem;color:#a0a0c0">🚚 Migrar Firestore a Supabase</h2>
+  <div class="migration-card" id="smigCard">
+    <div class="card-header">
+      <span class="badge" id="smigBadge">${fsBadge}</span>
+      <span class="card-title">Desde Firestore hacia Supabase</span>
+      <span class="status-text ${fsMigStatus.progress === 'completed' ? 'completed' : fsMigStatus.progress === 'error' ? 'failed' : fsRunning ? 'running' : 'idle'}" id="smigStatusText">${fsMsg}</span>
+    </div>
+    <div class="card-body">
+      <div id="smigMsg" class="msg ${fsMigStatus.progress === 'error' ? 'error' : fsMigStatus.progress === 'completed' ? 'success' : 'info'}">${fsMigStatus.message || 'Presiona Ejecutar para copiar los datos de Firestore hacia Supabase.'}</div>
+      <div class="bar">
+        <div class="bar-fill ${fsMigStatus.progress === 'completed' ? 'completed' : ''} ${fsMigStatus.progress === 'error' ? 'error' : ''}" id="smigBar" style="width:${fsBarWidth}%"></div>
+      </div>
+    </div>
+    <div class="card-actions">
+      <button class="btn btn-danger" id="smigBtn" onclick="runSupabaseMigration()" ${fsRunning ? 'disabled' : ''}>
+        ${fsRunning ? 'Migrando...' : '▶ Ejecutar Migración'}
+      </button>
     </div>
   </div>
 </div>
@@ -1481,6 +1510,42 @@ async function runMigration() {
   } catch (e) { console.error(e); }
   setTimeout(refreshStatus, 500);
 }
+
+async function runSupabaseMigration() {
+  const btn = document.getElementById('smigBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Migrando...'; }
+  try {
+    const res = await fetch('/sync/migrate-firestore-to-supabase', { method: 'POST' });
+    if (!res.ok) console.error('Firestore->Supabase migration error:', await res.text());
+  } catch (e) { console.error(e); }
+  setTimeout(refreshFirestoreMigrationStatus, 500);
+}
+
+async function refreshFirestoreMigrationStatus() {
+  try {
+    const res = await fetch('/sync/firestore-to-supabase-status');
+    if (!res.ok) return;
+    const s = await res.json();
+    const badge = document.getElementById('smigBadge');
+    const statusText = document.getElementById('smigStatusText');
+    const msg = document.getElementById('smigMsg');
+    const bar = document.getElementById('smigBar');
+    const btn = document.getElementById('smigBtn');
+    if (!statusText || !msg || !bar || !btn) return;
+    const map = { idle: '⚪', running: '🟡', completed: '🟢', error: '🔴' };
+    const text = s.running ? 'Migrando...' : s.progress === 'completed' ? 'Completado' : s.progress === 'error' ? 'Error' : 'Inactivo';
+    if (badge) badge.textContent = map[s.running ? 'running' : s.progress] || '⚪';
+    statusText.textContent = text;
+    statusText.className = 'status-text ' + (s.running ? 'running' : s.progress === 'completed' ? 'completed' : s.progress === 'error' ? 'failed' : 'idle');
+    msg.textContent = s.message || '—';
+    msg.className = 'msg ' + (s.progress === 'error' ? 'error' : s.progress === 'completed' ? 'success' : 'info');
+    bar.style.width = (s.progress === 'idle' ? 0 : s.progress === 'completed' || s.progress === 'error' ? 100 : 55) + '%';
+    bar.className = 'bar-fill ' + (s.progress === 'completed' ? 'completed' : '') + (s.progress === 'error' ? 'error' : '');
+    btn.disabled = s.running;
+    btn.textContent = s.running ? 'Migrando...' : '▶ Ejecutar Migración';
+  } catch {}
+}
+setInterval(refreshFirestoreMigrationStatus, 3000);
 
 function closeModal() {
   document.getElementById('pagesModal').classList.remove('active');
@@ -2003,4 +2068,34 @@ export async function migrationStatusHandler(request: FastifyRequest, reply: Fas
     return reply.type('text/html').send(generateMigrationPage(migrationStatus));
   }
   return reply.send(migrationStatus);
+}
+
+/* ───── Migración de Firestore a Supabase (dashboard) ───── */
+
+export async function runFirestoreToSupabaseHandler(_request: FastifyRequest, reply: FastifyReply) {
+  const status = getFirestoreMigrationStatus();
+  if (status.running) {
+    return reply.status(409).send({ error: 'Migration already in progress' });
+  }
+
+  status.running = true;
+  status.progress = 'reading';
+  status.message = 'Iniciando migración Firestore -> Supabase...';
+  status.error = null;
+  status.updatedAt = Date.now();
+
+  runFirestoreToSupabase().catch((err) => {
+    status.running = false;
+    status.progress = 'error';
+    status.message = err.message;
+    status.error = err.message;
+    status.updatedAt = Date.now();
+    logger.error({ error: err }, 'Firestore -> Supabase migration failed');
+  });
+
+  return reply.send({ ok: true, message: 'Migration started' });
+}
+
+export async function firestoreToSupabaseStatusHandler(_request: FastifyRequest, reply: FastifyReply) {
+  return reply.send(getFirestoreMigrationStatus());
 }

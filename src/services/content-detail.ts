@@ -1,6 +1,5 @@
 import { ContentDetail, SyncMovie, SyncSeries } from '../types';
-import { loadSyncData } from './data-store';
-import { collections } from './firestore';
+import { loadSyncData, upsertItemByCol } from './data-store';
 import { scrapeMovieDetail } from '../providers/movies';
 import { scrapeSeriesDetail } from '../providers/series';
 import { logger } from '../utils/logger';
@@ -85,12 +84,10 @@ function mapSeries(series: SyncSeries): ContentDetail {
 
 async function healDetail(collection: 'movies' | 'series', detail: ContentDetail): Promise<void> {
   try {
-    const col = collection === 'movies' ? collections.movies() : collections.series();
-    const clean = JSON.parse(JSON.stringify(detail)) as Record<string, unknown>;
-    delete clean.id;
-    await col.doc(detail.id).set(clean);
+    const { id, ...clean } = JSON.parse(JSON.stringify(detail)) as { id: string } & Record<string, unknown>;
+    await upsertItemByCol<{ id: string } & Record<string, unknown>>(collection, { id, ...clean });
     memoryCache.del('sync:data');
-    logger.info({ id: detail.id, col: collection }, 'Detalle enriquecido guardado en Firestore');
+    logger.info({ id: detail.id, col: collection }, 'Detalle enriquecido guardado en la base');
   } catch (error) {
     logger.warn({ error: (error as Error).message, id: detail.id }, 'No se pudo guardar detalle enriquecido');
   }

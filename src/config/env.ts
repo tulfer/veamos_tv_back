@@ -8,6 +8,13 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   HOST: z.string().default('0.0.0.0'),
 
+  // Supabase (Postgres) — reemplaza Firestore como capa de datos
+  DATABASE_URL: z.string().optional(),
+  // Secreto de firma de los tokens de Supabase Auth (validación en /auth/supabase)
+  SUPABASE_JWT_SECRET: z.string().optional(),
+
+  // Firebase admin — SOLO se usan para migrar Firestore -> Supabase desde el
+  // dashboard (/sync/migrate-firestore-to-supabase). No se usan en runtime.
   FIREBASE_PROJECT_ID: z.string().optional(),
   FIREBASE_CLIENT_EMAIL: z.string().optional(),
   FIREBASE_PRIVATE_KEY: z.string().optional(),

@@ -4,6 +4,7 @@ import sensible from '@fastify/sensible';
 import { env } from './config/env';
 import { logger } from './utils/logger';
 import { errorHandler } from './middleware/error';
+import { ensureStoreTable } from './services/store';
 
 import { authRoutes } from './modules/auth/routes';
 import { userRoutes } from './modules/users/routes';
@@ -135,7 +136,9 @@ async function buildServer() {
     ${syncRow('Home', status.home)}
   </div>
 </div>`;
-    } catch {}
+    } catch (syncError) {
+      process.stderr.write(`Sync status section failed: ${(syncError as Error)?.message}\n`);
+    }
 
     return `<!DOCTYPE html>
 <html lang="es">
@@ -213,6 +216,9 @@ ${syncHtml}
 
 async function start() {
   try {
+    process.stderr.write('start: verificando tabla store (Supabase)...\n');
+    await ensureStoreTable();
+
     process.stderr.write('start: building server...\n');
     const app = await buildServer();
     const port = parseInt(process.env.PORT || '8080', 10);

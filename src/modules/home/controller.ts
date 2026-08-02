@@ -91,7 +91,7 @@ async function findItemInHome(id: number): Promise<{ title: string; year?: strin
     const homeData = await loadHomeData();
     if (!homeData) return undefined;
 
-    function search(obj: any): { title: string; year?: string } | undefined {
+    const search = (obj: any): { title: string; year?: string } | undefined => {
       if (!obj || typeof obj !== 'object') return undefined;
       if (Array.isArray(obj)) {
         for (const item of obj) {
@@ -108,7 +108,7 @@ async function findItemInHome(id: number): Promise<{ title: string; year?: strin
         if (found) return found;
       }
       return undefined;
-    }
+    };
     return search(homeData);
   } catch {
     return undefined;

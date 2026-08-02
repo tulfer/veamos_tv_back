@@ -1,6 +1,5 @@
 import jwt from 'jsonwebtoken';
 import { env } from '../../config/env';
-import { getFirebaseAuth } from '../../config/firebase';
 import { logger } from '../../utils/logger';
 
 interface TokenPair {
@@ -48,17 +47,23 @@ export function refreshTokens(refreshToken: string): TokenPair | null {
   }
 }
 
-export async function verifyFirebaseToken(idToken: string): Promise<AuthUser | null> {
+export async function verifyExternalToken(idToken: string): Promise<AuthUser | null> {
+  if (!env.SUPABASE_JWT_SECRET) {
+    logger.warn('SUPABASE_JWT_SECRET no configurado, no se puede validar token externo');
+    return null;
+  }
   try {
-    const decoded = await getFirebaseAuth().verifyIdToken(idToken);
+    const payload = jwt.verify(idToken, env.SUPABASE_JWT_SECRET, { algorithms: ['HS256'] }) as any;
+    if (!payload || typeof payload !== 'object' || !payload.sub) return null;
+    const meta = payload.user_metadata || {};
     return {
-      uid: decoded.uid,
-      email: decoded.email || '',
-      displayName: decoded.name,
-      photoURL: decoded.picture,
+      uid: payload.sub,
+      email: payload.email || meta.email || '',
+      displayName: meta.full_name || meta.name || meta.preferred_username || '',
+      photoURL: meta.avatar_url || meta.picture || '',
     };
   } catch (error) {
-    logger.error({ error }, 'Firebase token verification failed');
+    logger.error({ error }, 'External token verification failed');
     return null;
   }
 }

@@ -1,14 +1,13 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
-import { generateTokens, refreshTokens, verifyFirebaseToken } from './service';
-import { logger } from '../../utils/logger';
+import { generateTokens, refreshTokens, verifyExternalToken } from './service';
 
 const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(6),
 });
 
-const firebaseLoginSchema = z.object({
+const externalTokenSchema = z.object({
   idToken: z.string().min(1),
 });
 
@@ -28,12 +27,12 @@ export async function loginHandler(request: FastifyRequest, reply: FastifyReply)
   });
 }
 
-export async function firebaseLoginHandler(request: FastifyRequest, reply: FastifyReply) {
-  const { idToken } = firebaseLoginSchema.parse(request.body);
+export async function externalTokenLoginHandler(request: FastifyRequest, reply: FastifyReply) {
+  const { idToken } = externalTokenSchema.parse(request.body);
 
-  const user = await verifyFirebaseToken(idToken);
+  const user = await verifyExternalToken(idToken);
   if (!user) {
-    return reply.status(401).send({ error: 'Invalid Firebase token' });
+    return reply.status(401).send({ error: 'Invalid token' });
   }
 
   const tokens = generateTokens(user.uid, user.email);
