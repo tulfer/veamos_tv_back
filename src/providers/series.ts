@@ -2,8 +2,9 @@ import * as cheerio from 'cheerio';
 import { fetchHTML } from '../utils/http';
 import { logger } from '../utils/logger';
 import { memoryCache } from '../cache/memory';
-import { MediaItem, ContentDetail, Season, Episode, CastMember, VideoLanguage, VideoServer } from '../types';
+import { MediaItem, ContentDetail, Season, Episode, VideoLanguage, VideoServer } from '../types';
 import { resolveVideoUrl } from '../services/video-resolver';
+import { extractDetailMeta } from './pelisplus-meta';
 
 const BASE_URL = 'https://www.pelisplushd.la';
 const SERIES_URL = `${BASE_URL}/series`;
@@ -156,24 +157,10 @@ export async function scrapeSeriesDetail(id: string): Promise<ContentDetail | nu
       return getFallbackSeriesDetail(id);
     }
 
-    const description = $('.description, .sinopsis, [class*="sinopsis"]').first().text().trim() || 'Description not available';
-    const poster = $('img[src*="/poster/"]').first().attr('src') || '';
+    const meta = extractDetailMeta($);
+    const poster = meta.poster;
     const backdrop = $('.backdrop img, .background img').first().attr('src') || poster;
-
-    const genres: string[] = [];
-    $('.genres a, .genre, [class*="genre"] a').each((_, el) => {
-      const g = $(el).text().trim();
-      if (g && !g.includes('VER')) genres.push(g);
-    });
-
-    const cast: CastMember[] = [];
-    $('.cast a, .actor, [class*="actor"]').each((_, el) => {
-      const name = $(el).text().trim();
-      if (name && name.length < 50 && !name.includes('VER')) cast.push({ name });
-    });
-
-    const ratingText = $('.rating, .imdb, .stars').first().text().trim();
-    const match = ratingText.match(/([\d.]+)/);
+    const rating = meta.rating || 8.0;
 
     const seasons: Season[] = [];
     const seasonMap = new Map<number, { title: string; episodes: Episode[] }>();
@@ -263,13 +250,13 @@ export async function scrapeSeriesDetail(id: string): Promise<ContentDetail | nu
     const detail: ContentDetail = {
       id,
       title,
-      description,
+      description: meta.description,
       poster: posterUrl,
       backdrop: backdropUrl,
-      rating: match ? parseFloat(match[1]) : 8.0,
-      year: 2024,
-      genres: genres.length > 0 ? genres : ['Drama', 'Action'],
-      cast: cast.length > 0 ? cast.slice(0, 10) : [{ name: 'Reparto Principal' }],
+      rating,
+      year: meta.year || 2024,
+      genres: meta.genres.length > 0 ? meta.genres : ['Drama', 'Action'],
+      cast: meta.cast.length > 0 ? meta.cast.slice(0, 10) : [{ name: 'Reparto Principal' }],
       type: 'series',
       seasons: seasons.length > 0 ? seasons : getDefaultSeasons(id),
       videos: videos.length > 0 ? videos : undefined,

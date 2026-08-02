@@ -2,8 +2,9 @@ import * as cheerio from 'cheerio';
 import { fetchHTML } from '../utils/http';
 import { logger } from '../utils/logger';
 import { memoryCache } from '../cache/memory';
-import { MediaItem, ContentDetail, CastMember, VideoLanguage, VideoServer } from '../types';
+import { MediaItem, ContentDetail, VideoLanguage, VideoServer } from '../types';
 import { resolveVideoUrl } from '../services/video-resolver';
+import { extractDetailMeta } from './pelisplus-meta';
 
 const BASE_URL = 'https://www.pelisplushd.la';
 const MOVIES_URL = `${BASE_URL}/peliculas/estrenos`;
@@ -173,26 +174,11 @@ export async function scrapeMovieDetail(id: string): Promise<ContentDetail | nul
       return getFallbackMovieDetail(id);
     }
 
-    const description = $('.description, .sinopsis, [class*="sinopsis"]').first().text().trim() || 'Description not available';
-    const poster = $('.poster img, .cover img, .Poster img, [class*="poster"] img').first().attr('src') || '';
+    const meta = extractDetailMeta($);
+    const poster = meta.poster;
     const backdrop = $('.backdrop img, .background img').first().attr('src') || poster;
-
-    const genres: string[] = [];
-    $('.genres a, .genre, [class*="genre"] a').each((_, el) => {
-      const g = $(el).text().trim();
-      if (g && g.length < 30) genres.push(g);
-    });
-
-    const cast: CastMember[] = [];
-    $('.cast a, .actor, [class*="actor"]').each((_, el) => {
-      const name = $(el).text().trim();
-      if (name && name.length < 50 && !name.includes('VER')) cast.push({ name });
-    });
-
-    const ratingText = $('.rating, .imdb, .stars').first().text().trim();
-    const rating = extractRating(ratingText) || 7.0;
-    const yearText = $('.year, .date').first().text().trim();
-    const year = parseInt(yearText) || 2024;
+    const rating = meta.rating || 7.0;
+    const year = meta.year || 2024;
     const duration = $('.duration, .runtime').first().text().trim() || '2h';
 
     const posterUrl = poster.startsWith('http') ? poster : poster ? `${BASE_URL}${poster}` : undefined;
@@ -204,14 +190,14 @@ export async function scrapeMovieDetail(id: string): Promise<ContentDetail | nul
     const detail: ContentDetail = {
       id,
       title,
-      description,
+      description: meta.description,
       poster: posterUrl,
       backdrop: backdropUrl,
       rating,
       year,
       duration: duration || undefined,
-      genres: genres.length > 0 ? genres : ['Action', 'Drama'],
-      cast: cast.length > 0 ? cast.slice(0, 10) : [{ name: 'Reparto Principal' }],
+      genres: meta.genres.length > 0 ? meta.genres : ['Action', 'Drama'],
+      cast: meta.cast.length > 0 ? meta.cast.slice(0, 10) : [{ name: 'Reparto Principal' }],
       type: 'movie',
       videos: videos.length > 0 ? videos : undefined,
     };
