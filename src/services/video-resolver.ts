@@ -5,9 +5,9 @@ import { memoryCache } from '../cache/memory';
 const CACHE_TTL = 600_000;
 
 const STREAM_PATTERNS = [
-  /(https?:\/\/[^"\'\\\s<>]+\.(?:m3u8|mp4)[^"\'\\\s<>]*)/gi,
-  /(https?:\/\/[^"\'\\\s<>]+\/playlist[^"\'\\\s<>]*)/gi,
-  /(https?:\/\/[^"\'\\\s<>]+\/manifest[^"\'\\\s<>]*)/gi,
+  /(https?:\/\/[^"'\\\s<>]+\.(?:m3u8|mp4)[^"'\\\s<>]*)/gi,
+  /(https?:\/\/[^"'\\\s<>]+\/playlist[^"'\\\s<>]*)/gi,
+  /(https?:\/\/[^"'\\\s<>]+\/manifest[^"'\\\s<>]*)/gi,
   /file["'\s]*[:=]["'\s]*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/gi,
   /src=["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/gi,
 ];
@@ -27,8 +27,14 @@ async function fetchPage(url: string): Promise<string> {
 }
 
 function findStreamUrl(html: string): string | null {
+  // Las páginas embed (p.ej. netu) incluyen URLs de ejemplo dentro de
+  // comentarios /* */ (plantillas del player) que NO son el stream real.
+  // Quitarlas antes de buscar para no almacenar URLs vencidas de ejemplo.
+  const clean = html
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/<!--[\s\S]*?-->/g, '');
   for (const pattern of STREAM_PATTERNS) {
-    const match = pattern.exec(html);
+    const match = pattern.exec(clean);
     if (match) {
       const url = match[1] || match[0];
       if (url.startsWith('http') && (url.includes('.m3u8') || url.includes('.mp4'))) {

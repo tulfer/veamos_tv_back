@@ -1,8 +1,10 @@
 import { FastifyInstance } from 'fastify';
 import { httpClient } from '../../utils/http';
 import { logger } from '../../utils/logger';
-import { signCookies, verifyCookies } from '../../utils/cookie-token';
+import { verifyCookies } from '../../utils/cookie-token';
+import { buildProxyUrl } from '../../utils/proxy-url';
 import { refreshExpiredChannelUrl } from '../live-tv/controller';
+import { isNetuHost, resolveNetuStream } from '../../services/netu-resolver';
 
 const STREAM_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
 
@@ -17,15 +19,6 @@ function isPlaylist(url: string, contentType: string): boolean {
   return url.toLowerCase().includes('.m3u8') ||
     url.toLowerCase().includes('.m3u') ||
     PLAYLIST_TYPES.some((t) => contentType.toLowerCase().includes(t));
-}
-
-function buildProxyUrl(target: string, referer?: string, cookies?: string): string {
-  const params = new URLSearchParams();
-  params.set('url', target);
-  if (referer) params.set('referer', referer);
-  const token = signCookies(cookies);
-  if (token) params.set('cookies', token);
-  return `/proxy/stream?${params.toString()}`;
 }
 
 function resolveUrl(base: string, target: string): string {
@@ -109,6 +102,22 @@ export async function proxyRoutes(app: FastifyInstance) {
 
     try {
       let upstream = await fetchUpstream(target, effectiveReferer, effectiveCookies);
+
+      // Netu: la página embed carga el stream vía JS (no hay m3u8 en el HTML
+      // estático) y sus URLs HLS llevan token por IP + expiración. Si el
+      // upstream devolvió HTML, resolver el stream real con Playwright
+      // (Cloud Run) y servirlo desde la misma IP que lo resolvió.
+      if (isNetuHost(target) && upstream.contentType.toLowerCase().includes('text/html')) {
+        const resolved = await resolveNetuStream(target);
+        if (resolved.url) {
+          upstream.res.data.resume();
+          target = resolved.url;
+          if (resolved.referer) effectiveReferer = resolved.referer;
+          if (resolved.cookies) effectiveCookies = resolved.cookies;
+          upstream = await fetchUpstream(target, effectiveReferer, effectiveCookies);
+          logger.info({ url: target.substring(0, 160) }, 'Proxy: stream netu resuelto');
+        }
+      }
 
       // Si el playlist (m3u8) expiró (4xx), refrescar el canal y servir la URL nueva vigente
       if (upstream.res.status >= 400 && requestedIsPlaylist) {
