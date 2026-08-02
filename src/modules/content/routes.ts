@@ -4,6 +4,7 @@ import { scrapeSeriesDetail } from '../../providers/series';
 import { fetchLiveChannels } from '../../providers/live-tv';
 import { getCachedOrFetch, memoryCache } from '../../cache';
 import { loadSyncData } from '../../services/data-store';
+import { getMovieDetailContent, getSeriesDetailContent } from '../../services/content-detail';
 import { MediaItem, ContentDetail, LiveChannel } from '../../types';
 
 const UNAVAILABLE_MSG = 'Este contenido no está disponible en este momento.';
@@ -101,45 +102,11 @@ export async function contentRoutes(app: FastifyInstance) {
       });
     }
 
-    const synced = await loadSyncData();
-    if (synced) {
-      if (type === 'movie') {
-        const movie = synced.movies.find((m) => m.id === id);
-        if (movie) {
-          return reply.send({
-            id: movie.id,
-            title: movie.title,
-            description: movie.description || `${movie.title} disponible en Veamos TV.`,
-            poster: movie.poster,
-            backdrop: movie.backdrop || movie.poster,
-            rating: movie.rating || 7.0,
-            year: movie.year || 2024,
-            duration: movie.duration,
-            genres: movie.genres || ['Acción', 'Drama'],
-            cast: movie.cast || [{ name: 'Reparto Principal' }],
-            type: 'movie' as const,
-            videos: movie.videos,
-          });
-        }
-      } else {
-        const series = synced.series.find((s) => s.id === id);
-        if (series) {
-          return reply.send({
-            id: series.id,
-            title: series.title,
-            description: series.description || `${series.title} disponible en Veamos TV.`,
-            poster: series.poster,
-            backdrop: series.backdrop || series.poster,
-            rating: series.rating || 8.0,
-            year: series.year || 2024,
-            genres: series.genres || ['Drama', 'Action'],
-            cast: series.cast || [{ name: 'Reparto Principal' }],
-            type: 'series' as const,
-            seasons: series.seasons,
-            videos: series.videos,
-          });
-        }
-      }
+    const syncedDetail = type === 'movie'
+      ? await getMovieDetailContent(id)
+      : await getSeriesDetailContent(id);
+    if (syncedDetail) {
+      return reply.send(syncedDetail);
     }
 
     const detail = await getCachedOrFetch(
