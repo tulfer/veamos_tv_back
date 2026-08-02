@@ -17,9 +17,13 @@ export async function getMoviesHandler(request: FastifyRequest, reply: FastifyRe
 
   const synced = await getFromSync();
   if (synced) {
-    const totalPages = Math.ceil(synced.length / PAGE_SIZE) || 1;
+    const data = await loadSyncData();
+    const estrenos = data?.estrenoMovies || [];
+    const estrenoIds = new Set(estrenos.map((m) => m.id));
+    const combined = [...estrenos, ...synced.filter((m) => !estrenoIds.has(m.id))];
+    const totalPages = Math.ceil(combined.length / PAGE_SIZE) || 1;
     const start = (pageNum - 1) * PAGE_SIZE;
-    const items: MediaItem[] = synced.slice(start, start + PAGE_SIZE).map((m) => ({
+    const items: MediaItem[] = combined.slice(start, start + PAGE_SIZE).map((m) => ({
       id: m.id,
       title: m.title,
       poster: m.poster,
@@ -28,7 +32,7 @@ export async function getMoviesHandler(request: FastifyRequest, reply: FastifyRe
       type: 'movie' as const,
     }));
 
-    return reply.send({ page: pageNum, totalPages, total: synced.length, items });
+    return reply.send({ page: pageNum, totalPages, total: combined.length, items });
   }
 
   const result = await getCachedOrFetch(
@@ -43,6 +47,43 @@ export async function getMoviesHandler(request: FastifyRequest, reply: FastifyRe
     total: result.items.length,
     items: result.items,
   });
+}
+
+function toMediaItem(item: { id: string; title: string; poster?: string; rating?: number; year?: number }, type: 'movie' | 'series'): MediaItem {
+  return {
+    id: item.id,
+    title: item.title,
+    poster: item.poster,
+    rating: item.rating,
+    year: item.year,
+    type,
+  };
+}
+
+export async function getEstrenosMoviesHandler(request: FastifyRequest, reply: FastifyReply) {
+  const { page = '1' } = request.query as any;
+  const pageNum = parseInt(page) || 1;
+
+  const data = await loadSyncData();
+  const estrenos = data?.estrenoMovies || [];
+  const totalPages = Math.ceil(estrenos.length / PAGE_SIZE) || 1;
+  const start = (pageNum - 1) * PAGE_SIZE;
+  const items: MediaItem[] = estrenos.slice(start, start + PAGE_SIZE).map((m) => toMediaItem(m, 'movie'));
+
+  return reply.send({ page: pageNum, totalPages, total: estrenos.length, items });
+}
+
+export async function getEstrenosSeriesHandler(request: FastifyRequest, reply: FastifyReply) {
+  const { page = '1' } = request.query as any;
+  const pageNum = parseInt(page) || 1;
+
+  const data = await loadSyncData();
+  const estrenos = data?.estrenoSeries || [];
+  const totalPages = Math.ceil(estrenos.length / PAGE_SIZE) || 1;
+  const start = (pageNum - 1) * PAGE_SIZE;
+  const items: MediaItem[] = estrenos.slice(start, start + PAGE_SIZE).map((s) => toMediaItem(s, 'series'));
+
+  return reply.send({ page: pageNum, totalPages, total: estrenos.length, items });
 }
 
 export async function getMovieDetailHandler(request: FastifyRequest, reply: FastifyReply) {
