@@ -930,6 +930,187 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
   }
 }
 
+const REFRESH_PROVIDERS = ['wsdeportes', 'cablevisionhd', 'tvporinternet2', 'chatytv', 'senalcolombia', 'vertvcable'] as const;
+type RefreshProvider = (typeof REFRESH_PROVIDERS)[number];
+
+/**
+ * Refresca TODOS los canales de un proveedor concreto (campo "proveedor" o
+ * detectado desde refreshUrl). Recibe el proveedor por param o body.
+ */
+export async function refreshByProviderHandler(request: FastifyRequest, reply: FastifyReply) {
+  const { provider } = request.params as { provider?: string };
+  const body = (request.body || {}) as { provider?: string };
+  const providerName = (provider || body.provider || '').trim().toLowerCase();
+
+  if (!providerName || !(REFRESH_PROVIDERS as readonly string[]).includes(providerName)) {
+    return reply.status(400).send({
+      error: `Provider inválido: "${providerName}". Válidos: ${REFRESH_PROVIDERS.join(', ')}`,
+    });
+  }
+
+  const synced = await loadSyncData();
+  if (!synced || !Array.isArray(synced.channels)) {
+    return reply.status(400).send({ error: 'No sync data found' });
+  }
+
+  if (!startSync('refreshProvider')) {
+    return reply.send({ ok: true, message: 'Refresh by provider already in progress' });
+  }
+
+  clearLogs('refreshProvider');
+  pushLog('refreshProvider', `=== Iniciando refresh de canales del proveedor: ${providerName} ===`);
+  reply.send({ ok: true, message: `Refresh de canales ${providerName} iniciado`, provider: providerName });
+
+  const channels = synced.channels;
+  const providerChannels = channels.filter((ch) =>
+    (ch.proveedor || extractRefreshSource(ch.refreshUrl)) === providerName && ch.refreshUrl,
+  );
+  const totalToProcess = providerChannels.length;
+  pushLog('refreshProvider', `Canales totales en BD: ${channels.length}`);
+  pushLog('refreshProvider', `Canales de ${providerName} con refreshUrl: ${totalToProcess}`);
+
+  if (totalToProcess === 0) {
+    pushLog('refreshProvider', '⚠ No hay canales de este proveedor');
+    completeSync('refreshProvider', 0);
+    return;
+  }
+
+  const updatedChannels: LiveChannel[] = [];
+  const failedChannels: { id: string; title: string; error: string }[] = [];
+  let processed = 0;
+
+  for (const ch of providerChannels) {
+    pushLog('refreshProvider', `→ [${processed + 1}/${totalToProcess}] Procesando: ${ch.title || ch.id}`);
+    pushLog('refreshProvider', `  refreshUrl: ${ch.refreshUrl}`);
+
+    const provedor = (ch.proveedor || extractRefreshSource(ch.refreshUrl)) as string;
+    if (provedor !== providerName) {
+      pushLog('refreshProvider', `  ❌ Proveedor detectado distinto: ${provedor || '(none)'}`);
+      failedChannels.push({ id: ch.id, title: ch.title || ch.id, error: `Proveedor detectado distinto: ${provedor || '(none)'}` });
+      processed++;
+      updateSyncProgress('refreshProvider', processed, `[${processed}/${totalToProcess}] ${ch.title || ch.id} — proveedor distinto`, totalToProcess);
+      continue;
+    }
+    const source = provedor as RefreshProvider;
+    pushLog('refreshProvider', `  Proveedor: ${source}`);
+
+    const slug = extractSlugFromUrl(ch.refreshUrl, source);
+    if (!slug) {
+      pushLog('refreshProvider', `  ❌ No se pudo extraer slug de refreshUrl`);
+      failedChannels.push({ id: ch.id, title: ch.title || ch.id, error: 'No se pudo extraer slug de refreshUrl' });
+      processed++;
+      updateSyncProgress('refreshProvider', processed, `[${processed}/${totalToProcess}] ${ch.title || ch.id} — slug inválido`, totalToProcess);
+      continue;
+    }
+    pushLog('refreshProvider', `  Slug: ${slug}${ch.refreshOption ? ` | Opción: ${ch.refreshOption}` : ''}`);
+    const fetchUrl = source === 'wsdeportes' ? `https://wsdeportes.net/?v=${slug}` :
+      source === 'tvporinternet2' ? `https://www.tvporinternet2.com/${slug}.php` :
+      source === 'cablevisionhd' ? `https://www.cablevisionhd.com/${slug}.php` :
+      source === 'chatytv' ? `https://www.chatytvgratis.net/${slug}/` :
+      source === 'senalcolombia' ? `https://www.senalcolombia.tv/${slug}` :
+      `https://www.vertvcable.com/${slug}/`;
+    pushLog('refreshProvider', `  URL consultada: ${fetchUrl}`);
+
+    pushLog('refreshProvider', `  Invalidando caché...`);
+    memoryCache.del(`${source}:${slug}`);
+    memoryCache.del(`${source}:${slug}:default`);
+    if (ch.refreshOption) memoryCache.del(`${source}:${slug}:${ch.refreshOption}`);
+
+    pushLog('refreshProvider', `  Consultando a ${source}...`);
+    try {
+      const result = await getChannelStream(source, slug, ch.refreshOption || undefined, 'refreshProvider');
+      if (result && result.url) {
+        pushLog('refreshProvider', `  ✅ URL obtenida: ${result.url.substring(0, 120)}...`);
+        if (await verifyRefreshedUrl(result.url, 'refreshProvider')) {
+          ch.url = result.url;
+          if (result.drm) ch.drm = result.drm;
+          applyExpiration(ch);
+          if (!ch.proveedor) ch.proveedor = source;
+          updatedChannels.push(ch);
+        } else {
+          pushLog('refreshProvider', `  ❌ Nueva URL no verificada (forbidden/404): se conserva la anterior proxyficada`);
+          ch.url = proxyWrapIfNeeded(ch.url) || ch.url;
+          failedChannels.push({ id: ch.id, title: ch.title || ch.id, error: 'Nueva URL no verificada (forbidden/404)' });
+          processed++;
+          updateSyncProgress('refreshProvider', processed, `[${processed}/${totalToProcess}] ❌ ${ch.title || ch.id} — URL no verificada`, totalToProcess);
+          continue;
+        }
+      } else {
+        pushLog('refreshProvider', `  ❌ El proveedor no devolvió URL`);
+        pushLog('refreshProvider', `  🔍 Extrayendo manualmente desde ${fetchUrl}...`);
+        try {
+          const foundStream = await manualExtractStream(fetchUrl, 'refreshProvider');
+          if (foundStream && !isJunkStreamUrl(foundStream) && (await verifyRefreshedUrl(foundStream, 'refreshProvider'))) {
+            pushLog('refreshProvider', `  ✅ Stream: ${foundStream.substring(0, 120)}`);
+            ch.url = foundStream;
+            applyExpiration(ch);
+            if (!ch.proveedor) ch.proveedor = source;
+            updatedChannels.push(ch);
+            processed++;
+            updateSyncProgress('refreshProvider', processed, `[${processed}/${totalToProcess}] ✅ ${ch.title || ch.id}`, totalToProcess);
+            continue;
+          }
+          pushLog('refreshProvider', `  ❌ No se encontró stream en la cadena de iframes`);
+        } catch (diagErr: any) {
+          pushLog('refreshProvider', `  Error extracción manual: ${diagErr.message}`);
+        }
+        const fallbackUrl = await extractViaFallback(source, slug, ch.refreshOption || undefined, 'refreshProvider');
+        if (fallbackUrl && !isJunkStreamUrl(fallbackUrl) && (await verifyRefreshedUrl(fallbackUrl, 'refreshProvider'))) {
+          ch.url = fallbackUrl;
+          applyExpiration(ch);
+          if (!ch.proveedor) ch.proveedor = source;
+          updatedChannels.push(ch);
+          processed++;
+          updateSyncProgress('refreshProvider', processed, `[${processed}/${totalToProcess}] ✅ ${ch.title || ch.id} (Cloud Run)`, totalToProcess);
+          continue;
+        }
+        failedChannels.push({ id: ch.id, title: ch.title || ch.id, error: 'No se obtuvo URL del proveedor' });
+        processed++;
+        updateSyncProgress('refreshProvider', processed, `[${processed}/${totalToProcess}] ❌ ${ch.title || ch.id} — sin URL`, totalToProcess);
+        continue;
+      }
+    } catch (error: any) {
+      pushLog('refreshProvider', `  ❌ Error: ${error.message}`);
+      failedChannels.push({ id: ch.id, title: ch.title || ch.id, error: error.message });
+      processed++;
+      updateSyncProgress('refreshProvider', processed, `[${processed}/${totalToProcess}] ❌ ${ch.title || ch.id} — ${error.message}`, totalToProcess);
+      continue;
+    }
+    processed++;
+    updateSyncProgress('refreshProvider', processed, `[${processed}/${totalToProcess}] ✅ ${ch.title || ch.id}`, totalToProcess);
+  }
+
+  const removedJunk = dropJunkChannels(channels, 'refreshProvider');
+
+  if (updatedChannels.length > 0 || removedJunk > 0) {
+    pushLog('refreshProvider', `Guardando ${updatedChannels.length} canales actualizados en Supabase...`);
+    await saveSyncData({ ...synced, channels, updatedAt: Date.now() });
+    memoryCache.del('live:channels');
+    pushLog('refreshProvider', '✅ Guardado exitoso');
+  }
+
+  const count = updatedChannels.length;
+  if (failedChannels.length > 0) {
+    const errorGroups: Record<string, number> = {};
+    for (const f of failedChannels) {
+      errorGroups[f.error] = (errorGroups[f.error] || 0) + 1;
+    }
+    const summary = Object.entries(errorGroups)
+      .sort((a, b) => b[1] - a[1])
+      .map(([msg, n]) => `"${msg}" (${n})`)
+      .join(', ');
+    pushLog('refreshProvider', `⛔ Finalizado con errores: ${count} actualizados, ${failedChannels.length} fallos`);
+    pushLog('refreshProvider', `❌ Canales fallidos (usar id para corregir):`);
+    for (const f of failedChannels) {
+      pushLog('refreshProvider', `  - [${f.id}] ${f.title || f.id}: ${f.error}`);
+    }
+    failSync('refreshProvider', `${count} actualizados, ${failedChannels.length} fallos: ${summary}`);
+  } else {
+    pushLog('refreshProvider', `✅ Completado: ${count} canales actualizados`);
+    completeSync('refreshProvider', count);
+  }
+}
+
 export async function getTvPorInternet2Handler(request: FastifyRequest, reply: FastifyReply) {
   const { slug } = request.params as any;
   const { title, logo, country, option, group } = request.body as any;

@@ -875,7 +875,7 @@ export async function syncStatusHandler(request: FastifyRequest, reply: FastifyR
 
   const syncDefs: {
     key: string; label: string; route: string; method: string;
-    needsPages?: boolean; needsUrl?: boolean; needsBody?: boolean; needsId?: boolean; needsJson?: boolean;
+    needsPages?: boolean; needsUrl?: boolean; needsBody?: boolean; needsId?: boolean; needsJson?: boolean; needsProvider?: boolean;
   }[] = [
     { key: 'movies', label: 'Películas', route: '/sync/movies', method: 'POST', needsPages: true },
     { key: 'series', label: 'Series', route: '/sync/series', method: 'POST', needsPages: true },
@@ -894,6 +894,7 @@ export async function syncStatusHandler(request: FastifyRequest, reply: FastifyR
     { key: 'importM3U', label: 'Importar M3U', route: '/sync/live/import', method: 'POST', needsUrl: true },
     { key: 'refreshAll', label: 'Refresh All Canales', route: '/live/channels/refresh-all', method: 'POST' },
     { key: 'refreshExpired', label: 'Refresh Expired Canales', route: '/live/channels/refresh-expired', method: 'POST' },
+    { key: 'refreshProvider', label: 'Refresh por Proveedor', route: '/live/channels/refresh-provider/{provider}', method: 'POST', needsProvider: true },
     { key: 'refreshOne', label: 'Refresh Canal (por ID)', route: '/live/channels/refresh', method: 'POST', needsId: true },
     { key: 'updateChannel', label: 'Actualizar Canal (PATCH)', route: '/live/channels/{id}', method: 'PATCH', needsId: true, needsJson: true },
   ];
@@ -966,7 +967,7 @@ a:hover{text-decoration:underline}
 <script>
 // Consulta UN solo conteo de Firestore al abrir el Detalle (por eso el dashboard ya no consulta nada)
 (function loadDbCount(){
-  const map = { refreshAll:'channels', refreshExpired:'channels', refreshOne:'channels', importM3U:'channels', updateChannel:'channels', channels:'channels', movies:'movies', series:'series', popularMovies:'popularMovies', popularSeries:'popularSeries', estrenoMovies:'estrenoMovies', estrenoSeries:'estrenoSeries', gnulahdMovies:'gnulahdMovies', gnulahdSeries:'gnulahdSeries', gnulahdAnime:'gnulahdAnime' };
+  const map = { refreshAll:'channels', refreshExpired:'channels', refreshOne:'channels', refreshProvider:'channels', importM3U:'channels', updateChannel:'channels', channels:'channels', movies:'movies', series:'series', popularMovies:'popularMovies', popularSeries:'popularSeries', estrenoMovies:'estrenoMovies', estrenoSeries:'estrenoSeries', gnulahdMovies:'gnulahdMovies', gnulahdSeries:'gnulahdSeries', gnulahdAnime:'gnulahdAnime' };
   const coll = map['${type}'];
   if (!coll) return;
   fetch('/sync/count/' + coll).then(function(r){ return r.json(); }).then(function(d){
@@ -1103,7 +1104,7 @@ document.getElementById('codeInput').addEventListener('keydown', function(e) {
 
 function generateSyncDashboard(
   status: Record<string, { status: string; lastRun: number | null; duration?: number; count?: number; error?: string; progress?: { current: number; total?: number; message: string } }>,
-  syncDefs: { key: string; label: string; route: string; method: string; needsPages?: boolean; needsUrl?: boolean; needsBody?: boolean; needsId?: boolean; needsJson?: boolean }[],
+  syncDefs: { key: string; label: string; route: string; method: string; needsPages?: boolean; needsUrl?: boolean; needsBody?: boolean; needsId?: boolean; needsJson?: boolean; needsProvider?: boolean }[],
   migStatus: MigrationStatus,
   fsMigStatus: FirestoreMigrationStatus,
 ): string {
@@ -1119,7 +1120,7 @@ function generateSyncDashboard(
     const lastRun = s?.lastRun ? new Date(s.lastRun).toLocaleString() : '—';
     const info = s?.count ? `${s.count} items` : s?.error || '';
     const prog = s?.progress;
-    const hasParams = def.needsPages || def.needsUrl || def.needsBody || def.needsId || def.needsJson;
+    const hasParams = def.needsPages || def.needsUrl || def.needsBody || def.needsId || def.needsJson || def.needsProvider;
     return `
     <div class="card" id="card-${def.key}">
       <div class="card-header">
@@ -1137,11 +1138,11 @@ function generateSyncDashboard(
         </div>
       </div>
       <div class="card-actions">
-        <button class="btn btn-primary btn-sm" onclick="runSync('${def.key}','${def.route}','${def.method}','${def.needsId ? 'id' : def.needsJson ? 'json' : def.needsPages ? 'pages' : ''}')" ${isRunning ? 'disabled' : ''}>
+        <button class="btn btn-primary btn-sm" onclick="runSync('${def.key}','${def.route}','${def.method}','${def.needsId ? 'id' : def.needsJson ? 'json' : def.needsPages ? 'pages' : def.needsProvider ? 'provider' : ''}')" ${isRunning ? 'disabled' : ''}>
           ${isRunning ? (prog ? prog.message : 'Ejecutando...') : '▶ Ejecutar'}
         </button>
-        ${hasParams ? `<button class="btn btn-secondary btn-sm" onclick="showParamsModal('${def.key}','${def.route}','${def.label}','${def.method}','${def.needsId ? '1' : ''}','${def.needsJson ? '1' : ''}')">⚙ Parámetros</button>` : ''}
-        ${def.key === 'refreshAll' || def.key === 'refreshExpired' || def.key === 'refreshOne' ? `<a href="/sync/detail/${def.key}" class="btn btn-secondary btn-sm" style="text-decoration:none">📋 Detalle</a>` : ''}
+        ${hasParams ? `<button class="btn btn-secondary btn-sm" onclick="showParamsModal('${def.key}','${def.route}','${def.label}','${def.method}','${def.needsId ? '1' : ''}','${def.needsJson ? '1' : ''}','${def.needsProvider ? '1' : ''}')">⚙ Parámetros</button>` : ''}
+        ${def.key === 'refreshAll' || def.key === 'refreshExpired' || def.key === 'refreshOne' || def.key === 'refreshProvider' ? `<a href="/sync/detail/${def.key}" class="btn btn-secondary btn-sm" style="text-decoration:none">📋 Detalle</a>` : ''}
       </div>
     </div>`;
   }).join('\n');
@@ -1335,6 +1336,17 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
     </label>
     <label id="replaceWrap">
       <input type="checkbox" id="replaceCheck"> Reemplazar datos existentes
+    </label>
+    <label id="providerWrap" style="display:none">
+      Proveedor a refrescar:
+      <select id="providerSelect" style="width:100%;padding:.7rem;border-radius:6px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.05);color:#fff;font-size:.95rem;margin-bottom:1rem;margin-top:.4rem">
+        <option value="vertvcable">vertvcable</option>
+        <option value="cablevisionhd">cablevisionhd</option>
+        <option value="tvporinternet2">tvporinternet2</option>
+        <option value="chatytv">chatytv</option>
+        <option value="wsdeportes">wsdeportes</option>
+        <option value="senalcolombia">senalcolombia</option>
+      </select>
     </label>
     <div class="modal-actions">
       <button class="btn btn-primary" onclick="confirmPagesSync()">✅ Ejecutar</button>
@@ -1647,25 +1659,31 @@ async function runSync(key, route, method, paramType) {
     openParamsModal(key, route, 'Body JSON:', method, true, true);
     return;
   }
+  if (paramType === 'provider') {
+    openParamsModal(key, route, 'Proveedor a refrescar:', method, false, false, true);
+    return;
+  }
   await execSync(route, key, method, {});
 }
 
-function openParamsModal(key, route, label, method, needsId, needsJson) {
+function openParamsModal(key, route, label, method, needsId, needsJson, needsProvider) {
   pendingKey = key;
   pendingRoute = route;
   pendingMethod = method;
-  pendingParamType = needsJson ? 'json' : needsId ? 'id' : 'pages';
+  pendingParamType = needsProvider ? 'provider' : needsJson ? 'json' : needsId ? 'id' : 'pages';
   document.getElementById('modalTitle').textContent = 'Parámetros - ' + key;
   document.getElementById('modalLabel').textContent = label;
   document.getElementById('idWrap').style.display = needsId && needsJson ? 'block' : 'none';
   document.getElementById('channelPickWrap').style.display = needsId && !needsJson ? 'block' : 'none';
   document.getElementById('jsonWrap').style.display = needsJson ? 'block' : 'none';
-  document.getElementById('pagesHint').style.display = !needsId && !needsJson ? 'block' : 'none';
-  document.getElementById('pagesInput').style.display = !needsId && !needsJson ? 'block' : 'none';
-  document.getElementById('replaceWrap').style.display = !needsId && !needsJson ? 'block' : 'none';
+  document.getElementById('pagesHint').style.display = !needsId && !needsJson && !needsProvider ? 'block' : 'none';
+  document.getElementById('pagesInput').style.display = !needsId && !needsJson && !needsProvider ? 'block' : 'none';
+  document.getElementById('replaceWrap').style.display = !needsId && !needsJson && !needsProvider ? 'block' : 'none';
+  document.getElementById('providerWrap').style.display = needsProvider ? 'block' : 'none';
   document.getElementById('pagesInput').value = '1-20';
   document.getElementById('idInput').value = '';
   document.getElementById('jsonInput').value = '';
+  document.getElementById('providerSelect').value = '';
   if (needsId) {
     document.getElementById('cpSearch').value = '';
     document.getElementById('cpSearch').placeholder = '🔍 Buscar canal por nombre, id o grupo...';
@@ -1682,7 +1700,18 @@ async function confirmPagesSync() {
   let body = {};
   let target = route;
 
-  if (paramType === 'id' || paramType === 'json') {
+  if (paramType === 'provider') {
+    const provider = document.getElementById('providerSelect').value.trim();
+    if (!provider) {
+      alert('Selecciona un proveedor');
+      return;
+    }
+    if (route.includes('{provider}')) {
+      target = route.replace('{provider}', encodeURIComponent(provider));
+    } else {
+      body = { provider };
+    }
+  } else if (paramType === 'id' || paramType === 'json') {
     const id = (document.getElementById('idInput').value || document.getElementById('cpChannel').value).trim();
     if (!id) {
       alert('Selecciona un canal en la lista de búsqueda');
@@ -1786,12 +1815,12 @@ function closeModal() {
   pendingKey = '';
 }
 
-function showParamsModal(key, route, label, method, needsId, needsJson) {
+function showParamsModal(key, route, label, method, needsId, needsJson, needsProvider) {
   if (key === 'updateChannel') {
     openUpdateChannelModal();
     return;
   }
-  openParamsModal(key, route, 'Parámetros - ' + label, method, needsId === '1', needsJson === '1');
+  openParamsModal(key, route, 'Parámetros - ' + label, method, needsId === '1', needsJson === '1', needsProvider === '1');
 }
 
 // ---------- Actualizar Canal (multi-campo) ----------

@@ -13,6 +13,7 @@ export type SyncType =
   | 'refreshAll'
   | 'refreshExpired'
   | 'refreshOne'
+  | 'refreshProvider'
   | 'migrate'
   | 'gnulahdHome'
   | 'gnulahdMovies'
@@ -80,6 +81,7 @@ const state: SyncState = {
   refreshAll: { ...defaultStatus },
   refreshExpired: { ...defaultStatus },
   refreshOne: { ...defaultStatus },
+  refreshProvider: { ...defaultStatus },
   migrate: { ...defaultStatus },
   gnulahdHome: { ...defaultStatus },
   gnulahdMovies: { ...defaultStatus },
