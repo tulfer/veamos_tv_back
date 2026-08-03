@@ -1196,7 +1196,7 @@ async function extractCablevisionHdHttp(url: string, logType?: string): Promise<
         logger.info({ url: streamUrl.substring(0, 150) }, 'Found STREAM_URL via HTTP fallback for cablevisionhd');
         break;
       }
-      const escapedM3u8 = html.match(/["']((?:https?:)?\\\/\\\/[^"']+\.(?:m3u8|m3u)[^"']*?)["']/i);
+      const escapedM3u8 = html.match(/["']((?:https?:)?\\\/\\\/[^"']+(?:\.m3u8|\.m3u|playlist\.php)[^"']*?)["']/i);
       if (escapedM3u8) {
         streamUrl = escapedM3u8[1].replace(/\\\//g, '/');
         if (!streamUrl.startsWith('http')) streamUrl = 'https:' + streamUrl;
@@ -1205,7 +1205,7 @@ async function extractCablevisionHdHttp(url: string, logType?: string): Promise<
         logger.info({ url: streamUrl.substring(0, 150) }, 'Found escaped m3u8 via HTTP fallback for cablevisionhd');
         break;
       }
-      const m3u8 = html.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|m3u)[^\s"'<>]*/i);
+      const m3u8 = html.match(/https?:\/\/[^\s"'<>]+(?:\.m3u8|\.m3u|playlist\.php)[^\s"'<>]*/i);
       if (m3u8) { streamUrl = m3u8[0]; fallbackHostUrl = pageUrl; elog(logType, `  ✅ .m3u8 nivel ${depth + 1}: ${streamUrl}`); logger.info({ url: streamUrl.substring(0, 150) }, 'Found m3u8 via HTTP fallback for cablevisionhd'); break; }
       const fileMatch = html.match(/file["']?\s*:\s*["']([^"']+)["']/i);
       const srcMatch = html.match(/src["']?\s*:\s*["']([^"']+(?:m3u8|ts|mp4)[^"']*)["']/i);
@@ -1296,11 +1296,12 @@ export async function getCablevisionHd(slug: string, option?: string, logType?: 
     page.on('request', (request: any) => {
       const reqUrl = request.url();
       if (reqUrl.includes('.m3u8') || reqUrl.includes('.m3u') || reqUrl.includes('.ts') ||
-          reqUrl.includes('mywebtv') || reqUrl.includes('tdtcloud') || reqUrl.includes('hls')) {
+          reqUrl.includes('mywebtv') || reqUrl.includes('tdtcloud') || reqUrl.includes('hls') ||
+          reqUrl.includes('playlist.php')) {
         capturedUrls.push(reqUrl);
       }
       // Guardar la URL del frame que aloja el .m3u8 (nivel 3) para usarla si el .m3u8 da 403
-      if (reqUrl.includes('.m3u8') || reqUrl.includes('.m3u')) {
+      if (reqUrl.includes('.m3u8') || reqUrl.includes('.m3u') || reqUrl.includes('playlist.php')) {
         const frameUrl = request.frame()?.url?.();
         if (frameUrl && frameUrl !== 'about:blank' && frameUrl.startsWith('http') && !m3u8HostFrameUrl) {
           m3u8HostFrameUrl = frameUrl;
@@ -1310,7 +1311,7 @@ export async function getCablevisionHd(slug: string, option?: string, logType?: 
     page.on('response', (response: any) => {
       const respUrl = response.url();
       if (respUrl.includes('.m3u8') || respUrl.includes('.m3u') || respUrl.includes('mywebtv') ||
-          respUrl.includes('tdtcloud') || respUrl.includes('hls')) {
+          respUrl.includes('tdtcloud') || respUrl.includes('hls') || respUrl.includes('playlist.php')) {
         if (!capturedUrls.includes(respUrl)) {
           capturedUrls.push(respUrl);
         }
@@ -1412,9 +1413,14 @@ export async function getCablevisionHd(slug: string, option?: string, logType?: 
     if (capturedUrls.length > 0) {
       logger.info({ capturedUrls }, 'URLs capturadas por red');
       const capturedMedia = capturedUrls.filter((u) => !isJunkStreamUrl(u));
+      // Preferir manifiestos sobre segmentos: .m3u8/.m3u explícitos, luego
+      // playlist.php (el CDN regionales.saohgdasregions.fun genera el manifiesto
+      // sin extensión .m3u8), luego URLs tipo hls, y solo como último recurso un
+      // segmento .ts (su token caduca en segundos → URL muerta al guardarla).
       const m3u8Url = capturedMedia.find((u) => u.includes('.m3u8') || u.includes('.m3u'));
+      const playlistPhpUrl = capturedMedia.find((u) => u.includes('playlist.php'));
       const streamingUrl = capturedMedia.find((u) => u.includes('mywebtv') || u.includes('tdtcloud') || u.includes('hls'));
-      streamUrl = m3u8Url || streamingUrl || capturedMedia[0];
+      streamUrl = m3u8Url || playlistPhpUrl || streamingUrl || capturedMedia[0];
       if (streamUrl) logger.info({ url: streamUrl.substring(0, 250), total: capturedMedia.length }, 'Usando URL capturada por red');
     } else {
       logger.info({}, 'No se capturaron URLs de red');
