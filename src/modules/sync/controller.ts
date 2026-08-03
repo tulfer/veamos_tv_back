@@ -1375,6 +1375,7 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
             <option value="tvporinternet2">TVporInternet2</option>
             <option value="cablevisionhd">CablevisionHD</option>
             <option value="senalcolombia">Señal Colombia</option>
+            <option value="vertvcable">VerTvCable</option>
           </select>
         </div>
         <div class="form-group">
@@ -1398,11 +1399,35 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
           <input type="text" id="chCountry" placeholder="CO" maxlength="2">
         </div>
         <div class="form-group">
+          <label>Grupo</label>
+          <input type="text" id="chGroup" placeholder="ej: Canales TV" title="Grupo del canal (aparece en la app)">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
           <label>Opción</label>
-          <input type="text" id="chOption" placeholder="opcional" title="Opción numérica para tvporinternet2 / cablevisionhd">
+          <input type="text" id="chOption" placeholder="opcional" title="Opción numérica para tvporinternet2 / cablevisionhd / vertvcable">
         </div>
       </div>
       <button class="btn btn-primary" onclick="addChannel()">➕ Agregar Canal</button>
+      <div style="margin-top:1rem;border-top:1px solid rgba(255,255,255,.1);padding-top:1rem">
+        <strong style="color:#a0a0c0;font-size:.9rem">📥 Importar canales desde archivo .m3u</strong>
+        <div class="form-row" style="margin-top:.6rem">
+          <div class="form-group">
+            <label>Archivo .m3u / .m3u8</label>
+            <input type="file" id="m3uFile" accept=".m3u,.m3u8,audio/x-mpegurl,application/vnd.apple.mpegurl">
+          </div>
+          <div class="form-group" style="flex:0 0 auto;display:flex;align-items:flex-end;gap:.5rem">
+            <button class="btn btn-primary" onclick="importM3UFile()">⬆️ Importar</button>
+          </div>
+        </div>
+        <div style="margin-top:.4rem;display:flex;align-items:center;gap:.6rem;font-size:.8rem;color:#aaa">
+          <label style="display:flex;align-items:center;gap:.4rem;margin:0">
+            <input type="checkbox" id="m3uSkipValidation"> Saltar validación (más rápido)
+          </label>
+        </div>
+        <div id="m3uStatus" style="margin-top:.5rem;font-size:.85rem;color:#fbbf24"></div>
+      </div>
     </div>
     <div class="add-channel-log" id="chLog">
       <div class="log-empty">Aún no hay ejecuciones</div>
@@ -1463,6 +1488,11 @@ document.getElementById('chProvider').addEventListener('change', function() {
     document.getElementById('chParam').placeholder = 'ej: senal-en-vivo';
     titleField.required = true;
     optionField.style.display = 'none';
+  } else if (provider === 'vertvcable') {
+    label.textContent = 'Slug (URL del canal)';
+    document.getElementById('chParam').placeholder = 'ej: mcu-24-7-en-vivo';
+    titleField.required = true;
+    optionField.style.display = 'block';
   } else {
     label.textContent = 'Slug';
     document.getElementById('chParam').placeholder = 'ej: fox-sports-en-vivo';
@@ -1478,10 +1508,11 @@ async function addChannel() {
   const title = document.getElementById('chTitle').value.trim();
   const logo = document.getElementById('chLogo').value.trim();
   const country = document.getElementById('chCountry').value.trim().toUpperCase();
+  const group = document.getElementById('chGroup').value.trim();
   const option = document.getElementById('chOption').value.trim();
 
   if (!param) { alert('Ingresa el parámetro del canal'); return; }
-  if ((provider === 'wsdeportes' || provider === 'tvporinternet2' || provider === 'cablevisionhd' || provider === 'senalcolombia') && !title) {
+  if ((provider === 'wsdeportes' || provider === 'tvporinternet2' || provider === 'cablevisionhd' || provider === 'senalcolombia' || provider === 'vertvcable') && !title) {
     alert('Ingresa el título del canal'); return;
   }
 
@@ -1500,7 +1531,8 @@ async function addChannel() {
   if (title) body.title = title;
   if (logo) body.logo = logo;
   if (country) body.country = country;
-  if (option && (provider === 'tvporinternet2' || provider === 'cablevisionhd')) body.option = option;
+  if (group) body.group = group;
+  if (option && (provider === 'tvporinternet2' || provider === 'cablevisionhd' || provider === 'vertvcable')) body.option = option;
 
   try {
     const res = await fetch(route, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -1523,6 +1555,43 @@ async function addChannel() {
 }
 
 document.getElementById('chParam').addEventListener('keydown', function(e) { if (e.key === 'Enter') addChannel(); });
+
+async function importM3UFile() {
+  const fileInput = document.getElementById('m3uFile');
+  const status = document.getElementById('m3uStatus');
+  const file = fileInput.files && fileInput.files[0];
+  if (!file) { alert('Selecciona un archivo .m3u'); return; }
+  if (file.size > 8 * 1024 * 1024) { alert('El archivo es muy grande (máx 8MB)'); return; }
+
+  status.textContent = 'Leyendo archivo...';
+  try {
+    const content = await file.text();
+    if (!content.includes('#EXTM3U') && !content.includes('#EXTINF')) {
+      status.textContent = '❌ El archivo no parece una lista M3U válida';
+      return;
+    }
+    status.textContent = 'Enviando al servidor...';
+    const res = await fetch('/sync/live/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: content,
+        skipValidation: document.getElementById('m3uSkipValidation').checked,
+      }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      status.textContent = '✅ ' + (data.message || 'Import iniciado') + ' — revisa el progreso en "Importar M3U" (sección Sincronizaciones)';
+    } else {
+      status.textContent = '❌ ' + (data.error || 'Error al importar');
+    }
+  } catch (e) {
+    status.textContent = '❌ Error de red al importar';
+  }
+}
+document.getElementById('m3uFile').addEventListener('change', function() {
+  document.getElementById('m3uStatus').textContent = '';
+});
 
 // Log del servidor de extracción (urls tomadas por los proveedores)
 let addLogPrevLen = 0;

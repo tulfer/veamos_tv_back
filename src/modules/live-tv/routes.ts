@@ -10,6 +10,7 @@ import {
   getTvPorInternet2Handler,
   getCablevisionHdHandler,
   getSenalColombiaChannelHandler,
+  getVertvCableChannelHandler,
   refreshExpiredChannelsHandler,
   refreshAllChannelsHandler,
   updateChannelHandler,
@@ -29,6 +30,7 @@ export async function liveTVRoutes(app: FastifyInstance) {
   app.post('/live/channels/add/tvporinternet2/:slug', getTvPorInternet2Handler);
   app.post('/live/channels/add/cablevisionhd/:slug', getCablevisionHdHandler);
   app.post('/live/channels/add/senalcolombia/:slug', getSenalColombiaChannelHandler);
+  app.post('/live/channels/add/vertvcable/:slug', getVertvCableChannelHandler);
   app.post('/live/channels/refresh-expired', refreshExpiredChannelsHandler);
   app.post('/live/channels/refresh-all', refreshAllChannelsHandler);
   app.post('/live/channels/refresh', refreshChannelHandler);

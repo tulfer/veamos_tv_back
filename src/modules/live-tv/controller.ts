@@ -347,7 +347,7 @@ export async function getValidationStatusHandler(_request: FastifyRequest, reply
 
 export async function getChatytvChannelHandler(request: FastifyRequest, reply: FastifyReply) {
   const { channel } = request.params as any;
-  const { title, logo, country } = request.body as any;
+  const { title, logo, country, group } = request.body as any;
 
   if (!channel || typeof channel !== 'string') {
     return reply.status(400).send({ error: 'Channel parameter is required' });
@@ -365,6 +365,7 @@ export async function getChatytvChannelHandler(request: FastifyRequest, reply: F
       title: title || result.title,
       logo: logo || result.logo,
       country: country || result.country,
+      group: group || result.group,
     };
     applyExpiration(channelData);
 
@@ -401,13 +402,14 @@ export async function getChatytvChannelHandler(request: FastifyRequest, reply: F
   }
 }
 
-function extractRefreshSource(refreshUrl?: string): 'wsdeportes' | 'tvporinternet2' | 'cablevisionhd' | 'chatytv' | 'senalcolombia' | null {
+function extractRefreshSource(refreshUrl?: string): 'wsdeportes' | 'tvporinternet2' | 'cablevisionhd' | 'chatytv' | 'senalcolombia' | 'vertvcable' | null {
   if (!refreshUrl) return null;
   if (refreshUrl.includes('wsdeportes.net')) return 'wsdeportes';
   if (refreshUrl.includes('tvporinternet2.com')) return 'tvporinternet2';
   if (refreshUrl.includes('cablevisionhd.com')) return 'cablevisionhd';
   if (refreshUrl.includes('chatytvgratis.net')) return 'chatytv';
   if (refreshUrl.includes('senalcolombia.tv')) return 'senalcolombia';
+  if (refreshUrl.includes('vertvcable.com')) return 'vertvcable';
   return null;
 }
 
@@ -541,7 +543,7 @@ function extractSlugFromUrl(refreshUrl?: string, proveedor?: string): string | n
   }
 }
 
-const VALID_SOURCES = ['wsdeportes', 'cablevisionhd', 'tvporinternet2', 'chatytv', 'senalcolombia'] as const;
+const VALID_SOURCES = ['wsdeportes', 'cablevisionhd', 'tvporinternet2', 'chatytv', 'senalcolombia', 'vertvcable'] as const;
 
 /**
  * Último recurso: delega la extracción a Cloud Run (que sí tiene Chromium de
@@ -663,6 +665,7 @@ export async function refreshExpiredChannelsHandler(_request: FastifyRequest, re
       source === 'cablevisionhd' ? `https://www.cablevisionhd.com/${slug}.php` :
       source === 'chatytv' ? `https://www.chatytvgratis.net/${slug}/` :
       source === 'senalcolombia' ? `https://www.senalcolombia.tv/${slug}` :
+      source === 'vertvcable' ? `https://www.vertvcable.com/${slug}/` :
       `https://${source}.com/${slug}`;
     pushLog('refreshExpired', `  URL consultada: ${fetchUrl}`);
 
@@ -798,14 +801,14 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
     pushLog('refreshAll', `  refreshUrl: ${ch.refreshUrl}`);
 
     const provedor = (ch.proveedor || extractRefreshSource(ch.refreshUrl)) as string;
-    if (provedor !== 'wsdeportes' && provedor !== 'cablevisionhd' && provedor !== 'tvporinternet2' && provedor !== 'chatytv' && provedor !== 'senalcolombia') {
+    if (provedor !== 'wsdeportes' && provedor !== 'cablevisionhd' && provedor !== 'tvporinternet2' && provedor !== 'chatytv' && provedor !== 'senalcolombia' && provedor !== 'vertvcable') {
       pushLog('refreshAll', `  ❌ Proveedor no soportado: ${provedor || '(none)'}`);
       failedChannels.push({ id: ch.id, title: ch.title || ch.id, error: `Proveedor no soportado: ${provedor || '(none)'}` });
       processed++;
       updateSyncProgress('refreshAll', processed, `[${processed}/${totalToProcess}] ${ch.title || ch.id} — proveedor no soportado`, totalToProcess);
       continue;
     }
-    const source: 'wsdeportes' | 'cablevisionhd' | 'tvporinternet2' | 'chatytv' | 'senalcolombia' = provedor;
+    const source: 'wsdeportes' | 'cablevisionhd' | 'tvporinternet2' | 'chatytv' | 'senalcolombia' | 'vertvcable' = provedor;
     pushLog('refreshAll', `  Proveedor: ${source}`);
 
     const slug = extractSlugFromUrl(ch.refreshUrl, source);
@@ -822,6 +825,7 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
       source === 'cablevisionhd' ? `https://www.cablevisionhd.com/${slug}.php` :
       source === 'chatytv' ? `https://www.chatytvgratis.net/${slug}/` :
       source === 'senalcolombia' ? `https://www.senalcolombia.tv/${slug}` :
+      source === 'vertvcable' ? `https://www.vertvcable.com/${slug}/` :
       `https://${source}.com/${slug}`;
     pushLog('refreshAll', `  URL consultada: ${fetchUrl}`);
 
@@ -926,7 +930,7 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
 
 export async function getTvPorInternet2Handler(request: FastifyRequest, reply: FastifyReply) {
   const { slug } = request.params as any;
-  const { title, logo, country, option } = request.body as any;
+  const { title, logo, country, option, group } = request.body as any;
 
   if (!slug || typeof slug !== 'string') {
     return reply.status(400).send({ error: 'Slug parameter is required (e.g., caracol-en-vivo-por-internet)' });
@@ -947,7 +951,7 @@ export async function getTvPorInternet2Handler(request: FastifyRequest, reply: F
       id: `live_${slug}`,
       title: title,
       logo: logo || undefined,
-      group: 'Canales TV',
+      group: group || 'Canales TV',
       country: country || undefined,
       url: result.url,
       type: 'live',
@@ -993,7 +997,7 @@ export async function getTvPorInternet2Handler(request: FastifyRequest, reply: F
 
 export async function getCablevisionHdHandler(request: FastifyRequest, reply: FastifyReply) {
   const { slug } = request.params as any;
-  const { title, logo, country, option } = request.body as any;
+  const { title, logo, country, option, group } = request.body as any;
 
   if (!slug || typeof slug !== 'string') {
     return reply.status(400).send({ error: 'Slug parameter is required (e.g., fox-sports-en-vivo)' });
@@ -1014,7 +1018,7 @@ export async function getCablevisionHdHandler(request: FastifyRequest, reply: Fa
       id: `live_${slug}`,
       title: title,
       logo: logo || undefined,
-      group: 'Canales TV',
+      group: group || 'Canales TV',
       country: country || undefined,
       url: result.url,
       type: 'live',
@@ -1060,7 +1064,7 @@ export async function getCablevisionHdHandler(request: FastifyRequest, reply: Fa
 
 export async function getWsDeportesChannelHandler(request: FastifyRequest, reply: FastifyReply) {
   const { parameter } = request.params as any;
-  const { title, logo, country } = request.body as any;
+  const { title, logo, country, group } = request.body as any;
 
   if (!parameter || typeof parameter !== 'string') {
     return reply.status(400).send({ error: 'Parameter is required (winsports, winsportsmas, etc.)' });
@@ -1081,7 +1085,7 @@ export async function getWsDeportesChannelHandler(request: FastifyRequest, reply
       id: result.id,
       title: title,
       logo: logo || undefined,
-      group: 'Canales Deportivos',
+      group: group || 'Canales Deportivos',
       country: country || undefined,
       url: result.url,
       type: 'live',
@@ -1127,7 +1131,7 @@ export async function getWsDeportesChannelHandler(request: FastifyRequest, reply
 
 export async function getSenalColombiaChannelHandler(request: FastifyRequest, reply: FastifyReply) {
   const { slug } = request.params as any;
-  const { title, logo, country } = request.body as any;
+  const { title, logo, country, group } = request.body as any;
 
   if (!slug || typeof slug !== 'string') {
     return reply.status(400).send({ error: 'Slug parameter is required (e.g., senal-en-vivo)' });
@@ -1147,13 +1151,75 @@ export async function getSenalColombiaChannelHandler(request: FastifyRequest, re
       id: `live_${slug}`,
       title: title,
       logo: logo || undefined,
-      group: 'Canales TV',
+      group: group || 'Canales TV',
       country: country || undefined,
       url: result.url,
       type: 'live',
       online: true,
       refreshUrl: result.refreshUrl,
       proveedor: 'senalcolombia',
+    };
+    applyExpiration(channelData);
+
+    const existing = await loadSyncData();
+    const channels = existing?.channels || [];
+
+    const existingIndex = channels.findIndex((ch) => ch.id === channelData.id);
+    if (existingIndex !== -1) {
+      channels.splice(existingIndex, 1);
+    }
+    channels.unshift(channelData);
+
+    await saveSyncData({
+      movies: existing?.movies || [],
+      series: existing?.series || [],
+      channels,
+      popularMovies: existing?.popularMovies || [],
+      popularSeries: existing?.popularSeries || [],
+      estrenoMovies: existing?.estrenoMovies || [],
+      estrenoSeries: existing?.estrenoSeries || [],
+      updatedAt: Date.now(),
+    });
+
+    memoryCache.del('live:channels');
+    pushLog('addChannel', `✅ Canal agregado: ${channelData.id}`);
+    return reply.send({ ok: true, channel: channelData, message: 'Channel added at the beginning of the list' });
+  } catch (error) {
+    pushLog('addChannel', '❌ Error al agregar canal');
+    return reply.status(500).send({ error: 'Failed to add channel' });
+  }
+}
+
+export async function getVertvCableChannelHandler(request: FastifyRequest, reply: FastifyReply) {
+  const { slug } = request.params as any;
+  const { title, logo, country, option, group } = request.body as any;
+
+  if (!slug || typeof slug !== 'string') {
+    return reply.status(400).send({ error: 'Slug parameter is required (e.g., mcu-24-7-en-vivo)' });
+  }
+
+  if (!title || typeof title !== 'string') {
+    return reply.status(400).send({ error: 'title is required in body' });
+  }
+
+  try {
+    const result = await getChannelStream('vertvcable', slug, option || undefined, 'addChannel');
+    if (!result || !result.url) {
+      return reply.status(404).send({ error: 'Channel not found or unavailable' });
+    }
+
+    const channelData: LiveChannel = {
+      id: `live_${slug}`,
+      title: title,
+      logo: logo || undefined,
+      group: group || 'Canales TV',
+      country: country || undefined,
+      url: result.url,
+      type: 'live',
+      online: true,
+      refreshUrl: result.refreshUrl,
+      refreshOption: option || undefined,
+      proveedor: 'vertvcable',
     };
     applyExpiration(channelData);
 
@@ -1289,7 +1355,7 @@ export async function refreshChannelHandler(request: FastifyRequest, reply: Fast
 
     const ch = channels[index];
     const source = (ch.proveedor as any) || extractRefreshSource(ch.refreshUrl);
-    if (!source || (source !== 'wsdeportes' && source !== 'cablevisionhd' && source !== 'tvporinternet2' && source !== 'chatytv' && source !== 'senalcolombia')) {
+    if (!source || (source !== 'wsdeportes' && source !== 'cablevisionhd' && source !== 'tvporinternet2' && source !== 'chatytv' && source !== 'senalcolombia' && source !== 'vertvcable')) {
       pushLog(REFRESH_ONE_TYPE, 'Proveedor no soportado: ' + (source || '(none)'));
       failSync(REFRESH_ONE_TYPE, 'Proveedor no soportado: ' + (source || '(none)'));
       return;
@@ -1309,6 +1375,7 @@ export async function refreshChannelHandler(request: FastifyRequest, reply: Fast
       source === 'cablevisionhd' ? 'https://www.cablevisionhd.com/' + slug + '.php' :
       source === 'chatytv' ? 'https://www.chatytvgratis.net/' + slug + '/' :
       source === 'senalcolombia' ? 'https://www.senalcolombia.tv/' + slug :
+      source === 'vertvcable' ? 'https://www.vertvcable.com/' + slug + '/' :
       'https://' + source + '.com/' + slug;
     pushLog(REFRESH_ONE_TYPE, 'URL consultada: ' + fetchUrl);
 

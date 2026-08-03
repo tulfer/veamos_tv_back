@@ -1612,7 +1612,168 @@ export async function getSenalColombia(slug: string, logType?: string): Promise<
   return result;
 }
 
-export async function getChannelStream(source: 'chatytv' | 'wsdeportes' | 'tvporinternet2' | 'cablevisionhd' | 'senalcolombia', parameter: string, option?: string, logType?: string): Promise<LiveChannel | null> {
+const VERTVCABLE_BASE = 'https://www.vertvcable.com';
+
+async function fetchVertvPageWithRetry(url: string, logType?: string): Promise<string> {
+  const dnsErrors = ['ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET', 'ETIMEDOUT', 'ECONNABORTED'];
+  let lastErr: any;
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    try {
+      return await fetchHTML(url);
+    } catch (err: any) {
+      lastErr = err;
+      const code = err?.code || err?.cause?.code;
+      if (!dnsErrors.includes(code)) throw err;
+      elog(logType, `  ⚠ DNS/red inestable (${code}), reintento ${attempt}/4...`);
+      await new Promise((r) => setTimeout(r, 2000 * attempt));
+    }
+  }
+  throw lastErr;
+}
+
+interface VertvPill {
+  index: string;
+  post: string;
+  nonce: string;
+  type: string;
+}
+
+function extractVertvPills(html: string): VertvPill[] {
+  const pills: VertvPill[] = [];
+  const buttonRe = /<[^>]+data-post="(\d+)"[^>]*>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = buttonRe.exec(html)) !== null) {
+    const tag = m[0];
+    const post = m[1];
+    const nonce = tag.match(/data-nonce="([a-f0-9]+)"/i)?.[1];
+    const index = tag.match(/data-index="(\d+)"/i)?.[1];
+    const type = tag.match(/data-type="([^"]+)"/i)?.[1];
+    if (nonce && index !== undefined && type) {
+      pills.push({ index, post, nonce, type });
+    }
+  }
+  // Ordenar por índice y deduplicar por post+index
+  pills.sort((a, b) => Number(a.index) - Number(b.index));
+  return pills.filter((p, i, arr) => arr.findIndex((x) => x.post === p.post && x.index === p.index) === i);
+}
+
+async function resolveVertvPillUrl(pill: VertvPill, pageUrl: string): Promise<string | null> {
+  const res = await httpClient.post(
+    'https://www.vertvcable.com/wp-admin/admin-ajax.php',
+    new URLSearchParams({
+      action: 'vtc_get_stream_url',
+      post_id: pill.post,
+      stream_index: pill.index,
+      nonce: pill.nonce,
+    }),
+    {
+      timeout: 20000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': pageUrl,
+        'X-Requested-With': 'XMLHttpRequest',
+      },
+    },
+  );
+  const data = res.data?.data || res.data;
+  if (!res.data?.success && !data?.url) return null;
+  let streamUrl: string | undefined = data?.url;
+  if (!streamUrl || typeof streamUrl !== 'string') return null;
+  streamUrl = streamUrl.trim();
+  if (pill.type.toUpperCase() === 'EMBED' && !isM3u8Url(streamUrl)) {
+    const embedHtml = await fetchHTMLWithReferer(streamUrl, pageUrl);
+    const embedM3u8 = embedHtml.match(/["'](https?:\/\/[^"']+\.(?:m3u8|m3u)[^"']*?)["']/i);
+    if (!embedM3u8) return null;
+    streamUrl = embedM3u8[1];
+  }
+  return streamUrl;
+}
+
+/**
+ * VerTV Cable: extrae la URL del stream vía AJAX de WordPress (action
+ * vtc_get_stream_url) usando el post_id/nonce de la página del canal.
+ * No requiere navegador. Los streams son playlists HLS (p. ej. bozztv) que
+ * se sirven proxeados con referer/UA.
+ */
+export async function getVertvCable(slug: string, option?: string, logType?: string): Promise<LiveChannel | null> {
+  const cacheKey = `vertvcable:${slug}:${option || 'default'}`;
+  const cached = memoryCache.get<LiveChannel>(cacheKey);
+  if (cached) return cached;
+
+  const url = `${VERTVCABLE_BASE}/${slug}/`;
+  logger.info({ slug, url, option }, 'Fetching channel from vertvcable');
+  elog(logType, `=== vertvcable: ${slug} ===`);
+  elog(logType, `Consultando: ${url}`);
+
+  let html: string;
+  try {
+    html = await fetchVertvPageWithRetry(url, logType);
+  } catch (err: any) {
+    elog(logType, `❌ Error obteniendo página: ${err?.message}`);
+    return null;
+  }
+
+  const pills = extractVertvPills(html);
+  if (pills.length === 0) {
+    elog(logType, '❌ No se encontraron pills de stream (data-post/data-nonce)');
+    logger.warn({ slug, url }, 'No stream pills found on vertvcable page');
+    return null;
+  }
+  elog(logType, `✅ Pills encontradas: ${pills.length} (${pills.map((p) => `[${p.index}] ${p.type}`).join(', ')})`);
+
+  const wanted = option !== undefined ? Number(option) : 0;
+  const ordered = pills.some((p) => Number(p.index) === wanted) ? pills : pills.slice(wanted) || pills;
+
+  let streamUrl: string | null = null;
+  for (const pill of ordered) {
+    elog(logType, `  ▶ Intento pill [${pill.index}] tipo ${pill.type} (post ${pill.post})`);
+    try {
+      const resolved = await resolveVertvPillUrl(pill, url);
+      if (!resolved) {
+        elog(logType, `  ❌ Pill [${pill.index}] sin URL en AJAX`);
+        continue;
+      }
+      const isHls = isM3u8Url(resolved) || /^HLS$/i.test(pill.type);
+      const ok = isHls ? await verifyStreamGet(resolved) : await verifyStreamUrl(resolved);
+      if (!ok) {
+        elog(logType, `  ❌ Pill [${pill.index}] URL no verificada (forbidden/error)`);
+        continue;
+      }
+      streamUrl = resolved;
+      elog(logType, `  ✅ Stream [${pill.index}]: ${resolved.substring(0, 150)}`);
+      break;
+    } catch (pillErr: any) {
+      elog(logType, `  ❌ Pill [${pill.index}] error: ${pillErr?.message}`);
+    }
+  }
+
+  if (!streamUrl) {
+    logger.warn({ slug, url }, 'No valid stream found on vertvcable');
+    elog(logType, '❌ No se encontró stream en vertvcable');
+    return null;
+  }
+
+  const proxied = buildStreamProxyUrl(streamUrl, VERTVCABLE_BASE + '/');
+  elog(logType, `✅ URL final: ${proxied}`);
+
+  const result: LiveChannel = {
+    id: `live_${slug}`,
+    title: slug.replace(/-/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase()),
+    logo: undefined,
+    group: 'Canales TV',
+    url: proxied,
+    type: 'live',
+    online: true,
+    refreshUrl: url,
+    refreshOption: option || undefined,
+    proveedor: 'vertvcable',
+  };
+
+  memoryCache.set(cacheKey, result, 3600000);
+  return result;
+}
+
+export async function getChannelStream(source: 'chatytv' | 'wsdeportes' | 'tvporinternet2' | 'cablevisionhd' | 'senalcolombia' | 'vertvcable', parameter: string, option?: string, logType?: string): Promise<LiveChannel | null> {
   let result: LiveChannel | null = null;
   if (source === 'chatytv') {
     result = await getChatytv(parameter, logType);
@@ -1624,6 +1785,8 @@ export async function getChannelStream(source: 'chatytv' | 'wsdeportes' | 'tvpor
     result = await getCablevisionHd(parameter, option, logType);
   } else if (source === 'senalcolombia') {
     result = await getSenalColombia(parameter, logType);
+  } else if (source === 'vertvcable') {
+    result = await getVertvCable(parameter, option, logType);
   }
 
   if (!result) return null;
