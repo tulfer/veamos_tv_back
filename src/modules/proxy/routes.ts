@@ -6,7 +6,9 @@ import { buildProxyUrl } from '../../utils/proxy-url';
 import { refreshExpiredChannelUrl } from '../live-tv/controller';
 import { isNetuHost, resolveNetuStream } from '../../services/netu-resolver';
 
-const STREAM_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
+// Importante: el CDN de tvporinternet2 (playlist.php) SOLO acepta este
+// User-Agent exacto (Chrome/120). Cualquier otra versión → 403.
+const STREAM_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 const PLAYLIST_TYPES = [
   'application/vnd.apple.mpegurl',
@@ -124,8 +126,9 @@ export async function proxyRoutes(app: FastifyInstance) {
     let effectiveReferer = referer && typeof referer === 'string' ? referer : undefined;
     let effectiveCookies = verifyCookies(cookies);
     const requestedIsPlaylist = isPlaylist(url, '');
-    // Streams directos .ts con token (p.ej. tvporinternet2) también caducan
-    const requestedLooksStreaming = requestedIsPlaylist || url.toLowerCase().includes('.ts');
+    // Streams directos .ts con token (p.ej. tvporinternet2) también caducan,
+    // y sus playlists vivos (playlist.php) pueden vencer (403) → refrescar
+    const requestedLooksStreaming = requestedIsPlaylist || url.toLowerCase().includes('.ts') || url.toLowerCase().includes('playlist.php');
 
     try {
       let upstream = await fetchUpstream(target, effectiveReferer, effectiveCookies);

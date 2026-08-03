@@ -109,7 +109,12 @@ async function verifyRefreshedUrl(url: string, logKey: string): Promise<boolean>
   // Si es una URL del proxy, verificar el destino interno con su referer/cookies
   // (es lo que el reproductor hará realmente; el proxy con token sin contexto da 403/410)
   const { target, referer, cookies } = unwrapProxyUrl(url);
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = {
+    // Algunos CDNs (p.ej. regionales.saohgdasregions.fun playlist.php) exigen
+    // un User-Agent específico: sin él (o con otra versión) devuelven 403
+    // aunque el token sea válido. Chrome/120 es el que acepta ese CDN.
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  };
   if (referer) headers['Referer'] = referer;
   if (cookies) headers['Cookie'] = cookies;
 

@@ -467,7 +467,13 @@ function extractStreamFromHtml(html: string): string | null {
 
 async function verifyStreamUrl(testUrl: string): Promise<boolean> {
   try {
-    const res = await httpClient.head(testUrl, { timeout: 10000 });
+    const res = await httpClient.head(testUrl, {
+      timeout: 10000,
+      headers: {
+        // El CDN de tvporinternet2 (playlist.php) solo acepta Chrome/120
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      },
+    });
     return res.status === 200;
   } catch {
     return false;
@@ -476,7 +482,13 @@ async function verifyStreamUrl(testUrl: string): Promise<boolean> {
 
 async function verifyStreamGet(testUrl: string): Promise<boolean> {
   try {
-    const res = await httpClient.get(testUrl, { timeout: 8000 });
+    const res = await httpClient.get(testUrl, {
+      timeout: 8000,
+      headers: {
+        // El CDN de tvporinternet2 (playlist.php) solo acepta Chrome/120
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      },
+    });
     if (res.status !== 200) return false;
     const data = String(res.data || '');
     return data.startsWith('#EXTM3U') || data.includes('#EXT-X-');
@@ -762,6 +774,17 @@ async function extractTvPorInternet2Http(url: string, logType?: string): Promise
         elog(logType, `  ✅ .m3u8 con slashes escapados: ${streamUrl}`);
         break;
       }
+      // Playlist viva (playlist.php?…&sig=…) del player: los .ts del CDN
+      // caducan en segundos, este es el m3u8 real reproducible
+      const playlistMatch = html.match(/["']((?:https?:)?\\\/\\\/[^"']+playlist\.php[^"']*?)["']/i) ||
+                            html.match(/(https?:\/\/[^\s"'<>]+playlist\.php[^\s"'<>]*)/i);
+      if (playlistMatch) {
+        streamUrl = playlistMatch[1].replace(/\\\//g, '/');
+        if (!streamUrl.startsWith('http')) streamUrl = 'https:' + streamUrl;
+        hostPageUrl = pageUrl;
+        elog(logType, `  ✅ playlist.php: ${streamUrl}`);
+        break;
+      }
       const m3u8 = html.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|m3u)[^\s"'<>]*/i);
       if (m3u8) { streamUrl = m3u8[0]; hostPageUrl = pageUrl; elog(logType, `  ✅ .m3u8 nivel ${depth + 1}: ${streamUrl}`); break; }
       const fileMatch = html.match(/file["']?\s*:\s*["']([^"']+)["']/i);
@@ -827,7 +850,7 @@ export async function getTvPorInternet2(slug: string, option?: string, logType?:
       }
       let streamUrl = httpResult.streamUrl;
       const refererUrl = (httpResult.hostPageUrl && httpResult.hostPageUrl.startsWith('http')) ? httpResult.hostPageUrl : url;
-      if (isM3u8Url(streamUrl) || streamUrl.includes('.ts')) {
+      if (streamUrl.includes('playlist.php') || isM3u8Url(streamUrl) || streamUrl.includes('.ts')) {
         elog(logType, `🔒 Stream protegido → proxy con Referer`);
         streamUrl = buildStreamProxyUrl(streamUrl, refererUrl);
       }
@@ -855,15 +878,17 @@ export async function getTvPorInternet2(slug: string, option?: string, logType?:
     // Interceptar peticiones de red para capturar URLs de streaming
     const capturedUrls: string[] = [];
     let streamHostFrameUrl: string | undefined;
+    const isStreamUrl = (u: string) =>
+      u.includes('playlist.php') || u.includes('.m3u8') || u.includes('.m3u') || u.includes('.ts') ||
+      u.includes('mywebtv') || u.includes('tdtcloud') || u.includes('hls');
     page.on('request', (request: any) => {
       const reqUrl = request.url();
-      if (reqUrl.includes('.m3u8') || reqUrl.includes('.m3u') || reqUrl.includes('.ts') ||
-          reqUrl.includes('mywebtv') || reqUrl.includes('tdtcloud') || reqUrl.includes('hls')) {
+      if (isStreamUrl(reqUrl)) {
         capturedUrls.push(reqUrl);
       }
-      // Guardar la URL del frame que aloja el stream (m3u8 o .ts con token)
+      // Guardar la URL del frame que aloja el stream (playlist m3u8 o .ts con token)
       // para usarla como Referer del proxy de streaming
-      if (reqUrl.includes('.m3u8') || reqUrl.includes('.m3u') || reqUrl.includes('.ts')) {
+      if (reqUrl.includes('playlist.php') || reqUrl.includes('.m3u8') || reqUrl.includes('.m3u') || reqUrl.includes('.ts')) {
         const frameUrl = request.frame()?.url?.();
         if (frameUrl && frameUrl !== 'about:blank' && frameUrl.startsWith('http') && !streamHostFrameUrl) {
           streamHostFrameUrl = frameUrl;
@@ -872,8 +897,7 @@ export async function getTvPorInternet2(slug: string, option?: string, logType?:
     });
     page.on('response', (response: any) => {
       const respUrl = response.url();
-      if (respUrl.includes('.m3u8') || respUrl.includes('.m3u') || respUrl.includes('mywebtv') ||
-          respUrl.includes('tdtcloud') || respUrl.includes('hls')) {
+      if (isStreamUrl(respUrl)) {
         if (!capturedUrls.includes(respUrl)) {
           capturedUrls.push(respUrl);
         }
@@ -954,6 +978,37 @@ export async function getTvPorInternet2(slug: string, option?: string, logType?:
     // Esperar a que se cargue el nuevo contenido después del click
     await page.waitForTimeout(3000);
 
+    // El player del iframe tarda en arrancar y disparar las peticiones de
+    // stream (playlist.php / .ts / m3u8): esperar con tope hasta capturarlas
+    const hasLiveStreamCapture = () =>
+      capturedUrls.some((u) => u.includes('playlist.php') || u.includes('.ts') || u.includes('.m3u8') ||
+        u.includes('.m3u') || u.includes('mywebtv') || u.includes('tdtcloud') || u.includes('hls'));
+    for (let i = 0; i < 12 && !hasLiveStreamCapture(); i++) {
+      await page.waitForTimeout(1000);
+    }
+    if (!hasLiveStreamCapture()) {
+      logger.warn({ slug, captured: capturedUrls.length }, 'No live stream request captured from player frame');
+      elog(logType, '⚠ No se capturaron peticiones de stream del player');
+    }
+
+    // Si el player no disparó peticiones desde el iframe (carga lenta, DNS...),
+    // navegar directamente al iframe de video y esperar allí las del stream
+    if (!hasLiveStreamCapture()) {
+      const videoIframes = await page.$$('iframe');
+      for (const f of videoIframes) {
+        const src = await f.getAttribute('src').catch(() => null);
+        if (src && src.includes('core.php')) {
+          const iframeUrl = src.startsWith('http') ? src : new URL(src, url).href;
+          elog(logType, `🔄 Sin capturas → navegando al iframe de video: ${iframeUrl}`);
+          await page.goto(iframeUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+          for (let i = 0; i < 15 && !hasLiveStreamCapture(); i++) {
+            await page.waitForTimeout(1000);
+          }
+          break;
+        }
+      }
+    }
+
     const html = await page.content();
     const $ = cheerio.load(html);
 
@@ -973,9 +1028,11 @@ export async function getTvPorInternet2(slug: string, option?: string, logType?:
     // Estrategia 1: URLs capturadas por red
     if (capturedUrls.length > 0) {
       const capturedMedia = capturedUrls.filter((u) => !isJunkStreamUrl(u));
-      const m3u8Url = capturedMedia.find((u) => u.includes('.m3u8') || u.includes('.m3u'));
+      // El playlist.php (m3u8 vivo con tokens rotativos) es la fuente correcta:
+      // los .ts sueltos son segmentos que caducan en segundos y NO sirven como URL.
+      const playlistUrl = capturedMedia.find((u) => u.includes('playlist.php') || u.includes('.m3u8') || u.includes('.m3u'));
       const streamingUrl = capturedMedia.find((u) => u.includes('mywebtv') || u.includes('tdtcloud') || u.includes('hls'));
-      streamUrl = m3u8Url || streamingUrl || capturedMedia[0];
+      streamUrl = playlistUrl || streamingUrl || capturedMedia[0];
       elog(logType, `✅ URL capturada por red: ${streamUrl}`);
       logger.info({ url: streamUrl.substring(0, 250), total: capturedMedia.length }, 'Using captured network URL');
     }
@@ -1035,9 +1092,13 @@ export async function getTvPorInternet2(slug: string, option?: string, logType?:
       for (const script of scripts) {
         const content = $(script).html() || '';
         if (content.length < 200000) {
-          const urlMatch = content.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|ts|mp4|m3u)[^\s"'<>]*/i);
+          const urlMatch =
+            content.match(/["']((?:https?:)?\\\/\\\/[^"']+playlist\.php[^"']*?)["']/i)?.[1] ||
+            content.match(/https?:\/\/[^\s"'<>]+playlist\.php[^\s"'<>]*/i)?.[0] ||
+            content.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|ts|mp4|m3u)[^\s"'<>]*/i)?.[0];
           if (urlMatch) {
-            streamUrl = urlMatch[0];
+            streamUrl = urlMatch.replace(/\\\//g, '/');
+            if (streamUrl.startsWith('//')) streamUrl = 'https:' + streamUrl;
             elog(logType, `✅ URL en script: ${streamUrl}`);
             logger.info({ url: streamUrl.substring(0, 250) }, 'Found stream URL in script');
             break;
@@ -1060,10 +1121,10 @@ export async function getTvPorInternet2(slug: string, option?: string, logType?:
       }
     }
 
-    // tvporinternet2 protege sus streams (m3u8 y .ts con token) con Referer:
-    // si el stream es directo, servirlo por el proxy con el Referer del frame
-    // que lo aloja y las cookies del contexto (el token .ts muere sin contexto)
-    if (streamUrl && (isM3u8Url(streamUrl) || streamUrl.includes('.ts'))) {
+    // tvporinternet2 protege sus streams (playlist.php, m3u8 y .ts con token)
+    // con Referer/UA: si el stream es directo, servirlo por el proxy con el
+    // Referer del frame que lo aloja y las cookies del contexto
+    if (streamUrl && (streamUrl.includes('playlist.php') || isM3u8Url(streamUrl) || streamUrl.includes('.ts'))) {
       const refererUrl = (streamHostFrameUrl && streamHostFrameUrl.startsWith('http')) ? streamHostFrameUrl : url;
       const streamCookies = await captureCookiesFromContext(context, streamUrl);
       elog(logType, `🔒 Stream protegido → proxy con Referer: ${refererUrl}`);
