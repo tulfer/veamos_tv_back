@@ -66,6 +66,13 @@ export interface Season {
   episodes: Episode[];
 }
 
+export interface DownloadLink {
+  name: string;
+  url: string;
+  lang?: string;
+  quality?: string;
+}
+
 export interface ContentDetail {
   id: string;
   title: string;
@@ -75,10 +82,12 @@ export interface ContentDetail {
   rating: number;
   year: number;
   duration?: string;
+  country?: string;
   genres: string[];
   cast: CastMember[];
   video?: VideoInfo;
   videos?: VideoLanguage[];
+  downloads?: DownloadLink[];
   type: 'movie' | 'series' | 'live';
   seasons?: Season[];
 }
@@ -163,7 +172,9 @@ export interface SyncMovie {
   genres?: string[];
   cast?: CastMember[];
   duration?: string;
+  country?: string;
   videos?: VideoLanguage[];
+  downloads?: DownloadLink[];
 }
 
 export interface SyncSeries {
@@ -176,8 +187,10 @@ export interface SyncSeries {
   description?: string;
   genres?: string[];
   cast?: CastMember[];
+  country?: string;
   seasons?: Season[];
   videos?: VideoLanguage[];
+  downloads?: DownloadLink[];
 }
 
 export interface SyncData {
@@ -188,6 +201,9 @@ export interface SyncData {
   popularSeries: MediaItem[];
   estrenoMovies: SyncMovie[];
   estrenoSeries: SyncSeries[];
+  gnulahdMovies?: SyncMovie[];
+  gnulahdSeries?: SyncSeries[];
+  gnulahdAnime?: SyncSeries[];
   updatedAt: number;
 }
 

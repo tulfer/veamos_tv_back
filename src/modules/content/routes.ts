@@ -1,17 +1,19 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { scrapeMovieDetail } from '../../providers/movies';
 import { scrapeSeriesDetail } from '../../providers/series';
+import { scrapeGnulahdDetail } from '../../providers/gnulahd';
 import { fetchLiveChannels } from '../../providers/live-tv';
 import { getCachedOrFetch, memoryCache } from '../../cache';
 import { loadSyncData } from '../../services/data-store';
 import { getMovieDetailContent, getSeriesDetailContent, unwrapDetailProxy } from '../../services/content-detail';
+import { getGnulahdDetailContent } from '../../services/gnulahd-content';
 import { MediaItem, ContentDetail, LiveChannel } from '../../types';
 
 const UNAVAILABLE_MSG = 'Este contenido no está disponible en este momento.';
 
 function idToTitle(id: string): string {
   return id
-    .replace(/^(mov|ser|live)_/, '')
+    .replace(/^(mov|ser|live|gmov|gser|gani)_/, '')
     .split('_')
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(' ');
@@ -94,11 +96,30 @@ export async function contentRoutes(app: FastifyInstance) {
       return reply.send(channelToDetail(channel));
     }
 
+    if (id.startsWith('gmov_') || id.startsWith('gser_') || id.startsWith('gani_')) {
+      const syncedDetail = await getGnulahdDetailContent(id);
+      if (syncedDetail) {
+        return reply.send(unwrapDetailProxy(syncedDetail));
+      }
+
+      const detail = await getCachedOrFetch(
+        `content:detail:${id}`,
+        async () => {
+          const scraped = await scrapeGnulahdDetail(id);
+          if (scraped) return scraped;
+          return generateFallbackDetail(id, id.startsWith('gmov_') ? 'movie' : 'series');
+        },
+        600,
+      );
+
+      return reply.send(unwrapDetailProxy(detail));
+    }
+
     const type = id.startsWith('ser_') ? 'series' : (id.startsWith('mov_') ? 'movie' : null);
     if (!type) {
       return reply.status(400).send({
         error: 'Invalid content ID format',
-        message: 'ID must start with mov_ (movie), ser_ (series), or live_ (channel)',
+        message: 'ID must start with mov_ (movie), ser_ (series), gmov_/gser_/gani_ (GNULA), or live_ (channel)',
       });
     }
 

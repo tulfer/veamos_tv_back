@@ -10,6 +10,10 @@ import {
   syncEstrenoSeriesHandler,
   importM3UHandler,
   syncHomeByscHandler,
+  syncGnulahdHomeHandler,
+  syncGnulahdMoviesHandler,
+  syncGnulahdSeriesHandler,
+  syncGnulahdAnimeHandler,
   fetchDetailsHandler,
   syncStatusHandler,
   syncCountsHandler,
@@ -35,6 +39,10 @@ export async function syncRoutes(app: FastifyInstance) {
   app.post('/sync/popular/series', syncPopularSeriesHandler);
   app.post('/sync/live/import', importM3UHandler);
   app.post('/sync/home-bysc', syncHomeByscHandler);
+  app.post('/sync/gnulahd/home', syncGnulahdHomeHandler);
+  app.post('/sync/gnulahd/movies', syncGnulahdMoviesHandler);
+  app.post('/sync/gnulahd/series', syncGnulahdSeriesHandler);
+  app.post('/sync/gnulahd/anime', syncGnulahdAnimeHandler);
   app.post('/sync/fetch-details', fetchDetailsHandler);
   app.get('/sync/status', syncStatusHandler);
   app.get('/sync/counts', syncCountsHandler);

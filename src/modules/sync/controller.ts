@@ -547,6 +547,163 @@ export async function syncHomeByscHandler(_request: FastifyRequest, reply: Fasti
   });
 }
 
+// ---- GNULA HD ----
+
+/** Preserva todas las colecciones al hacer saveSyncData (incluidas las de GNULA). */
+function buildSyncData(existing: SyncData | null, patch: Partial<SyncData>): SyncData {
+  return {
+    movies: existing?.movies || [],
+    series: existing?.series || [],
+    channels: existing?.channels || [],
+    popularMovies: existing?.popularMovies || [],
+    popularSeries: existing?.popularSeries || [],
+    estrenoMovies: existing?.estrenoMovies || [],
+    estrenoSeries: existing?.estrenoSeries || [],
+    gnulahdMovies: existing?.gnulahdMovies || [],
+    gnulahdSeries: existing?.gnulahdSeries || [],
+    gnulahdAnime: existing?.gnulahdAnime || [],
+    updatedAt: Date.now(),
+    ...patch,
+  };
+}
+
+async function syncGnulahdList(
+  kind: 'peliculas' | 'series' | 'anime',
+  pages: number[],
+  type: SyncType,
+): Promise<SyncMovie[] | SyncSeries[]> {
+  const { scrapeGnulahdList, scrapeGnulahdDetail } = await import('../../providers/gnulahd');
+  const isSeries = kind !== 'peliculas';
+
+  const allItems: { id: string; title: string; poster?: string; rating?: number; year?: number }[] = [];
+  for (const page of pages) {
+    const pageData = await scrapeGnulahdList(kind, page);
+    for (const item of pageData.items) {
+      allItems.push({ id: item.id, title: item.title, poster: item.poster, rating: item.rating, year: item.year });
+    }
+    updateSyncProgress(type, allItems.length, `Escaneando página ${page} de ${kind}...`);
+    logger.info({ kind, page, total: allItems.length }, 'Gnulahd list page synced');
+  }
+
+  const results: (SyncMovie | SyncSeries)[] = [];
+  let processed = 0;
+
+  await processBatch(allItems, async (item) => {
+    try {
+      const detail = await scrapeGnulahdDetail(item.id);
+      processed++;
+      updateSyncProgress(type, processed, `Procesando detalles (${processed}/${allItems.length})...`, allItems.length);
+      if (detail) {
+        if (isSeries) {
+          results.push({
+            id: detail.id,
+            title: detail.title,
+            poster: detail.poster || item.poster,
+            backdrop: detail.backdrop || item.poster,
+            rating: detail.rating,
+            year: detail.year,
+            description: detail.description,
+            genres: detail.genres,
+            cast: detail.cast,
+            country: detail.country,
+            seasons: detail.seasons,
+            videos: detail.videos,
+            downloads: detail.downloads,
+          });
+        } else {
+          results.push({
+            id: detail.id,
+            title: detail.title,
+            poster: detail.poster || item.poster,
+            backdrop: detail.backdrop || item.poster,
+            rating: detail.rating,
+            year: detail.year,
+            description: detail.description,
+            genres: detail.genres,
+            cast: detail.cast,
+            duration: detail.duration,
+            country: detail.country,
+            videos: detail.videos,
+            downloads: detail.downloads,
+          });
+        }
+        return;
+      }
+    } catch { /* fallback below */ }
+
+    results.push({
+      id: item.id,
+      title: item.title,
+      poster: item.poster,
+      rating: item.rating,
+      year: item.year,
+    } as SyncMovie);
+  });
+
+  updateSyncProgress(type, results.length, `${results.length} items de ${kind} procesados`);
+  return results;
+}
+
+export async function syncGnulahdHomeHandler(_request: FastifyRequest, reply: FastifyReply) {
+  if (!startSync('gnulahdHome')) {
+    return reply.send({ ok: true, message: 'Gnulahd home sync already in progress' });
+  }
+
+  reply.send({ ok: true, message: 'Gnulahd home sync started' });
+
+  runBackgroundSync('gnulahdHome', async () => {
+    updateSyncProgress('gnulahdHome', 0, 'Scrapeando home de gnulahd.nu...');
+    const { scrapeGnulahdHome, saveGnulahdHomeData } = await import('../../providers/gnulahd');
+    const data = await scrapeGnulahdHome();
+    updateSyncProgress('gnulahdHome', 1, 'Guardando datos...');
+    await saveGnulahdHomeData(data);
+    const count = data.banners.length + data.sections.length;
+    updateSyncProgress('gnulahdHome', count, `${count} banners/secciones guardadas`);
+    return count;
+  });
+}
+
+async function syncGnulahdByKindHandler(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  kind: 'peliculas' | 'series' | 'anime',
+  type: SyncType,
+  field: 'gnulahdMovies' | 'gnulahdSeries' | 'gnulahdAnime',
+) {
+  const body = request.body as { pages?: string; replace?: boolean } | undefined;
+  const pages = parsePages(body?.pages);
+  if (pages.length === 0) {
+    return reply.status(400).send({ error: 'Provide pages in body, e.g. { "pages": "1-20" }' });
+  }
+  if (!startSync(type)) {
+    return reply.send({ ok: true, message: `${type} sync already in progress` });
+  }
+
+  reply.send({ ok: true, message: `${type} sync started` });
+
+  runBackgroundSync(type, async () => {
+    const items = await syncGnulahdList(kind, pages, type);
+    const existing = await loadSyncData();
+    const shouldReplace = body?.replace === true;
+    const current = (existing && existing[field]) || [];
+    const finalItems = shouldReplace ? items : mergeByIdGeneric(items as { id: string }[], current as { id: string }[]);
+    await saveSyncData(buildSyncData(existing, { [field]: finalItems } as Partial<SyncData>));
+    return finalItems.length;
+  });
+}
+
+export async function syncGnulahdMoviesHandler(request: FastifyRequest, reply: FastifyReply) {
+  return syncGnulahdByKindHandler(request, reply, 'peliculas', 'gnulahdMovies', 'gnulahdMovies');
+}
+
+export async function syncGnulahdSeriesHandler(request: FastifyRequest, reply: FastifyReply) {
+  return syncGnulahdByKindHandler(request, reply, 'series', 'gnulahdSeries', 'gnulahdSeries');
+}
+
+export async function syncGnulahdAnimeHandler(request: FastifyRequest, reply: FastifyReply) {
+  return syncGnulahdByKindHandler(request, reply, 'anime', 'gnulahdAnime', 'gnulahdAnime');
+}
+
 function collectItems(obj: any, acc: { id: number; mediaType: string; slug: string; title: string }[]) {
   if (!obj || typeof obj !== 'object') return;
   if (Array.isArray(obj)) {
@@ -729,6 +886,10 @@ export async function syncStatusHandler(request: FastifyRequest, reply: FastifyR
     { key: 'popularMovies', label: 'Populares Películas', route: '/sync/popular/movies', method: 'POST' },
     { key: 'popularSeries', label: 'Populares Series', route: '/sync/popular/series', method: 'POST' },
     { key: 'home', label: 'Home (cineby.sc)', route: '/sync/home-bysc', method: 'POST' },
+    { key: 'gnulahdHome', label: 'Home (gnulahd)', route: '/sync/gnulahd/home', method: 'POST' },
+    { key: 'gnulahdMovies', label: 'Gnulahd Películas', route: '/sync/gnulahd/movies', method: 'POST', needsPages: true },
+    { key: 'gnulahdSeries', label: 'Gnulahd Series', route: '/sync/gnulahd/series', method: 'POST', needsPages: true },
+    { key: 'gnulahdAnime', label: 'Gnulahd Anime', route: '/sync/gnulahd/anime', method: 'POST', needsPages: true },
     { key: 'fetchDetails', label: 'Fetch Details (cineby)', route: '/sync/fetch-details', method: 'POST' },
     { key: 'importM3U', label: 'Importar M3U', route: '/sync/live/import', method: 'POST', needsUrl: true },
     { key: 'refreshAll', label: 'Refresh All Canales', route: '/live/channels/refresh-all', method: 'POST' },
@@ -805,7 +966,7 @@ a:hover{text-decoration:underline}
 <script>
 // Consulta UN solo conteo de Firestore al abrir el Detalle (por eso el dashboard ya no consulta nada)
 (function loadDbCount(){
-  const map = { refreshAll:'channels', refreshExpired:'channels', refreshOne:'channels', importM3U:'channels', updateChannel:'channels', channels:'channels', movies:'movies', series:'series', popularMovies:'popularMovies', popularSeries:'popularSeries', estrenoMovies:'estrenoMovies', estrenoSeries:'estrenoSeries' };
+  const map = { refreshAll:'channels', refreshExpired:'channels', refreshOne:'channels', importM3U:'channels', updateChannel:'channels', channels:'channels', movies:'movies', series:'series', popularMovies:'popularMovies', popularSeries:'popularSeries', estrenoMovies:'estrenoMovies', estrenoSeries:'estrenoSeries', gnulahdMovies:'gnulahdMovies', gnulahdSeries:'gnulahdSeries', gnulahdAnime:'gnulahdAnime' };
   const coll = map['${type}'];
   if (!coll) return;
   fetch('/sync/count/' + coll).then(function(r){ return r.json(); }).then(function(d){

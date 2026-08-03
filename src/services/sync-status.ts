@@ -13,7 +13,11 @@ export type SyncType =
   | 'refreshAll'
   | 'refreshExpired'
   | 'refreshOne'
-  | 'migrate';
+  | 'migrate'
+  | 'gnulahdHome'
+  | 'gnulahdMovies'
+  | 'gnulahdSeries'
+  | 'gnulahdAnime';
 
 export interface SyncProgress {
   current: number;
@@ -77,6 +81,10 @@ const state: SyncState = {
   refreshExpired: { ...defaultStatus },
   refreshOne: { ...defaultStatus },
   migrate: { ...defaultStatus },
+  gnulahdHome: { ...defaultStatus },
+  gnulahdMovies: { ...defaultStatus },
+  gnulahdSeries: { ...defaultStatus },
+  gnulahdAnime: { ...defaultStatus },
 };
 
 export function startSync(type: SyncType): boolean {

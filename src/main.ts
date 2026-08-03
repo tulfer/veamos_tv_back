@@ -14,6 +14,7 @@ import { liveTVRoutes } from './modules/live-tv/routes';
 import { searchRoutes } from './modules/search/routes';
 import { homeRoutes } from './modules/home/routes';
 import { contentRoutes } from './modules/content/routes';
+import { gnulahdRoutes } from './modules/gnulahd/routes';
 import { syncRoutes } from './modules/sync/routes';
 import { proxyRoutes } from './modules/proxy/routes';
 
@@ -78,6 +79,9 @@ async function buildServer() {
   process.stderr.write('buildServer: registering contentRoutes...\n');
   await app.register(contentRoutes);
 
+  process.stderr.write('buildServer: registering gnulahdRoutes...\n');
+  await app.register(gnulahdRoutes);
+
   process.stderr.write('buildServer: registering syncRoutes...\n');
   await app.register(syncRoutes);
 
@@ -134,6 +138,10 @@ async function buildServer() {
     ${syncRow('Populares Películas', status.popularMovies)}
     ${syncRow('Populares Series', status.popularSeries)}
     ${syncRow('Home', status.home)}
+    ${syncRow('Home GNULA', status.gnulahdHome)}
+    ${syncRow('GNULA Películas', status.gnulahdMovies)}
+    ${syncRow('GNULA Series', status.gnulahdSeries)}
+    ${syncRow('GNULA Anime', status.gnulahdAnime)}
   </div>
 </div>`;
     } catch (syncError) {

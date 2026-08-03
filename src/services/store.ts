@@ -107,6 +107,7 @@ export const storeKeys = {
   syncMeta: 'sync-meta' as const,
   autoRefresh: 'auto:cfg' as const,
   home: 'home:cineby' as const,
+  gnulahdHome: 'home:gnulahd' as const,
   user: (uid: string) => `user:${uid}`,
   favorites: (uid: string, profileId: string) => `fav:${uid}:${profileId}`,
   continueWatching: (uid: string, profileId: string) => `watch:${uid}:${profileId}`,

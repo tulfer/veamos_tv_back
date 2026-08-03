@@ -21,6 +21,9 @@ const COLLECTION_KEYS = [
   'popular-series',
   'estreno-movies',
   'estreno-series',
+  'gnulahd-movies',
+  'gnulahd-series',
+  'gnulahd-anime',
 ] as const;
 
 // /sync/count/:type recibe nombres camelCase (los del dashboard).
@@ -32,6 +35,9 @@ const TYPE_TO_COLLECTION_KEY: Record<string, string> = {
   estrenoSeries: 'estreno-series',
   popularMovies: 'popular-movies',
   popularSeries: 'popular-series',
+  gnulahdMovies: 'gnulahd-movies',
+  gnulahdSeries: 'gnulahd-series',
+  gnulahdAnime: 'gnulahd-anime',
 };
 
 /** Clon profundo: evita que los handlers muten el snapshot cacheado
@@ -73,7 +79,7 @@ export async function loadSyncData(): Promise<SyncData | null> {
   const cached = memoryCache.get<SyncData>(SYNC_DATA_CACHE_KEY);
   if (cached) return cloneDeep(cached);
 
-  const [movies, series, channels, popularMovies, popularSeries, estrenoMovies, estrenoSeries, meta] =
+  const [movies, series, channels, popularMovies, popularSeries, estrenoMovies, estrenoSeries, gnulahdMovies, gnulahdSeries, gnulahdAnime, meta] =
     await Promise.all([
       loadCollection<SyncMovie>('movies'),
       loadCollection<SyncSeries>('series'),
@@ -82,6 +88,9 @@ export async function loadSyncData(): Promise<SyncData | null> {
       loadCollection<MediaItem>('popular-series'),
       loadCollection<SyncMovie>('estreno-movies'),
       loadCollection<SyncSeries>('estreno-series'),
+      loadCollection<SyncMovie>('gnulahd-movies'),
+      loadCollection<SyncSeries>('gnulahd-series'),
+      loadCollection<SyncSeries>('gnulahd-anime'),
       getRow<{ updatedAt?: number }>(storeKeys.syncMeta),
     ]);
 
@@ -93,6 +102,9 @@ export async function loadSyncData(): Promise<SyncData | null> {
     popularSeries,
     estrenoMovies,
     estrenoSeries,
+    gnulahdMovies,
+    gnulahdSeries,
+    gnulahdAnime,
     updatedAt: meta?.updatedAt ?? Date.now(),
   };
 
@@ -122,6 +134,9 @@ export async function saveSyncData(data: SyncData): Promise<void> {
       saveCollection('popular-series', data.popularSeries),
       saveCollection('estreno-movies', data.estrenoMovies),
       saveCollection('estreno-series', data.estrenoSeries),
+      saveCollection('gnulahd-movies', data.gnulahdMovies || []),
+      saveCollection('gnulahd-series', data.gnulahdSeries || []),
+      saveCollection('gnulahd-anime', data.gnulahdAnime || []),
       setRow(storeKeys.syncMeta, { updatedAt: data.updatedAt }),
     ]);
     memoryCache.del(SYNC_DATA_CACHE_KEY);
@@ -212,7 +227,7 @@ export async function getCollectionCounts(): Promise<Record<string, number>> {
 
   try {
     const counts: Record<string, number> = {};
-    const [movies, series, estrenoMovies, estrenoSeries, channels, popularMovies, popularSeries] = await Promise.all([
+    const [movies, series, estrenoMovies, estrenoSeries, channels, popularMovies, popularSeries, gnulahdMovies, gnulahdSeries, gnulahdAnime] = await Promise.all([
       loadCollection<SyncMovie>('movies'),
       loadCollection<SyncSeries>('series'),
       loadCollection<SyncMovie>('estreno-movies'),
@@ -220,6 +235,9 @@ export async function getCollectionCounts(): Promise<Record<string, number>> {
       loadCollection<LiveChannel>('channels'),
       loadCollection<MediaItem>('popular-movies'),
       loadCollection<MediaItem>('popular-series'),
+      loadCollection<SyncMovie>('gnulahd-movies'),
+      loadCollection<SyncSeries>('gnulahd-series'),
+      loadCollection<SyncSeries>('gnulahd-anime'),
     ]);
     counts['movies'] = movies.length;
     counts['series'] = series.length;
@@ -228,6 +246,9 @@ export async function getCollectionCounts(): Promise<Record<string, number>> {
     counts['channels'] = channels.length;
     counts['popularMovies'] = popularMovies.length;
     counts['popularSeries'] = popularSeries.length;
+    counts['gnulahdMovies'] = gnulahdMovies.length;
+    counts['gnulahdSeries'] = gnulahdSeries.length;
+    counts['gnulahdAnime'] = gnulahdAnime.length;
     counts['all'] = counts['movies'] + counts['series'];
     counts['importM3U'] = counts['channels'];
     counts['refreshAll'] = counts['channels'];
