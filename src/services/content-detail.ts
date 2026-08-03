@@ -4,6 +4,7 @@ import { scrapeMovieDetail } from '../providers/movies';
 import { scrapeSeriesDetail } from '../providers/series';
 import { logger } from '../utils/logger';
 import { memoryCache } from '../cache/memory';
+import { isNetuHost } from './netu-resolver';
 
 /**
  * Detalles de contenido con "enriquecimiento en lectura":
@@ -13,8 +14,8 @@ import { memoryCache } from '../cache/memory';
  * la base para curarla (self-healing on read).
  */
 
-/** Si la URL es un proxy del backend (`…/proxy/stream?url=…`) lo desenvuelve y
- *  devuelve el destino real, para que la app reproduzca el embed directamente. */
+/** Elimina los servers cuyo URL fue envuelto en el proxy del backend
+ *  (`…/proxy/stream?url=…`), devolviendo el destino real. */
 function unwrapProxyServerUrl(url: string): string {
   const idx = url.indexOf('/proxy/stream?');
   if (idx < 0) return url;
@@ -28,11 +29,20 @@ function unwrapProxyServerUrl(url: string): string {
   return url;
 }
 
+/** Quita del resultado los servidores "netu": no son reproducibles por la app
+ *  (embed JS-driven con captcha/adchain y tokens ligados a IP). */
 function unwrapVideoServers(videos?: ContentDetail['videos']): void {
   videos?.forEach((video) => {
-    video.servers?.forEach((server) => {
-      server.url = unwrapProxyServerUrl(server.url);
-    });
+    if (!video.servers) return;
+    video.servers = video.servers
+      .map((server) => ({ ...server, url: unwrapProxyServerUrl(server.url) }))
+      .filter((server) => {
+        const isNetu = server.name?.toLowerCase() === 'netu' || isNetuHost(server.url);
+        if (isNetu) {
+          logger.info({ url: server.url.substring(0, 120) }, 'Netu server omitido (no reproducible por la app)');
+        }
+        return !isNetu;
+      });
   });
 }
 
