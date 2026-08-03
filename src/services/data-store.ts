@@ -2,6 +2,7 @@ import { logger } from '../utils/logger';
 import { memoryCache } from '../cache/memory';
 import { SyncData, SyncMovie, SyncSeries, LiveChannel, MediaItem } from '../types';
 import { storeKeys, getRow, setRow } from './store';
+import { toPublicProxyUrl } from '../utils/proxy-url';
 
 const SYNC_DATA_CACHE_KEY = 'sync:data';
 const SYNC_DATA_CACHE_TTL_MS = 6 * 60 * 60_000;
@@ -87,7 +88,7 @@ export async function loadSyncData(): Promise<SyncData | null> {
   const result: SyncData = {
     movies,
     series,
-    channels,
+    channels: channels.map((c) => (c?.url ? { ...c, url: toPublicProxyUrl(c.url) } : c)),
     popularMovies,
     popularSeries,
     estrenoMovies,
@@ -106,8 +107,9 @@ export async function loadChannels(): Promise<LiveChannel[]> {
   if (cached) return cloneDeep(cached);
 
   const channels = await loadCollection<LiveChannel>('channels');
-  memoryCache.set(CHANNELS_CACHE_KEY, channels, CHANNELS_CACHE_TTL_MS);
-  return channels;
+  const normalized = channels.map((c) => (c?.url ? { ...c, url: toPublicProxyUrl(c.url) } : c));
+  memoryCache.set(CHANNELS_CACHE_KEY, normalized, CHANNELS_CACHE_TTL_MS);
+  return normalized;
 }
 
 export async function saveSyncData(data: SyncData): Promise<void> {

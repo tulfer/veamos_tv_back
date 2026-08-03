@@ -4,8 +4,7 @@ import { scrapeMovieDetail } from '../providers/movies';
 import { scrapeSeriesDetail } from '../providers/series';
 import { logger } from '../utils/logger';
 import { memoryCache } from '../cache/memory';
-import { env } from '../config/env';
-import { buildProxyUrl } from '../utils/proxy-url';
+import { buildProxyUrl, getPublicBaseUrl } from '../utils/proxy-url';
 import { isNetuHost } from './netu-resolver';
 
 /**
@@ -16,7 +15,7 @@ import { isNetuHost } from './netu-resolver';
  * Firestore para curar la base (self-healing on read).
  */
 
-const netuProxyBase = env.FALLBACK_EXTRACT_URL || env.PUBLIC_BASE_URL || '';
+const netuProxyBase = getPublicBaseUrl();
 
 /**
  * Los servidores "netu" no son reproducibles directamente por la app:

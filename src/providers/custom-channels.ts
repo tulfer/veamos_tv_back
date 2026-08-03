@@ -1099,7 +1099,7 @@ export async function getTvPorInternet2(slug: string, option?: string, logType?:
 const CABLEVISIONHD_BASE = 'https://www.cablevisionhd.com';
 
 function buildStreamProxyUrl(streamUrl: string, referer?: string, cookies?: string): string {
-  const base = env.PUBLIC_BASE_URL || '';
+  const base = (env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
   const params = new URLSearchParams();
   params.set('url', streamUrl);
   if (referer) params.set('referer', referer);
