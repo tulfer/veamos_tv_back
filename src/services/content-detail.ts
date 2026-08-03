@@ -13,6 +13,37 @@ import { memoryCache } from '../cache/memory';
  * la base para curarla (self-healing on read).
  */
 
+/** Si la URL es un proxy del backend (`…/proxy/stream?url=…`) lo desenvuelve y
+ *  devuelve el destino real, para que la app reproduzca el embed directamente. */
+function unwrapProxyServerUrl(url: string): string {
+  const idx = url.indexOf('/proxy/stream?');
+  if (idx < 0) return url;
+  const query = url.slice(idx + '/proxy/stream?'.length);
+  try {
+    const target = new URLSearchParams(query).get('url');
+    if (target) return target;
+  } catch {
+    /* ignore */
+  }
+  return url;
+}
+
+function unwrapVideoServers(videos?: ContentDetail['videos']): void {
+  videos?.forEach((video) => {
+    video.servers?.forEach((server) => {
+      server.url = unwrapProxyServerUrl(server.url);
+    });
+  });
+}
+
+export function unwrapDetailProxy(detail: ContentDetail): ContentDetail {
+  unwrapVideoServers(detail.videos);
+  detail.seasons?.forEach((season) => {
+    season.episodes?.forEach((episode) => unwrapVideoServers(episode.videos));
+  });
+  return detail;
+}
+
 function mapMovie(movie: SyncMovie): ContentDetail {
   return {
     id: movie.id,
