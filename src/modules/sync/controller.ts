@@ -856,7 +856,7 @@ export async function importM3UHandler(request: FastifyRequest, reply: FastifyRe
   });
 }
 
-const DASHBOARD_CODE = '1992';
+export const DASHBOARD_CODE = '1992';
 
 export async function syncStatusHandler(request: FastifyRequest, reply: FastifyReply) {
   const { getSyncStatus } = await import('../../services/sync-status');
@@ -1049,7 +1049,7 @@ export async function clearLogsHandler(request: FastifyRequest, reply: FastifyRe
   return reply.send({ ok: true, cleared: type });
 }
 
-function generateCodeEntryPage(): string {  return `<!DOCTYPE html>
+export function generateCodeEntryPage(): string {  return `<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="UTF-8">
@@ -1236,6 +1236,9 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
 </head>
 <body>
 <h1>🔄 Panel de Sincronización</h1>
+<div style="margin-bottom:1.5rem">
+  <a href="/db?code=1992" style="display:inline-block;padding:.5rem 1rem;border-radius:8px;background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;text-decoration:none;font-size:.9rem;font-weight:600">🗄️ Explorador de Base de Datos</a>
+</div>
 <div class="dashboard" id="dashboard">
   ${rows}
 </div>

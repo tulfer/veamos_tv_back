@@ -16,6 +16,7 @@ import { homeRoutes } from './modules/home/routes';
 import { contentRoutes } from './modules/content/routes';
 import { gnulahdRoutes } from './modules/gnulahd/routes';
 import { syncRoutes } from './modules/sync/routes';
+import { dbExplorerRoutes } from './modules/db-explorer/routes';
 import { proxyRoutes } from './modules/proxy/routes';
 
 process.stderr.write('=== Veamos TV API starting ===\n');
@@ -84,6 +85,9 @@ async function buildServer() {
 
   process.stderr.write('buildServer: registering syncRoutes...\n');
   await app.register(syncRoutes);
+
+  process.stderr.write('buildServer: registering dbExplorerRoutes...\n');
+  await app.register(dbExplorerRoutes);
 
   process.stderr.write('buildServer: registering proxyRoutes...\n');
   await app.register(proxyRoutes);
