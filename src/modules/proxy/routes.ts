@@ -21,6 +21,31 @@ function isPlaylist(url: string, contentType: string): boolean {
     PLAYLIST_TYPES.some((t) => contentType.toLowerCase().includes(t));
 }
 
+/** True si la URL interna trae `expires=` en el pasado (token ya vencido). */
+function innerUrlExpired(target: string): boolean {
+  try {
+    const exp = parseInt(new URL(target).searchParams.get('expires') || '', 10);
+    if (!isFinite(exp)) return false;
+    return exp * 1000 < Date.now();
+  } catch {
+    return false;
+  }
+}
+
+/** Extrae url/referer/cookies de una URL del proxy (`/proxy/stream?url=…`). */
+function parseProxiedUrl(proxied: string): { url?: string; referer?: string; cookies?: string } {
+  try {
+    const rp = new URL(proxied, 'http://localhost');
+    return {
+      url: rp.searchParams.get('url') || undefined,
+      referer: rp.searchParams.get('referer') || undefined,
+      cookies: rp.searchParams.get('cookies') || undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
 function resolveUrl(base: string, target: string): string {
   try {
     return new URL(target, base).toString();
@@ -99,6 +124,8 @@ export async function proxyRoutes(app: FastifyInstance) {
     let effectiveReferer = referer && typeof referer === 'string' ? referer : undefined;
     let effectiveCookies = verifyCookies(cookies);
     const requestedIsPlaylist = isPlaylist(url, '');
+    // Streams directos .ts con token (p.ej. tvporinternet2) también caducan
+    const requestedLooksStreaming = requestedIsPlaylist || url.toLowerCase().includes('.ts');
 
     try {
       let upstream = await fetchUpstream(target, effectiveReferer, effectiveCookies);
@@ -119,25 +146,28 @@ export async function proxyRoutes(app: FastifyInstance) {
         }
       }
 
-      // Si el playlist (m3u8) expiró (4xx), refrescar el canal y servir la URL nueva vigente
-      if (upstream.res.status >= 400 && requestedIsPlaylist) {
+      // Si el stream expiró — token vencido (expires en el pasado) o el
+      // upstream devolvió 4xx (m3u8 vencido o .ts con token muerto) —,
+      // refrescar el canal y servir la URL nueva vigente.
+      if (requestedLooksStreaming && (upstream.res.status >= 400 || innerUrlExpired(url))) {
         const refreshed = await refreshExpiredChannelUrl(url);
         if (refreshed) {
-          try {
-            const rp = new URL(refreshed, 'http://localhost');
-            const newUrl = rp.searchParams.get('url');
-            const newReferer = rp.searchParams.get('referer') || undefined;
-            const newCookies = verifyCookies(rp.searchParams.get('cookies'));
-            if (newUrl) {
+          const parsed = parseProxiedUrl(refreshed);
+          if (parsed.url) {
+            try {
               upstream.res.data.resume();
-              upstream = await fetchUpstream(newUrl, newReferer, newCookies);
-              target = newUrl;
-              effectiveReferer = newReferer;
-              effectiveCookies = newCookies;
+              upstream = await fetchUpstream(
+                parsed.url,
+                parsed.referer || effectiveReferer,
+                parsed.cookies ? verifyCookies(parsed.cookies) : effectiveCookies,
+              );
+              target = parsed.url;
+              effectiveReferer = parsed.referer || effectiveReferer;
+              effectiveCookies = parsed.cookies ? verifyCookies(parsed.cookies) : effectiveCookies;
               logger.info({ url: target.substring(0, 200) }, 'Proxy: stream re-extracted after expiry');
+            } catch {
+              // Si falla la re-extracción, se responde el error original
             }
-          } catch {
-            // Si falla la re-extracción, se responde el error original
           }
         }
       }
