@@ -4,48 +4,14 @@ import { scrapeMovieDetail } from '../providers/movies';
 import { scrapeSeriesDetail } from '../providers/series';
 import { logger } from '../utils/logger';
 import { memoryCache } from '../cache/memory';
-import { buildProxyUrl, getPublicBaseUrl } from '../utils/proxy-url';
-import { isNetuHost } from './netu-resolver';
 
 /**
  * Detalles de contenido con "enriquecimiento en lectura":
  * si la entrada sincronizada no tiene videos (porque el detalle falló en el
  * momento del sync y se guardó el item básico), se escrapea en vivo y se
  * devuelve el detalle real. Si el scrape da videos, se guarda de vuelta en
- * Firestore para curar la base (self-healing on read).
+ * la base para curarla (self-healing on read).
  */
-
-const netuProxyBase = getPublicBaseUrl();
-
-/**
- * Los servidores "netu" no son reproducibles directamente por la app:
- * - las páginas embed (waaw.to/f/...) son JS-driven y no tienen m3u8 estático
- * - las URLs HLS (cfglobalcdn) llevan token por IP + expiración
- * Se devuelven proxyficadas hacia Cloud Run (que tiene Playwright y resuelve
- * con la misma IP desde la que descarga). En App Hosting esto también apunta
- * a Cloud Run vía FALLBACK_EXTRACT_URL.
- */
-function proxyNetuVideoUrls(videos?: ContentDetail['videos']): void {
-  videos?.forEach((video) => {
-    video.servers?.forEach((server) => {
-      if (server.name?.toLowerCase() === 'netu' && isNetuHost(server.url)) {
-        server.url = new URL(
-          buildProxyUrl(server.url, new URL(server.url).origin),
-          netuProxyBase,
-        ).toString();
-      }
-    });
-  });
-}
-
-export function proxyNetuServers(detail: ContentDetail): ContentDetail {
-  if (!netuProxyBase) return detail;
-  proxyNetuVideoUrls(detail.videos);
-  detail.seasons?.forEach((season) => {
-    season.episodes?.forEach((episode) => proxyNetuVideoUrls(episode.videos));
-  });
-  return detail;
-}
 
 function mapMovie(movie: SyncMovie): ContentDetail {
   return {

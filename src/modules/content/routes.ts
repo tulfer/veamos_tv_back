@@ -4,7 +4,7 @@ import { scrapeSeriesDetail } from '../../providers/series';
 import { fetchLiveChannels } from '../../providers/live-tv';
 import { getCachedOrFetch, memoryCache } from '../../cache';
 import { loadSyncData } from '../../services/data-store';
-import { getMovieDetailContent, getSeriesDetailContent, proxyNetuServers } from '../../services/content-detail';
+import { getMovieDetailContent, getSeriesDetailContent } from '../../services/content-detail';
 import { MediaItem, ContentDetail, LiveChannel } from '../../types';
 
 const UNAVAILABLE_MSG = 'Este contenido no está disponible en este momento.';
@@ -106,7 +106,7 @@ export async function contentRoutes(app: FastifyInstance) {
       ? await getMovieDetailContent(id)
       : await getSeriesDetailContent(id);
     if (syncedDetail) {
-      return reply.send(proxyNetuServers(syncedDetail));
+      return reply.send(syncedDetail);
     }
 
     const detail = await getCachedOrFetch(
@@ -119,6 +119,6 @@ export async function contentRoutes(app: FastifyInstance) {
       600,
     );
 
-    return reply.send(proxyNetuServers(detail));
+    return reply.send(detail);
   });
 }
