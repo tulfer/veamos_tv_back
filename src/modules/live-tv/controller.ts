@@ -681,6 +681,7 @@ export async function refreshExpiredChannelsHandler(_request: FastifyRequest, re
         pushLog('refreshExpired', `  ✅ URL obtenida: ${result.url.substring(0, 120)}...`);
         if (await verifyRefreshedUrl(result.url, 'refreshExpired')) {
           ch.url = result.url;
+          if (result.drm) ch.drm = result.drm;
           applyExpiration(ch);
           updatedChannels.push(ch);
         } else {
@@ -841,6 +842,7 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
         pushLog('refreshAll', `  ✅ URL obtenida: ${result.url.substring(0, 120)}...`);
         if (await verifyRefreshedUrl(result.url, 'refreshAll')) {
           ch.url = result.url;
+          if (result.drm) ch.drm = result.drm;
           applyExpiration(ch);
           if (!ch.proveedor) ch.proveedor = source;
           updatedChannels.push(ch);
@@ -1220,6 +1222,7 @@ export async function getVertvCableChannelHandler(request: FastifyRequest, reply
       refreshUrl: result.refreshUrl,
       refreshOption: option || undefined,
       proveedor: 'vertvcable',
+      ...(result.drm ? { drm: result.drm } : {}),
     };
     applyExpiration(channelData);
 
@@ -1386,10 +1389,12 @@ export async function refreshChannelHandler(request: FastifyRequest, reply: Fast
 
     pushLog(REFRESH_ONE_TYPE, 'Consultando a ' + source + '...');
     let newUrl: string | null = null;
+    let newDrm: LiveChannel['drm'] | undefined;
     try {
       const result = await getChannelStream(source as any, slug, ch.refreshOption || undefined, REFRESH_ONE_TYPE);
       if (result && result.url) {
         newUrl = result.url;
+        newDrm = result.drm;
         pushLog(REFRESH_ONE_TYPE, 'URL obtenida: ' + result.url.substring(0, 120) + '...');
       } else {
         pushLog(REFRESH_ONE_TYPE, 'El proveedor no devolvio URL');
@@ -1435,7 +1440,7 @@ export async function refreshChannelHandler(request: FastifyRequest, reply: Fast
       return;
     }
 
-    channels[index] = { ...ch, url: newUrl, online: true };
+    channels[index] = { ...ch, url: newUrl, online: true, ...(newDrm ? { drm: newDrm } : {}) };
     applyExpiration(channels[index]);
     await saveSyncData({
       movies: synced.movies || [],

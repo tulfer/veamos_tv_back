@@ -23,6 +23,11 @@ function isPlaylist(url: string, contentType: string): boolean {
     PLAYLIST_TYPES.some((t) => contentType.toLowerCase().includes(t));
 }
 
+function isDash(url: string, contentType: string): boolean {
+  return url.toLowerCase().includes('.mpd') ||
+    contentType.toLowerCase().includes('application/dash+xml');
+}
+
 /** True si la URL interna trae `expires=` en el pasado (token ya vencido). */
 function innerUrlExpired(target: string): boolean {
   try {
@@ -73,6 +78,25 @@ function rewritePlaylist(content: string, baseUrl: string, referer?: string, coo
     .join('\n');
 }
 
+/**
+ * Reescribe un manifiesto DASH (.mpd): envuelve en el proxy las URLs de
+ * segmentos y BaseURL para que el reproductor nunca acceda directo al CDN.
+ */
+function rewriteDash(content: string, baseUrl: string, referer?: string, cookies?: string): string {
+  const wrap = (u: string): string => buildProxyUrl(resolveUrl(baseUrl, u.trim()), referer, cookies);
+  let out = content.replace(/(<BaseURL[^>]*>)([^<]*?)(<\/BaseURL>)/g, (_m, open: string, url: string, close: string) => {
+    const t = url.trim();
+    if (!t) return _m;
+    return open + wrap(t) + close;
+  });
+  out = out.replace(/((?:sourceURL|media|initialization|xlink:href)\s*=\s*")([^"]+?)(")/g, (_m, pre: string, url: string, post: string) => {
+    const t = url.trim();
+    if (!t || t.startsWith('data:') || t.startsWith('urn:')) return _m;
+    return pre + wrap(t) + post;
+  });
+  return out;
+}
+
 interface UpstreamResult {
   res: import('axios').AxiosResponse;
   finalUrl: string;
@@ -91,13 +115,29 @@ async function fetchUpstream(target: string, referer?: string, cookies?: string)
     headers['Cookie'] = cookies;
   }
 
-  const res = await httpClient.get(target, {
-    headers,
-    responseType: 'stream',
-    timeout: 20000,
-    maxRedirects: 5,
-    validateStatus: () => true,
-  });
+  // Varios CDNs de streams (bozztv, aiv-cdn, otte.live) tienen DNS inestable:
+  // reintentar solo ante errores de red/DNS, sin retry sobre 4xx/5xx.
+  const dnsErrors = ['ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET', 'ETIMEDOUT', 'ECONNABORTED'];
+  let lastErr: any;
+  let res: import('axios').AxiosResponse;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      res = await httpClient.get(target, {
+        headers,
+        responseType: 'stream',
+        timeout: 20000,
+        maxRedirects: 5,
+        validateStatus: () => true,
+      });
+      break;
+    } catch (err: any) {
+      lastErr = err;
+      const code = err?.code || err?.cause?.code;
+      if (!dnsErrors.includes(code) || attempt >= 3) throw err;
+      logger.warn({ url: target.substring(0, 160), code, attempt }, 'Proxy: DNS/red inestable, reintentando');
+      await new Promise((r) => setTimeout(r, 1500 * attempt));
+    }
+  }
 
   const finalUrl = String(res.request?.res?.responseUrl || res.request?.responseURL || target);
   const contentType = String(res.headers['content-type'] || '');
@@ -128,7 +168,7 @@ export async function proxyRoutes(app: FastifyInstance) {
     const requestedIsPlaylist = isPlaylist(url, '');
     // Streams directos .ts con token (p.ej. tvporinternet2) también caducan,
     // y sus playlists vivos (playlist.php) pueden vencer (403) → refrescar
-    const requestedLooksStreaming = requestedIsPlaylist || url.toLowerCase().includes('.ts') || url.toLowerCase().includes('playlist.php');
+    const requestedLooksStreaming = requestedIsPlaylist || url.toLowerCase().includes('.ts') || url.toLowerCase().includes('playlist.php') || url.toLowerCase().includes('.mpd');
 
     try {
       let upstream = await fetchUpstream(target, effectiveReferer, effectiveCookies);
@@ -194,6 +234,19 @@ export async function proxyRoutes(app: FastifyInstance) {
         reply.header('Content-Type', 'application/vnd.apple.mpegurl');
         // Los playlists HLS en vivo deben recargarse siempre: no cachear nunca
         // (un cache intermedio serviría un playlist viejo y cortaría el stream).
+        reply.header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+        reply.header('Pragma', 'no-cache');
+        return reply.send(rewritten);
+      }
+
+      if (isDash(upstream.finalUrl, upstream.contentType)) {
+        const chunks: Buffer[] = [];
+        for await (const chunk of upstream.res.data) {
+          chunks.push(Buffer.from(chunk));
+        }
+        const content = Buffer.concat(chunks).toString('utf-8');
+        const rewritten = rewriteDash(content, upstream.finalUrl, effectiveReferer, effectiveCookies);
+        reply.header('Content-Type', 'application/dash+xml');
         reply.header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
         reply.header('Pragma', 'no-cache');
         return reply.send(rewritten);

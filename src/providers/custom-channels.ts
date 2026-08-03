@@ -482,16 +482,21 @@ async function verifyStreamUrl(testUrl: string): Promise<boolean> {
 
 async function verifyStreamGet(testUrl: string): Promise<boolean> {
   try {
-    const res = await httpClient.get(testUrl, {
-      timeout: 8000,
-      headers: {
-        // El CDN de tvporinternet2 (playlist.php) solo acepta Chrome/120
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      },
-    });
+    const res = await httpGetWithDnsRetry(testUrl, 8000);
     if (res.status !== 200) return false;
     const data = String(res.data || '');
     return data.startsWith('#EXTM3U') || data.includes('#EXT-X-');
+  } catch {
+    return false;
+  }
+}
+
+async function verifyDash(testUrl: string): Promise<boolean> {
+  try {
+    const res = await httpGetWithDnsRetry(testUrl, 10000);
+    if (res.status !== 200) return false;
+    const data = String(res.data || '');
+    return data.includes('<MPD') || /<mpd\b/i.test(data);
   } catch {
     return false;
   }
@@ -1614,21 +1619,48 @@ export async function getSenalColombia(slug: string, logType?: string): Promise<
 
 const VERTVCABLE_BASE = 'https://www.vertvcable.com';
 
-async function fetchVertvPageWithRetry(url: string, logType?: string): Promise<string> {
-  const dnsErrors = ['ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET', 'ETIMEDOUT', 'ECONNABORTED'];
+const VERTV_DNS_ERRORS = ['ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET', 'ETIMEDOUT', 'ECONNABORTED'];
+
+async function httpGetWithDnsRetry(testUrl: string, timeout: number, headers?: Record<string, string>): Promise<any> {
+  let lastErr: any;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      return await httpClient.get(testUrl, {
+        timeout,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          ...headers,
+        },
+      });
+    } catch (err: any) {
+      lastErr = err;
+      const code = err?.code || err?.cause?.code;
+      if (!VERTV_DNS_ERRORS.includes(code)) throw err;
+      await new Promise((r) => setTimeout(r, 1500 * attempt));
+    }
+  }
+  throw lastErr;
+}
+
+async function fetchHtmlWithRetry(url: string, referer?: string, logType?: string): Promise<string> {
   let lastErr: any;
   for (let attempt = 1; attempt <= 4; attempt++) {
     try {
+      if (referer) return await fetchHTMLWithReferer(url, referer);
       return await fetchHTML(url);
     } catch (err: any) {
       lastErr = err;
       const code = err?.code || err?.cause?.code;
-      if (!dnsErrors.includes(code)) throw err;
+      if (!VERTV_DNS_ERRORS.includes(code)) throw err;
       elog(logType, `  ⚠ DNS/red inestable (${code}), reintento ${attempt}/4...`);
-      await new Promise((r) => setTimeout(r, 2000 * attempt));
+      await new Promise((r) => setTimeout(r, 1500 * attempt));
     }
   }
   throw lastErr;
+}
+
+async function fetchVertvPageWithRetry(url: string, logType?: string): Promise<string> {
+  return fetchHtmlWithRetry(url, undefined, logType);
 }
 
 interface VertvPill {
@@ -1657,36 +1689,141 @@ function extractVertvPills(html: string): VertvPill[] {
   return pills.filter((p, i, arr) => arr.findIndex((x) => x.post === p.post && x.index === p.index) === i);
 }
 
-async function resolveVertvPillUrl(pill: VertvPill, pageUrl: string): Promise<string | null> {
-  const res = await httpClient.post(
-    'https://www.vertvcable.com/wp-admin/admin-ajax.php',
-    new URLSearchParams({
-      action: 'vtc_get_stream_url',
-      post_id: pill.post,
-      stream_index: pill.index,
-      nonce: pill.nonce,
-    }),
-    {
-      timeout: 20000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Referer': pageUrl,
-        'X-Requested-With': 'XMLHttpRequest',
+interface VertvResolvedStream {
+  streamUrl: string;
+  referer?: string;
+  drm?: LiveChannel['drm'];
+}
+
+/**
+ * Parsea el JSON `const config = {...}` que el player de vertvcable incrusta
+ * en la página /ver/?id=X. Escaneo por llaves balanceadas (no regex simple,
+ * por si el JSON es multilinea).
+ */
+function extractVertvConfig(html: string): Record<string, unknown> | null {
+  const marker = 'const config = ';
+  const idx = html.indexOf(marker);
+  if (idx === -1) return null;
+  const start = idx + marker.length;
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  for (let i = start; i < html.length; i++) {
+    const ch = html[i];
+    if (inStr) {
+      if (esc) { esc = false; continue; }
+      if (ch === '\\') { esc = true; continue; }
+      if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') { inStr = true; continue; }
+    if (ch === '{') { depth++; continue; }
+    if (ch === '}') {
+      depth--;
+      if (depth === 0) {
+        try {
+          return JSON.parse(html.slice(start, i + 1)) as Record<string, unknown>;
+        } catch {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Canales EMBED de vertvcable: el AJAX devuelve una página de player
+ * (play.vertvcable.com/play/?canal=X) que embebe un iframe /ver/?id=X, y esa
+ * página trae el config del stream (`url` + `clearkey` para DASH cifrado).
+ */
+async function resolveVertvEmbedUrl(embedUrl: string, channelPageUrl: string, logType?: string): Promise<VertvResolvedStream | null> {
+  const playHtml = await fetchHtmlWithRetry(embedUrl, channelPageUrl, logType);
+  const iframeSrc = playHtml.match(/<iframe[^>]+src=["']([^"']+)["']/i)?.[1];
+  if (!iframeSrc) {
+    const playM3u8 = playHtml.match(/["'](https?:\/\/[^"']+\.(?:m3u8|m3u)[^"']*?)["']/i);
+    if (playM3u8) return { streamUrl: playM3u8[1], referer: embedUrl };
+    return null;
+  }
+  const verUrl = new URL(iframeSrc, embedUrl).toString();
+  const verHtml = await fetchHtmlWithRetry(verUrl, embedUrl, logType);
+  const config = extractVertvConfig(verHtml);
+  const rawUrl = config?.url;
+  if (!rawUrl || typeof rawUrl !== 'string') {
+    // Algunos configs EMBED pueden ser HLS directamente
+    const verM3u8 = verHtml.match(/["'](https?:\/\/[^"']+\.(?:m3u8|m3u)[^"']*?)["']/i);
+    if (verM3u8) return { streamUrl: verM3u8[1], referer: verUrl };
+    return null;
+  }
+  const streamUrl = rawUrl.startsWith('//') ? 'https:' + rawUrl : rawUrl;
+  let drm: LiveChannel['drm'];
+  const clearKey = config.clearkey;
+  if (clearKey && typeof clearKey === 'object') {
+    const entries = Object.entries(clearKey as Record<string, unknown>);
+    if (entries.length > 0) {
+      const [keyId, key] = entries[0];
+      if (typeof keyId === 'string' && typeof key === 'string') {
+        drm = { type: 'clearkey', keyId, key };
+      }
+    }
+  }
+  return { streamUrl, referer: verUrl, drm };
+}
+
+async function resolveVertvPillUrl(pill: VertvPill, pageUrl: string, logType?: string): Promise<VertvResolvedStream | null> {
+  let res: any;
+  try {
+    res = await httpClient.post(
+      'https://www.vertvcable.com/wp-admin/admin-ajax.php',
+      new URLSearchParams({
+        action: 'vtc_get_stream_url',
+        post_id: pill.post,
+        stream_index: pill.index,
+        nonce: pill.nonce,
+      }),
+      {
+        timeout: 20000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Referer': pageUrl,
+          'X-Requested-With': 'XMLHttpRequest',
+        },
       },
-    },
-  );
+    );
+  } catch (err: any) {
+    const code = err?.code || err?.cause?.code;
+    if (VERTV_DNS_ERRORS.includes(code)) {
+      // DNS local inestable: reintento
+      res = await httpClient.post(
+        'https://www.vertvcable.com/wp-admin/admin-ajax.php',
+        new URLSearchParams({
+          action: 'vtc_get_stream_url',
+          post_id: pill.post,
+          stream_index: pill.index,
+          nonce: pill.nonce,
+        }),
+        {
+          timeout: 25000,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': pageUrl,
+            'X-Requested-With': 'XMLHttpRequest',
+          },
+        },
+      );
+    } else {
+      throw err;
+    }
+  }
   const data = res.data?.data || res.data;
   if (!res.data?.success && !data?.url) return null;
   let streamUrl: string | undefined = data?.url;
   if (!streamUrl || typeof streamUrl !== 'string') return null;
   streamUrl = streamUrl.trim();
   if (pill.type.toUpperCase() === 'EMBED' && !isM3u8Url(streamUrl)) {
-    const embedHtml = await fetchHTMLWithReferer(streamUrl, pageUrl);
-    const embedM3u8 = embedHtml.match(/["'](https?:\/\/[^"']+\.(?:m3u8|m3u)[^"']*?)["']/i);
-    if (!embedM3u8) return null;
-    streamUrl = embedM3u8[1];
+    return resolveVertvEmbedUrl(streamUrl, pageUrl, logType);
   }
-  return streamUrl;
+  return { streamUrl };
 }
 
 /**
@@ -1725,22 +1862,28 @@ export async function getVertvCable(slug: string, option?: string, logType?: str
   const ordered = pills.some((p) => Number(p.index) === wanted) ? pills : pills.slice(wanted) || pills;
 
   let streamUrl: string | null = null;
+  let streamReferer: string | undefined;
+  let streamDrm: LiveChannel['drm'];
   for (const pill of ordered) {
     elog(logType, `  ▶ Intento pill [${pill.index}] tipo ${pill.type} (post ${pill.post})`);
     try {
-      const resolved = await resolveVertvPillUrl(pill, url);
+      const resolved = await resolveVertvPillUrl(pill, url, logType);
       if (!resolved) {
         elog(logType, `  ❌ Pill [${pill.index}] sin URL en AJAX`);
         continue;
       }
-      const isHls = isM3u8Url(resolved) || /^HLS$/i.test(pill.type);
-      const ok = isHls ? await verifyStreamGet(resolved) : await verifyStreamUrl(resolved);
+      const sUrl = resolved.streamUrl;
+      const isDash = sUrl.toLowerCase().includes('.mpd') || /^DASH$/i.test(pill.type);
+      const isHls = isM3u8Url(sUrl) || /^HLS$/i.test(pill.type);
+      const ok = isDash ? await verifyDash(sUrl) : isHls ? await verifyStreamGet(sUrl) : await verifyStreamUrl(sUrl);
       if (!ok) {
         elog(logType, `  ❌ Pill [${pill.index}] URL no verificada (forbidden/error)`);
         continue;
       }
-      streamUrl = resolved;
-      elog(logType, `  ✅ Stream [${pill.index}]: ${resolved.substring(0, 150)}`);
+      streamUrl = sUrl;
+      streamReferer = resolved.referer;
+      streamDrm = resolved.drm;
+      elog(logType, `  ✅ Stream [${pill.index}]: ${sUrl.substring(0, 150)}${streamDrm ? ' (DASH + ClearKey)' : ''}`);
       break;
     } catch (pillErr: any) {
       elog(logType, `  ❌ Pill [${pill.index}] error: ${pillErr?.message}`);
@@ -1753,7 +1896,7 @@ export async function getVertvCable(slug: string, option?: string, logType?: str
     return null;
   }
 
-  const proxied = buildStreamProxyUrl(streamUrl, VERTVCABLE_BASE + '/');
+  const proxied = buildStreamProxyUrl(streamUrl, streamReferer || VERTVCABLE_BASE + '/');
   elog(logType, `✅ URL final: ${proxied}`);
 
   const result: LiveChannel = {
@@ -1767,6 +1910,7 @@ export async function getVertvCable(slug: string, option?: string, logType?: str
     refreshUrl: url,
     refreshOption: option || undefined,
     proveedor: 'vertvcable',
+    ...(streamDrm ? { drm: streamDrm } : {}),
   };
 
   memoryCache.set(cacheKey, result, 3600000);

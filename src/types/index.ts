@@ -111,6 +111,8 @@ export interface LiveChannel {
   expires?: number;
   /** Fecha de expiración del stream en formato legible, si la tiene */
   expiresDate?: string;
+  /** DRM del stream (p. ej. ClearKey para DASH de vertvcable) */
+  drm?: { type: 'clearkey'; keyId: string; key: string };
 }
 
 export interface UserProfile {
