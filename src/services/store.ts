@@ -100,6 +100,42 @@ export async function deleteRow(key: string): Promise<void> {
   }
 }
 
+// ---- Candados atómicos (para evitar dobles ejecuciones entre instancias) ----
+
+/**
+ * Intenta tomar un candado con expiración de forma atómica.
+ * Si la fila no existe la crea; si existe pero venció, la reemplaza.
+ * Devuelve true solo si esta llamada obtuvo el candado.
+ */
+export async function tryAcquireLock(key: string, holder: string, ttlMs: number): Promise<boolean> {
+  const p = getPool();
+  if (!p) return true; // sin BD: no hay lock, se permite
+  const now = Date.now();
+  try {
+    const { rowCount } = await p.query(
+      `INSERT INTO store (key, value, updated_at)
+       VALUES ($1, $2::jsonb, now())
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+       WHERE (store.value->>'expiresAt') IS NULL OR (store.value->>'expiresAt')::bigint < $3`,
+      [key, JSON.stringify({ holder, expiresAt: now + ttlMs }), now],
+    );
+    return (rowCount ?? 0) > 0;
+  } catch (error) {
+    logger.error({ error: (error as Error).message, key }, 'store: tryAcquireLock failed');
+    return true; // fail-open: si la BD falla, se deja pasar
+  }
+}
+
+export async function releaseLock(key: string, holder: string): Promise<void> {
+  const p = getPool();
+  if (!p) return;
+  try {
+    await p.query(`DELETE FROM store WHERE key = $1 AND value->>'holder' = $2`, [key, holder]);
+  } catch (error) {
+    logger.error({ error: (error as Error).message, key }, 'store: releaseLock failed');
+  }
+}
+
 // ---- Construcción de claves (compartidas con el script de migración) ----
 
 export const storeKeys = {

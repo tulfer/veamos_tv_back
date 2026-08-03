@@ -6,7 +6,7 @@ import { getCachedOrFetch, memoryCache } from '../../cache';
 import { loadSyncData, saveSyncData, loadChannels } from '../../services/data-store';
 import { LiveChannel } from '../../types';
 import { logger } from '../../utils/logger';
-import { startSync, completeSync, failSync, updateSyncProgress, pushLog, clearLogs } from '../../services/sync-status';
+import { startSync, completeSync, failSync, updateSyncProgress, pushLog, clearLogs, getSyncStatus } from '../../services/sync-status';
 import { fetchHTML, fetchHTMLWithReferer, httpClient } from '../../utils/http';
 import { buildProxyUrl } from '../../utils/proxy-url';
 import { verifyCookies } from '../../utils/cookie-token';
@@ -930,8 +930,8 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
   }
 }
 
-const REFRESH_PROVIDERS = ['wsdeportes', 'cablevisionhd', 'tvporinternet2', 'chatytv', 'senalcolombia', 'vertvcable'] as const;
-type RefreshProvider = (typeof REFRESH_PROVIDERS)[number];
+export const REFRESH_PROVIDERS = ['wsdeportes', 'cablevisionhd', 'tvporinternet2', 'chatytv', 'senalcolombia', 'vertvcable'] as const;
+export type RefreshProvider = (typeof REFRESH_PROVIDERS)[number];
 
 /**
  * Refresca TODOS los canales de un proveedor concreto (campo "proveedor" o
@@ -948,18 +948,34 @@ export async function refreshByProviderHandler(request: FastifyRequest, reply: F
     });
   }
 
+  if (getSyncStatus().refreshProvider.status === 'running') {
+    return reply.send({ ok: true, message: 'Refresh by provider already in progress' });
+  }
+
+  reply.send({ ok: true, message: `Refresh de canales ${providerName} iniciado`, provider: providerName });
+
+  void refreshProviderChannels(providerName as RefreshProvider).catch((error: Error) => {
+    pushLog('refreshProvider', `❌ Error inesperado: ${error?.message || error}`);
+    failSync('refreshProvider', error?.message || 'Error inesperado');
+  });
+}
+
+/** Lógica de refresh por proveedor (usada por el endpoint y por el auto-refresh). */
+export async function refreshProviderChannels(providerName: RefreshProvider): Promise<void> {
   const synced = await loadSyncData();
   if (!synced || !Array.isArray(synced.channels)) {
-    return reply.status(400).send({ error: 'No sync data found' });
+    pushLog('refreshProvider', '⛔ No sync data found');
+    failSync('refreshProvider', 'No sync data found');
+    return;
   }
 
   if (!startSync('refreshProvider')) {
-    return reply.send({ ok: true, message: 'Refresh by provider already in progress' });
+    pushLog('refreshProvider', '⏭ Refresh por proveedor ya en curso, omitiendo');
+    return;
   }
 
   clearLogs('refreshProvider');
   pushLog('refreshProvider', `=== Iniciando refresh de canales del proveedor: ${providerName} ===`);
-  reply.send({ ok: true, message: `Refresh de canales ${providerName} iniciado`, provider: providerName });
 
   const channels = synced.channels;
   const providerChannels = channels.filter((ch) =>

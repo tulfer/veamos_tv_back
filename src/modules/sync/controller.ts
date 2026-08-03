@@ -11,8 +11,10 @@ import { fetchHTML } from '../../utils/http';
 import { logger } from '../../utils/logger';
 import { memoryCache } from '../../cache/memory';
 import { SyncMovie, SyncSeries, SyncData, LiveChannel } from '../../types';
-import { startSync, completeSync, failSync, updateSyncProgress, getLogs, clearLogs, SyncType } from '../../services/sync-status';
+import { startSync, completeSync, failSync, updateSyncProgress, getLogs, clearLogs, SyncType, getSyncStatus } from '../../services/sync-status';
 import { firestoreMigrationStatus, getFirestoreMigrationStatus, runFirestoreToSupabase, FirestoreMigrationStatus } from '../../services/firestore-migrate';
+import { REFRESH_PROVIDERS } from '../live-tv/controller';
+import { AutoRefreshConfig } from '../../services/data-store';
 
 interface MigrationStatus {
   running: boolean;
@@ -859,7 +861,6 @@ export async function importM3UHandler(request: FastifyRequest, reply: FastifyRe
 export const DASHBOARD_CODE = '1992';
 
 export async function syncStatusHandler(request: FastifyRequest, reply: FastifyReply) {
-  const { getSyncStatus } = await import('../../services/sync-status');
   const accept = request.headers.accept || '';
 
   if (!accept.includes('text/html')) {
@@ -899,7 +900,9 @@ export async function syncStatusHandler(request: FastifyRequest, reply: FastifyR
     { key: 'updateChannel', label: 'Actualizar Canal (PATCH)', route: '/live/channels/{id}', method: 'PATCH', needsId: true, needsJson: true },
   ];
 
-  return reply.type('text/html').send(generateSyncDashboard(status, syncDefs, migrationStatus, firestoreMigrationStatus));
+  const autoCfg = await getAutoRefreshConfig();
+
+  return reply.type('text/html').send(generateSyncDashboard(status, syncDefs, migrationStatus, firestoreMigrationStatus, autoCfg));
 }
 
 export async function syncCountsHandler(_request: FastifyRequest, reply: FastifyReply) {
@@ -922,10 +925,22 @@ export async function getAutoRefreshHandler(_request: FastifyRequest, reply: Fas
 }
 
 export async function setAutoRefreshHandler(request: FastifyRequest, reply: FastifyReply) {
-  const body = (request.body || {}) as { enabled?: unknown; intervalMinutes?: unknown };
+  const body = (request.body || {}) as { enabled?: unknown; intervalMinutes?: unknown; providers?: unknown };
+
+  let providers: Record<string, number> | undefined;
+  if (body.providers && typeof body.providers === 'object') {
+    providers = {};
+    for (const [name, value] of Object.entries(body.providers as Record<string, unknown>)) {
+      if (!(REFRESH_PROVIDERS as readonly string[]).includes(name)) continue;
+      const n = Number(value);
+      if (Number.isFinite(n) && n >= 1) providers[name] = Math.floor(n);
+    }
+  }
+
   const config = await setAutoRefreshConfig({
     enabled: typeof body.enabled === 'boolean' ? body.enabled : undefined,
     intervalMinutes: typeof body.intervalMinutes === 'number' ? body.intervalMinutes : undefined,
+    providers,
   });
   return reply.send({ ok: true, ...config });
 }
@@ -1107,6 +1122,7 @@ function generateSyncDashboard(
   syncDefs: { key: string; label: string; route: string; method: string; needsPages?: boolean; needsUrl?: boolean; needsBody?: boolean; needsId?: boolean; needsJson?: boolean; needsProvider?: boolean }[],
   migStatus: MigrationStatus,
   fsMigStatus: FirestoreMigrationStatus,
+  autoCfg: AutoRefreshConfig,
 ): string {
   const statusBadge = (s: string) => {
     const map: Record<string, string> = { idle: '⚪', running: '🟡', completed: '🟢', failed: '🔴' };
@@ -1245,23 +1261,36 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
 </div>
 
 <div class="migration-section">
-  <h2 style="margin-bottom:1rem;font-size:1.2rem;color:#a0a0c0">⏱️ Refresh automático</h2>
+  <h2 style="margin-bottom:1rem;font-size:1.2rem;color:#a0a0c0">⏱️ Refresh automático por proveedor</h2>
   <div class="migration-card">
     <div class="card-header">
-      <span class="badge" id="arBadge">⚪</span>
-      <span class="card-title">Refrescar canales automáticamente (cada 5 min)</span>
-      <span class="status-text" id="arStatus">—</span>
+      <span class="badge" id="arBadge">${autoCfg.enabled ? '🟢' : '🔴'}</span>
+      <span class="card-title">Refrescar canales automáticamente (por proveedor)</span>
+      <span class="status-text ${autoCfg.enabled ? 'completed' : 'failed'}" id="arStatus">${autoCfg.enabled ? 'activo' : 'pausado'}</span>
     </div>
     <div class="card-body">
       <label style="display:flex;align-items:center;gap:.8rem;cursor:pointer">
-        <input type="checkbox" id="arToggle" onchange="saveAutoRefresh()" style="width:22px;height:22px;accent-color:#667eea">
-        <span id="arLabel" style="font-size:.95rem">Estado no consultado</span>
+        <input type="checkbox" id="arToggle" ${autoCfg.enabled ? 'checked' : ''} onchange="saveAutoRefresh()" style="width:22px;height:22px;accent-color:#667eea">
+        <span id="arLabel" style="font-size:.95rem">${autoCfg.enabled ? 'Activado' : 'Pausado'}</span>
       </label>
+      <div id="arRows" style="margin-top:.6rem">
+        ${REFRESH_PROVIDERS.map((name) => {
+          const minutes = autoCfg.providers[name];
+          const lastRun = autoCfg.providerLastRuns[name];
+          const lastText = lastRun
+            ? `último: ${new Date(lastRun).toLocaleString('es-CO', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`
+            : 'sin ejecutar';
+          return `<div style="display:flex;align-items:center;gap:.8rem;padding:.45rem 0;border-bottom:1px solid rgba(255,255,255,.06)">
+            <input type="checkbox" id="arP-${name}" ${minutes ? 'checked' : ''} onchange="saveAutoRefresh()" style="width:18px;height:18px;accent-color:#667eea">
+            <label for="arP-${name}" style="font-size:.95rem;flex:0 0 160px">${name}</label>
+            <input type="number" id="arM-${name}" min="1" step="1" value="${minutes || ''}" placeholder="min" onchange="saveAutoRefresh()" style="width:80px;padding:.4rem;border-radius:6px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.05);color:#fff;font-size:.9rem">
+            <span style="font-size:.75rem;color:#888">${lastText}</span>
+          </div>`;
+        }).join('\n')}
+      </div>
       <div style="display:flex;align-items:center;gap:.8rem;margin-top:.8rem">
         <button class="btn btn-secondary btn-sm" onclick="refreshAutoRefreshState()">🔄 Consultar estado</button>
-        <label for="arInterval" style="font-size:.95rem;flex:0 0 auto">Intervalo (minutos):</label>
-        <input type="number" id="arInterval" min="1" step="1" value="5" onchange="saveAutoRefresh()" style="width:90px;padding:.5rem;border-radius:6px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.05);color:#fff;font-size:.95rem">
-        <span id="arIntervalHint" style="font-size:.8rem;color:#888">—</span>
+        <span id="arHint" style="font-size:.8rem;color:#888">—</span>
       </div>
     </div>
   </div>
@@ -2107,36 +2136,67 @@ async function refreshStatus() {
 }
 setInterval(refreshStatus, 3000);
 
-// Refresh automático (función programada de Firebase): estado se consulta SOLO al pulsar "Consultar"
+// Refresh automático por proveedor (programador in-app): estado y filas por proveedor
+const AR_PROVIDERS = ['wsdeportes', 'cablevisionhd', 'tvporinternet2', 'chatytv', 'senalcolombia', 'vertvcable'];
+function arFmtLast(ts) {
+  if (!ts) return 'sin ejecutar';
+  const d = new Date(ts);
+  return 'último: ' + d.toLocaleString('es-CO', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+function arRow(name, minutes, lastRun) {
+  return '<div style="display:flex;align-items:center;gap:.8rem;padding:.45rem 0;border-bottom:1px solid rgba(255,255,255,.06)">'
+    + '<input type="checkbox" id="arP-' + name + '" ' + (minutes ? 'checked' : '') + ' onchange="saveAutoRefresh()" style="width:18px;height:18px;accent-color:#667eea">'
+    + '<label for="arP-' + name + '" style="font-size:.95rem;flex:0 0 160px">' + name + '</label>'
+    + '<input type="number" id="arM-' + name + '" min="1" step="1" value="' + (minutes || '') + '" placeholder="min" onchange="saveAutoRefresh()" style="width:80px;padding:.4rem;border-radius:6px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.05);color:#fff;font-size:.9rem">'
+    + '<span style="font-size:.75rem;color:#888">' + arFmtLast(lastRun) + '</span>'
+    + '</div>';
+}
 async function refreshAutoRefreshState() {
   try {
     const res = await fetch('/sync/auto-refresh');
     const data = await res.json();
     const on = data.enabled === true;
-    const interval = data.intervalMinutes || 5;
     const toggle = document.getElementById('arToggle');
     const label = document.getElementById('arLabel');
     const badge = document.getElementById('arBadge');
     const statusText = document.getElementById('arStatus');
-    const intervalInput = document.getElementById('arInterval');
-    const intervalHint = document.getElementById('arIntervalHint');
     toggle.checked = on;
-    intervalInput.value = interval;
-    intervalHint.textContent = on ? 'Próxima ejecución automática en ~' + interval + ' min' : 'Pausado por el dashboard';
     label.textContent = on ? 'Activado' : 'Pausado';
     badge.textContent = on ? '🟢' : '🔴';
     statusText.textContent = on ? 'activo' : 'pausado';
     statusText.className = 'status-text ' + (on ? 'completed' : 'failed');
+    const provs = data.providers || {};
+    const lastRuns = data.providerLastRuns || {};
+    const hint = document.getElementById('arHint');
+    if (hint) {
+      const active = Object.keys(provs).length;
+      hint.textContent = on
+        ? (active ? active + ' proveedor(es) con refresh automático' : 'Ningún proveedor configurado aún (marca uno y pon los minutos)')
+        : 'Pausado por el dashboard';
+    }
+    const rows = document.getElementById('arRows');
+    if (rows) {
+      rows.innerHTML = AR_PROVIDERS.map(function (name) {
+        return arRow(name, provs[name], lastRuns[name]);
+      }).join('');
+    }
   } catch {}
 }
 async function saveAutoRefresh() {
   const enabled = document.getElementById('arToggle').checked;
-  const intervalMinutes = parseInt(document.getElementById('arInterval').value, 10) || 5;
+  const providers = {};
+  AR_PROVIDERS.forEach(function (name) {
+    const cb = document.getElementById('arP-' + name);
+    if (cb && cb.checked) {
+      const v = parseInt(document.getElementById('arM-' + name).value, 10);
+      if (Number.isFinite(v) && v >= 1) providers[name] = v;
+    }
+  });
   try {
     const res = await fetch('/sync/auto-refresh', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled, intervalMinutes }),
+      body: JSON.stringify({ enabled, providers }),
     });
     await res.json();
   } catch {}

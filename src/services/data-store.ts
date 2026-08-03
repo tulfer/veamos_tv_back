@@ -160,6 +160,13 @@ const DEFAULT_AUTO_REFRESH = { enabled: true, intervalMinutes: 5 };
 export interface AutoRefreshConfig {
   enabled: boolean;
   intervalMinutes: number;
+  /** proveedor -> intervalo en minutos (solo proveedores activos) */
+  providers: Record<string, number>;
+  /** proveedor -> timestamp (ms) de la última ejecución automática */
+  providerLastRuns: Record<string, number>;
+  /** compat: última ejecución global (la escribía el cron externo) */
+  lastRunAt?: number;
+  updatedAt?: number;
 }
 
 function normalizeInterval(interval: unknown): number {
@@ -167,33 +174,69 @@ function normalizeInterval(interval: unknown): number {
   return Number.isFinite(n) && n >= 1 ? Math.floor(n) : DEFAULT_AUTO_REFRESH.intervalMinutes;
 }
 
+function normalizeMinutesMap(value: unknown): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (value && typeof value === 'object') {
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      const n = Number(v);
+      if (Number.isFinite(n) && n >= 1) out[k] = Math.floor(n);
+    }
+  }
+  return out;
+}
+
+function normalizeTimestampMap(value: unknown): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (value && typeof value === 'object') {
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      const n = Number(v);
+      if (Number.isFinite(n) && n > 0) out[k] = Math.floor(n);
+    }
+  }
+  return out;
+}
+
 export async function getAutoRefreshConfig(): Promise<AutoRefreshConfig> {
   try {
-    const data = await getRow<AutoRefreshConfig>(storeKeys.autoRefresh);
-    if (!data) return { ...DEFAULT_AUTO_REFRESH };
+    const data = await getRow<Partial<AutoRefreshConfig>>(storeKeys.autoRefresh);
+    if (!data) return { ...DEFAULT_AUTO_REFRESH, providers: {}, providerLastRuns: {} };
     return {
       enabled: data.enabled !== false,
       intervalMinutes: normalizeInterval(data.intervalMinutes),
+      providers: normalizeMinutesMap(data.providers),
+      providerLastRuns: normalizeTimestampMap(data.providerLastRuns),
+      lastRunAt: typeof data.lastRunAt === 'number' ? data.lastRunAt : undefined,
+      updatedAt: typeof data.updatedAt === 'number' ? data.updatedAt : undefined,
     };
   } catch (error) {
     logger.error({ error }, 'Failed to read autoRefresh config');
-    return { ...DEFAULT_AUTO_REFRESH };
+    return { ...DEFAULT_AUTO_REFRESH, providers: {}, providerLastRuns: {} };
   }
 }
 
-export async function setAutoRefreshConfig(config: { enabled?: boolean; intervalMinutes?: number }): Promise<AutoRefreshConfig> {
+export async function setAutoRefreshConfig(config: { enabled?: boolean; intervalMinutes?: number; providers?: Record<string, number> }): Promise<AutoRefreshConfig> {
   const current = await getAutoRefreshConfig();
   const next: AutoRefreshConfig = {
     enabled: config.enabled !== undefined ? Boolean(config.enabled) : current.enabled,
     intervalMinutes: config.intervalMinutes !== undefined ? normalizeInterval(config.intervalMinutes) : current.intervalMinutes,
+    providers: config.providers !== undefined ? normalizeMinutesMap(config.providers) : current.providers,
+    providerLastRuns: current.providerLastRuns,
+    lastRunAt: current.lastRunAt,
   };
   await setRow(storeKeys.autoRefresh, { ...next, updatedAt: Date.now() });
   return next;
 }
 
-export async function setAutoRefreshLastRunAt(timestamp: number): Promise<void> {
+export async function setAutoRefreshProviderLastRun(provider: string, timestamp: number): Promise<void> {
   const current = await getRow<Record<string, unknown>>(storeKeys.autoRefresh);
-  await setRow(storeKeys.autoRefresh, { ...(current || {}), lastRunAt: timestamp, updatedAt: Date.now() });
+  const lastRuns = { ...((current?.providerLastRuns as Record<string, unknown>) || {}) };
+  lastRuns[provider] = timestamp;
+  await setRow(storeKeys.autoRefresh, {
+    ...(current || {}),
+    providerLastRuns: lastRuns,
+    lastRunAt: timestamp,
+    updatedAt: Date.now(),
+  });
 }
 
 export async function getSyncStats(): Promise<{

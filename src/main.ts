@@ -18,6 +18,7 @@ import { gnulahdRoutes } from './modules/gnulahd/routes';
 import { syncRoutes } from './modules/sync/routes';
 import { dbExplorerRoutes } from './modules/db-explorer/routes';
 import { proxyRoutes } from './modules/proxy/routes';
+import { startAutoRefreshScheduler } from './services/auto-refresh';
 
 process.stderr.write('=== Veamos TV API starting ===\n');
 process.stderr.write(`Node version: ${process.version}\n`);
@@ -239,6 +240,14 @@ async function start() {
     await app.listen({ port, host });
     process.stderr.write(`start: server listening on ${host}:${port}\n`);
     logger.info({ port, host, env: env.NODE_ENV }, 'Veamos TV API started');
+
+    try {
+      startAutoRefreshScheduler();
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      process.stderr.write(`WARN: No se pudo iniciar el programador de auto-refresh - ${msg}\n`);
+      logger.error({ error }, 'Failed to start auto-refresh scheduler');
+    }
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     process.stderr.write(`FATAL: Failed to start server - ${msg}\n`);
