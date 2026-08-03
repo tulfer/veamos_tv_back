@@ -9,6 +9,7 @@ import { logger } from '../../utils/logger';
 import { startSync, completeSync, failSync, updateSyncProgress, pushLog, clearLogs } from '../../services/sync-status';
 import { fetchHTML, fetchHTMLWithReferer, httpClient } from '../../utils/http';
 import { buildProxyUrl } from '../../utils/proxy-url';
+import { verifyCookies } from '../../utils/cookie-token';
 
 const CACHE_KEY = 'live:channels';
 const PAGE_SIZE = 10;
@@ -72,6 +73,25 @@ function applyExpiration(ch: LiveChannel): void {
 const VERIFY_FORBIDDEN_STATUS = new Set([401, 403, 404, 410]);
 const VERIFY_NETWORK_ERRORS = new Set(['ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH', 'ECONNREFUSED', 'EPROTO', 'ETIMEDOUT', 'ESOCKETTIMEDOUT']);
 
+/** Si la URL viene envuelta en /proxy/stream, extrae el destino interno + referer + cookies. */
+function unwrapProxyUrl(url: string): { target: string; referer?: string; cookies?: string } {
+  try {
+    const parsed = new URL(url, 'http://localhost');
+    if (parsed.pathname.includes('/proxy/stream')) {
+      const target = parsed.searchParams.get('url');
+      if (!target) return { target: url };
+      return {
+        target,
+        referer: parsed.searchParams.get('referer') || undefined,
+        cookies: verifyCookies(parsed.searchParams.get('cookies')) || undefined,
+      };
+    }
+  } catch {
+    // ignore
+  }
+  return { target: url };
+}
+
 /**
  * Si la URL guardada es directa (no pasa por el proxy), la envuelve en
  * `/proxy/stream?url=...` para que se sirva desde el backend. Al leer,
@@ -86,10 +106,17 @@ function proxyWrapIfNeeded(url?: string): string | undefined {
 }
 
 async function verifyRefreshedUrl(url: string, logKey: string): Promise<boolean> {
+  // Si es una URL del proxy, verificar el destino interno con su referer/cookies
+  // (es lo que el reproductor hará realmente; el proxy con token sin contexto da 403/410)
+  const { target, referer, cookies } = unwrapProxyUrl(url);
+  const headers: Record<string, string> = {};
+  if (referer) headers['Referer'] = referer;
+  if (cookies) headers['Cookie'] = cookies;
+
   const attempt = async (): Promise<boolean> => {
     let headInfo = '';
     try {
-      const res = await httpClient.head(url, { timeout: 10000 });
+      const res = await httpClient.head(target, { timeout: 10000, headers });
       headInfo = `HEAD ${res.status}`;
       pushLog(logKey, `  Verificación HEAD: ${res.status}`);
       if (res.status === 200) return true;
@@ -98,9 +125,9 @@ async function verifyRefreshedUrl(url: string, logKey: string): Promise<boolean>
       pushLog(logKey, `  HEAD falló: ${(e.response?.status || e.code || e.message || '').toString().substring(0, 80)}`);
     }
     try {
-      const res = await httpClient.get(url, {
+      const res = await httpClient.get(target, {
         timeout: 10000,
-        headers: { Range: 'bytes=0-2047' },
+        headers: { Range: 'bytes=0-2047', ...headers },
         responseType: 'arraybuffer',
         maxContentLength: 3 * 1024 * 1024,
       });

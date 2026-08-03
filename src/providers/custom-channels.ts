@@ -827,8 +827,8 @@ export async function getTvPorInternet2(slug: string, option?: string, logType?:
       }
       let streamUrl = httpResult.streamUrl;
       const refererUrl = (httpResult.hostPageUrl && httpResult.hostPageUrl.startsWith('http')) ? httpResult.hostPageUrl : url;
-      if (isM3u8Url(streamUrl)) {
-        elog(logType, `🔒 Stream m3u8 directo puede dar 403 → proxy con Referer`);
+      if (isM3u8Url(streamUrl) || streamUrl.includes('.ts')) {
+        elog(logType, `🔒 Stream protegido → proxy con Referer`);
         streamUrl = buildStreamProxyUrl(streamUrl, refererUrl);
       }
       elog(logType, `✅ URL final: ${streamUrl}`);
@@ -854,18 +854,19 @@ export async function getTvPorInternet2(slug: string, option?: string, logType?:
 
     // Interceptar peticiones de red para capturar URLs de streaming
     const capturedUrls: string[] = [];
-    let m3u8HostFrameUrl: string | undefined;
+    let streamHostFrameUrl: string | undefined;
     page.on('request', (request: any) => {
       const reqUrl = request.url();
       if (reqUrl.includes('.m3u8') || reqUrl.includes('.m3u') || reqUrl.includes('.ts') ||
           reqUrl.includes('mywebtv') || reqUrl.includes('tdtcloud') || reqUrl.includes('hls')) {
         capturedUrls.push(reqUrl);
       }
-      // Guardar la URL del frame que aloja el .m3u8 para usarla como Referer del proxy
-      if (reqUrl.includes('.m3u8') || reqUrl.includes('.m3u')) {
+      // Guardar la URL del frame que aloja el stream (m3u8 o .ts con token)
+      // para usarla como Referer del proxy de streaming
+      if (reqUrl.includes('.m3u8') || reqUrl.includes('.m3u') || reqUrl.includes('.ts')) {
         const frameUrl = request.frame()?.url?.();
-        if (frameUrl && frameUrl !== 'about:blank' && frameUrl.startsWith('http') && !m3u8HostFrameUrl) {
-          m3u8HostFrameUrl = frameUrl;
+        if (frameUrl && frameUrl !== 'about:blank' && frameUrl.startsWith('http') && !streamHostFrameUrl) {
+          streamHostFrameUrl = frameUrl;
         }
       }
     });
@@ -1059,11 +1060,13 @@ export async function getTvPorInternet2(slug: string, option?: string, logType?:
       }
     }
 
-    // tvporinternet2 protege sus .m3u8 con Referer: si el stream es un m3u8, servirlo por el proxy
-    if (streamUrl && isM3u8Url(streamUrl)) {
-      const refererUrl = (m3u8HostFrameUrl && m3u8HostFrameUrl.startsWith('http')) ? m3u8HostFrameUrl : url;
+    // tvporinternet2 protege sus streams (m3u8 y .ts con token) con Referer:
+    // si el stream es directo, servirlo por el proxy con el Referer del frame
+    // que lo aloja y las cookies del contexto (el token .ts muere sin contexto)
+    if (streamUrl && (isM3u8Url(streamUrl) || streamUrl.includes('.ts'))) {
+      const refererUrl = (streamHostFrameUrl && streamHostFrameUrl.startsWith('http')) ? streamHostFrameUrl : url;
       const streamCookies = await captureCookiesFromContext(context, streamUrl);
-      elog(logType, `🔒 Stream m3u8 directo puede dar 403 → proxy con Referer: ${refererUrl}`);
+      elog(logType, `🔒 Stream protegido → proxy con Referer: ${refererUrl}`);
       streamUrl = buildStreamProxyUrl(streamUrl, refererUrl, streamCookies);
     }
     elog(logType, `✅ URL final: ${streamUrl}`);
