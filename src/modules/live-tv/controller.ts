@@ -8,6 +8,7 @@ import { LiveChannel } from '../../types';
 import { logger } from '../../utils/logger';
 import { startSync, completeSync, failSync, updateSyncProgress, pushLog, clearLogs } from '../../services/sync-status';
 import { fetchHTML, fetchHTMLWithReferer, httpClient } from '../../utils/http';
+import { buildProxyUrl } from '../../utils/proxy-url';
 
 const CACHE_KEY = 'live:channels';
 const PAGE_SIZE = 10;
@@ -60,6 +61,77 @@ function applyExpiration(ch: LiveChannel): void {
   const exp = extractExpiration(ch.url);
   ch.expires = exp.expires;
   ch.expiresDate = exp.expiresDate;
+}
+
+/**
+ * Verifica que una URL de stream responda correctamente ANTES de guardarla
+ * (los tokens de algunos proveedores expiran al instante → 403 Forbidden).
+ * HEAD primero; si el CDN lo rechaza, GET con Range (sin descargar el archivo).
+ * Los errores de red/DNS (ENOTFOUND, EHOSTUNREACH...) se consideran fallo.
+ */
+const VERIFY_FORBIDDEN_STATUS = new Set([401, 403, 404, 410]);
+const VERIFY_NETWORK_ERRORS = new Set(['ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH', 'ECONNREFUSED', 'EPROTO', 'ETIMEDOUT', 'ESOCKETTIMEDOUT']);
+
+/**
+ * Si la URL guardada es directa (no pasa por el proxy), la envuelve en
+ * `/proxy/stream?url=...` para que se sirva desde el backend. Al leer,
+ * `toPublicProxyUrl` la convierte en absoluta. Se usa cuando el refresh
+ * no pudo conseguir una URL nueva válida: se conserva la anterior
+ * proxyficada en lugar de devolver una directa que da forbidden.
+ */
+function proxyWrapIfNeeded(url?: string): string | undefined {
+  if (!url) return url;
+  if (url.includes('/proxy/stream')) return url;
+  return buildProxyUrl(url);
+}
+
+async function verifyRefreshedUrl(url: string, logKey: string): Promise<boolean> {
+  const attempt = async (): Promise<boolean> => {
+    let headInfo = '';
+    try {
+      const res = await httpClient.head(url, { timeout: 10000 });
+      headInfo = `HEAD ${res.status}`;
+      pushLog(logKey, `  Verificación HEAD: ${res.status}`);
+      if (res.status === 200) return true;
+    } catch (e: any) {
+      headInfo = `HEAD ${(e.response?.status || e.code || 'error').toString()}`;
+      pushLog(logKey, `  HEAD falló: ${(e.response?.status || e.code || e.message || '').toString().substring(0, 80)}`);
+    }
+    try {
+      const res = await httpClient.get(url, {
+        timeout: 10000,
+        headers: { Range: 'bytes=0-2047' },
+        responseType: 'arraybuffer',
+        maxContentLength: 3 * 1024 * 1024,
+      });
+      pushLog(logKey, `  Verificación GET (range): ${res.status} (${headInfo})`);
+      return res.status === 200 || res.status === 206;
+    } catch (e: any) {
+      const status = (e.response?.status as number | undefined);
+      const msg = String(e.message || '').substring(0, 120);
+      const code = e.code as string | undefined;
+      if (status !== undefined && VERIFY_FORBIDDEN_STATUS.has(status)) {
+        pushLog(logKey, `  ❌ GET devuelve ${status} (forbidden/no encontrado)`);
+        return false;
+      }
+      if (msg.includes('maxContentLength') || code === 'ECONNABORTED') {
+        pushLog(logKey, `  ⚠ El servidor responde sin soportar Range → se asume válida`);
+        return true;
+      }
+      if (code && VERIFY_NETWORK_ERRORS.has(code)) {
+        pushLog(logKey, `  ❌ Error de red/DNS (${code}) → URL inaccesible`);
+        return false;
+      }
+      pushLog(logKey, `  ❌ GET falló: ${msg.substring(0, 80)}`);
+      return false;
+    }
+  };
+
+  if (await attempt()) return true;
+  // Reintento único ante fallos transitorios de DNS/red
+  await new Promise((r) => setTimeout(r, 1500));
+  pushLog(logKey, '  Reintentando verificación...');
+  return attempt();
 }
 
 const inflightRefresh = new Map<string, Promise<string | null>>();
@@ -126,6 +198,12 @@ async function doRefreshExpiredChannel(targetUrl: string): Promise<string | null
     const result = await getChannelStream(source, slug, ch.refreshOption || undefined);
     if (!result?.url) {
       pushLog('addChannel', `❌ No se pudo refrescar ${ch.id} (el proveedor no devolvió URL)`);
+      return null;
+    }
+
+    // No guardar una URL que dé forbidden: se conserva la anterior.
+    if (!(await verifyRefreshedUrl(result.url, 'addChannel'))) {
+      pushLog('addChannel', `❌ Nueva URL no verificada (forbidden/404) para ${ch.id}: se conserva la anterior`);
       return null;
     }
 
@@ -566,15 +644,24 @@ export async function refreshExpiredChannelsHandler(_request: FastifyRequest, re
       const result = await getChannelStream(source, slug, ch.refreshOption || undefined, 'refreshExpired');
       if (result && result.url) {
         pushLog('refreshExpired', `  ✅ URL obtenida: ${result.url.substring(0, 120)}...`);
-        ch.url = result.url;
-        applyExpiration(ch);
-        updatedChannels.push(ch);
+        if (await verifyRefreshedUrl(result.url, 'refreshExpired')) {
+          ch.url = result.url;
+          applyExpiration(ch);
+          updatedChannels.push(ch);
+        } else {
+          pushLog('refreshExpired', `  ❌ Nueva URL no verificada (forbidden/404): se conserva la anterior proxyficada`);
+          ch.url = proxyWrapIfNeeded(ch.url) || ch.url;
+          failedChannels.push({ id: ch.id, title: ch.title || ch.id, error: 'Nueva URL no verificada (forbidden/404)' });
+          processed++;
+          updateSyncProgress('refreshExpired', processed, `[${processed}/${totalToProcess}] ❌ ${ch.title || ch.id} — URL no verificada`, totalToProcess);
+          continue;
+        }
       } else {
         pushLog('refreshExpired', `  ❌ El proveedor no devolvió URL`);
         pushLog('refreshExpired', `  🔍 Extrayendo manualmente desde ${fetchUrl}...`);
         try {
           const foundStream = await manualExtractStream(fetchUrl, 'refreshExpired');
-          if (foundStream && !isJunkStreamUrl(foundStream)) {
+          if (foundStream && !isJunkStreamUrl(foundStream) && (await verifyRefreshedUrl(foundStream, 'refreshExpired'))) {
             pushLog('refreshExpired', `  ✅ Stream: ${foundStream.substring(0, 120)}`);
             ch.url = foundStream;
             applyExpiration(ch);
@@ -588,7 +675,7 @@ export async function refreshExpiredChannelsHandler(_request: FastifyRequest, re
           pushLog('refreshExpired', `  Error extracción manual: ${diagErr.message}`);
         }
         const fallbackUrl = await extractViaFallback(source, slug, ch.refreshOption || undefined, 'refreshExpired');
-        if (fallbackUrl && !isJunkStreamUrl(fallbackUrl)) {
+        if (fallbackUrl && !isJunkStreamUrl(fallbackUrl) && (await verifyRefreshedUrl(fallbackUrl, 'refreshExpired'))) {
           ch.url = fallbackUrl;
           applyExpiration(ch);
           updatedChannels.push(ch);
@@ -716,16 +803,25 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
       const result = await getChannelStream(source, slug, ch.refreshOption || undefined, 'refreshAll');
       if (result && result.url) {
         pushLog('refreshAll', `  ✅ URL obtenida: ${result.url.substring(0, 120)}...`);
-        ch.url = result.url;
-        applyExpiration(ch);
-        if (!ch.proveedor) ch.proveedor = source;
-        updatedChannels.push(ch);
+        if (await verifyRefreshedUrl(result.url, 'refreshAll')) {
+          ch.url = result.url;
+          applyExpiration(ch);
+          if (!ch.proveedor) ch.proveedor = source;
+          updatedChannels.push(ch);
+        } else {
+          pushLog('refreshAll', `  ❌ Nueva URL no verificada (forbidden/404): se conserva la anterior proxyficada`);
+          ch.url = proxyWrapIfNeeded(ch.url) || ch.url;
+          failedChannels.push({ id: ch.id, title: ch.title || ch.id, error: 'Nueva URL no verificada (forbidden/404)' });
+          processed++;
+          updateSyncProgress('refreshAll', processed, `[${processed}/${totalToProcess}] ❌ ${ch.title || ch.id} — URL no verificada`, totalToProcess);
+          continue;
+        }
       } else {
         pushLog('refreshAll', `  ❌ El proveedor no devolvió URL`);
         pushLog('refreshAll', `  🔍 Extrayendo manualmente desde ${fetchUrl}...`);
         try {
           const foundStream = await manualExtractStream(fetchUrl, 'refreshAll');
-          if (foundStream && !isJunkStreamUrl(foundStream)) {
+          if (foundStream && !isJunkStreamUrl(foundStream) && (await verifyRefreshedUrl(foundStream, 'refreshAll'))) {
             pushLog('refreshAll', `  ✅ Stream: ${foundStream.substring(0, 120)}`);
             ch.url = foundStream;
             applyExpiration(ch);
@@ -740,7 +836,7 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
           pushLog('refreshAll', `  Error extracción manual: ${diagErr.message}`);
         }
         const fallbackUrl = await extractViaFallback(source, slug, ch.refreshOption || undefined, 'refreshAll');
-        if (fallbackUrl && !isJunkStreamUrl(fallbackUrl)) {
+        if (fallbackUrl && !isJunkStreamUrl(fallbackUrl) && (await verifyRefreshedUrl(fallbackUrl, 'refreshAll'))) {
           ch.url = fallbackUrl;
           applyExpiration(ch);
           if (!ch.proveedor) ch.proveedor = source;
@@ -1215,6 +1311,28 @@ export async function refreshChannelHandler(request: FastifyRequest, reply: Fast
     if (!newUrl) {
       pushLog(REFRESH_ONE_TYPE, 'No se pudo obtener URL para ' + id);
       failSync(REFRESH_ONE_TYPE, 'No se pudo obtener URL para ' + id);
+      return;
+    }
+
+    // Verificar que la nueva URL no dé forbidden antes de guardarla; si falla,
+    // se conserva la URL anterior proxyficada (sirve el backend con timeout).
+    if (!(await verifyRefreshedUrl(newUrl, REFRESH_ONE_TYPE))) {
+      pushLog(REFRESH_ONE_TYPE, '❌ La nueva URL da forbidden/error: se conserva la URL anterior proxyficada');
+      pushLog(REFRESH_ONE_TYPE, '   Anterior: ' + (ch.url || '').substring(0, 150) + '...');
+      channels[index] = { ...ch, url: proxyWrapIfNeeded(ch.url) || ch.url, online: ch.online };
+      await saveSyncData({
+        movies: synced.movies || [],
+        series: synced.series || [],
+        channels,
+        popularMovies: synced.popularMovies || [],
+        popularSeries: synced.popularSeries || [],
+        estrenoMovies: synced.estrenoMovies || [],
+        estrenoSeries: synced.estrenoSeries || [],
+        updatedAt: Date.now(),
+      });
+      memoryCache.del('live:channels');
+      completeSync(REFRESH_ONE_TYPE, 1);
+      pushLog(REFRESH_ONE_TYPE, 'URL anterior conservada (proxyficada)');
       return;
     }
 
