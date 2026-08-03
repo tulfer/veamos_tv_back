@@ -17,6 +17,32 @@ function isM3u8Url(u: string): boolean {
 }
 
 /**
+ * Detecta URLs de "stream" que en realidad son scripts/librerías del player
+ * (hls.js cargado desde un CDN), que se capturan por error y NO deben usarse
+ * ni guardarse como URL de canal. También detecta URLs ya envueltas en el
+ * proxy de streaming cuyo destino interno es una de esas librerías.
+ */
+export function isJunkStreamUrl(u?: string): boolean {
+  if (!u) return false;
+  const lower = u.toLowerCase();
+  let target = lower;
+  if (lower.includes('/proxy/stream?')) {
+    try {
+      const m = lower.match(/[?&]url=([^&]+)/);
+      if (m) target = decodeURIComponent(m[1]).toLowerCase();
+    } catch {
+      // ignore
+    }
+  }
+  return (
+    /jsdelivr\.net|unpkg\.com|cdnjs\.cloudflare|c\.jsdelivr/i.test(target) ||
+    /\/npm\//.test(target) ||
+    /\.js(?:[@?&#]|$)/.test(target) ||
+    /hls\.test|hls\.js/.test(target) && /\.js/.test(target)
+  );
+}
+
+/**
  * Captura las cookies del contexto de Playwright que el host de la URL
  * recibiría, para que el proxy de streaming pueda reenviarlas al reproducir
  * el m3u8 (algunos players las exigen). Devuelve el header Cookie o undefined.
@@ -205,10 +231,11 @@ browser = await launchChromium();
 
     if (capturedUrls.length > 0) {
       // Tomar la primera URL .m3u8 o la que tenga mywebtv/tdtcloud
-      const m3u8Url = capturedUrls.find((u) => u.includes('.m3u8') || u.includes('.m3u'));
-      const streamingUrl = capturedUrls.find((u) => u.includes('mywebtv') || u.includes('tdtcloud') || u.includes('hls'));
-      streamUrl = m3u8Url || streamingUrl || capturedUrls[0];
-      logger.info({ url: streamUrl.substring(0, 250), total: capturedUrls.length }, 'Using captured network URL');
+      const capturedMedia = capturedUrls.filter((u) => !isJunkStreamUrl(u));
+      const m3u8Url = capturedMedia.find((u) => u.includes('.m3u8') || u.includes('.m3u'));
+      const streamingUrl = capturedMedia.find((u) => u.includes('mywebtv') || u.includes('tdtcloud') || u.includes('hls'));
+      streamUrl = m3u8Url || streamingUrl || capturedMedia[0];
+      logger.info({ url: streamUrl.substring(0, 250), total: capturedMedia.length }, 'Using captured network URL');
     }
 
     // --- Estrategia 2: Buscar iframe de video real ---
@@ -944,11 +971,12 @@ export async function getTvPorInternet2(slug: string, option?: string, logType?:
 
     // Estrategia 1: URLs capturadas por red
     if (capturedUrls.length > 0) {
-      const m3u8Url = capturedUrls.find((u) => u.includes('.m3u8') || u.includes('.m3u'));
-      const streamingUrl = capturedUrls.find((u) => u.includes('mywebtv') || u.includes('tdtcloud') || u.includes('hls'));
-      streamUrl = m3u8Url || streamingUrl || capturedUrls[0];
+      const capturedMedia = capturedUrls.filter((u) => !isJunkStreamUrl(u));
+      const m3u8Url = capturedMedia.find((u) => u.includes('.m3u8') || u.includes('.m3u'));
+      const streamingUrl = capturedMedia.find((u) => u.includes('mywebtv') || u.includes('tdtcloud') || u.includes('hls'));
+      streamUrl = m3u8Url || streamingUrl || capturedMedia[0];
       elog(logType, `✅ URL capturada por red: ${streamUrl}`);
-      logger.info({ url: streamUrl.substring(0, 250), total: capturedUrls.length }, 'Using captured network URL');
+      logger.info({ url: streamUrl.substring(0, 250), total: capturedMedia.length }, 'Using captured network URL');
     }
 
     // Estrategia 2: Buscar iframe de video real
@@ -1314,10 +1342,11 @@ export async function getCablevisionHd(slug: string, option?: string, logType?: 
     // Estrategia 1: URLs capturadas por red
     if (capturedUrls.length > 0) {
       logger.info({ capturedUrls }, 'URLs capturadas por red');
-      const m3u8Url = capturedUrls.find((u) => u.includes('.m3u8') || u.includes('.m3u'));
-      const streamingUrl = capturedUrls.find((u) => u.includes('mywebtv') || u.includes('tdtcloud') || u.includes('hls'));
-      streamUrl = m3u8Url || streamingUrl || capturedUrls[0];
-      if (streamUrl) logger.info({ url: streamUrl.substring(0, 250), total: capturedUrls.length }, 'Usando URL capturada por red');
+      const capturedMedia = capturedUrls.filter((u) => !isJunkStreamUrl(u));
+      const m3u8Url = capturedMedia.find((u) => u.includes('.m3u8') || u.includes('.m3u'));
+      const streamingUrl = capturedMedia.find((u) => u.includes('mywebtv') || u.includes('tdtcloud') || u.includes('hls'));
+      streamUrl = m3u8Url || streamingUrl || capturedMedia[0];
+      if (streamUrl) logger.info({ url: streamUrl.substring(0, 250), total: capturedMedia.length }, 'Usando URL capturada por red');
     } else {
       logger.info({}, 'No se capturaron URLs de red');
     }
@@ -1520,16 +1549,24 @@ export async function getSenalColombia(slug: string, logType?: string): Promise<
 }
 
 export async function getChannelStream(source: 'chatytv' | 'wsdeportes' | 'tvporinternet2' | 'cablevisionhd' | 'senalcolombia', parameter: string, option?: string, logType?: string): Promise<LiveChannel | null> {
+  let result: LiveChannel | null = null;
   if (source === 'chatytv') {
-    return getChatytv(parameter, logType);
+    result = await getChatytv(parameter, logType);
   } else if (source === 'wsdeportes') {
-    return getWsDeportes(parameter, logType);
+    result = await getWsDeportes(parameter, logType);
   } else if (source === 'tvporinternet2') {
-    return getTvPorInternet2(parameter, option, logType);
+    result = await getTvPorInternet2(parameter, option, logType);
   } else if (source === 'cablevisionhd') {
-    return getCablevisionHd(parameter, option, logType);
+    result = await getCablevisionHd(parameter, option, logType);
   } else if (source === 'senalcolombia') {
-    return getSenalColombia(parameter, logType);
+    result = await getSenalColombia(parameter, logType);
   }
-  return null;
+
+  if (!result) return null;
+  if (result.url && isJunkStreamUrl(result.url)) {
+    elog(logType, `❌ URL de stream inválida (script/CDN): ${result.url.substring(0, 120)}`);
+    logger.warn({ url: result.url.substring(0, 250), source, parameter }, 'Descartando URL de stream inválida');
+    return null;
+  }
+  return result;
 }

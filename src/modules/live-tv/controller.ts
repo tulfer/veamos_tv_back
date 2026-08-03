@@ -1,7 +1,7 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
 import { env } from '../../config/env';
 import { fetchLiveChannels, getChannelsByGroup, getChannelsByCountry, getChannelGroups } from '../../providers/live-tv';
-import { getChannelStream } from '../../providers/custom-channels';
+import { getChannelStream, isJunkStreamUrl } from '../../providers/custom-channels';
 import { getCachedOrFetch, memoryCache } from '../../cache';
 import { loadSyncData, saveSyncData, loadChannels } from '../../services/data-store';
 import { LiveChannel } from '../../types';
@@ -11,6 +11,20 @@ import { fetchHTML, fetchHTMLWithReferer, httpClient } from '../../utils/http';
 
 const CACHE_KEY = 'live:channels';
 const PAGE_SIZE = 10;
+
+/** Elimina de la lista los canales cuya URL siga siendo rota (script/CDN) tras el refresh. */
+function dropJunkChannels(channels: LiveChannel[], logKey: string): number {
+  let removed = 0;
+  for (let i = channels.length - 1; i >= 0; i--) {
+    if (isJunkStreamUrl(channels[i].url)) {
+      pushLog(logKey, `  🗑️ Eliminando canal con URL inválida: ${channels[i].title || channels[i].id}`);
+      channels.splice(i, 1);
+      removed++;
+    }
+  }
+  if (removed > 0) pushLog(logKey, `  🧹 Se eliminaron ${removed} canales con URL inválida`);
+  return removed;
+}
 
 /**
  * Extrae el parámetro `expires` de la URL del stream (tokens de m3u8).
@@ -560,7 +574,7 @@ export async function refreshExpiredChannelsHandler(_request: FastifyRequest, re
         pushLog('refreshExpired', `  🔍 Extrayendo manualmente desde ${fetchUrl}...`);
         try {
           const foundStream = await manualExtractStream(fetchUrl, 'refreshExpired');
-          if (foundStream) {
+          if (foundStream && !isJunkStreamUrl(foundStream)) {
             pushLog('refreshExpired', `  ✅ Stream: ${foundStream.substring(0, 120)}`);
             ch.url = foundStream;
             applyExpiration(ch);
@@ -574,7 +588,7 @@ export async function refreshExpiredChannelsHandler(_request: FastifyRequest, re
           pushLog('refreshExpired', `  Error extracción manual: ${diagErr.message}`);
         }
         const fallbackUrl = await extractViaFallback(source, slug, ch.refreshOption || undefined, 'refreshExpired');
-        if (fallbackUrl) {
+        if (fallbackUrl && !isJunkStreamUrl(fallbackUrl)) {
           ch.url = fallbackUrl;
           applyExpiration(ch);
           updatedChannels.push(ch);
@@ -598,8 +612,10 @@ export async function refreshExpiredChannelsHandler(_request: FastifyRequest, re
     updateSyncProgress('refreshExpired', processed, `[${processed}/${totalToProcess}] ✅ ${ch.title || ch.id}`, totalToProcess);
   }
 
-  if (updatedChannels.length > 0) {
-    pushLog('refreshExpired', `Guardando ${updatedChannels.length} canales actualizados en Firestore...`);
+  const removedJunk = dropJunkChannels(channels, 'refreshExpired');
+
+  if (updatedChannels.length > 0 || removedJunk > 0) {
+    pushLog('refreshExpired', `Guardando ${updatedChannels.length} canales actualizados en Supabase...`);
     await saveSyncData({ ...synced, channels, updatedAt: Date.now() });
     memoryCache.del('live:channels');
     pushLog('refreshExpired', '✅ Guardado exitoso');
@@ -709,7 +725,7 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
         pushLog('refreshAll', `  🔍 Extrayendo manualmente desde ${fetchUrl}...`);
         try {
           const foundStream = await manualExtractStream(fetchUrl, 'refreshAll');
-          if (foundStream) {
+          if (foundStream && !isJunkStreamUrl(foundStream)) {
             pushLog('refreshAll', `  ✅ Stream: ${foundStream.substring(0, 120)}`);
             ch.url = foundStream;
             applyExpiration(ch);
@@ -724,7 +740,7 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
           pushLog('refreshAll', `  Error extracción manual: ${diagErr.message}`);
         }
         const fallbackUrl = await extractViaFallback(source, slug, ch.refreshOption || undefined, 'refreshAll');
-        if (fallbackUrl) {
+        if (fallbackUrl && !isJunkStreamUrl(fallbackUrl)) {
           ch.url = fallbackUrl;
           applyExpiration(ch);
           if (!ch.proveedor) ch.proveedor = source;
@@ -749,8 +765,10 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
     updateSyncProgress('refreshAll', processed, `[${processed}/${totalToProcess}] ✅ ${ch.title || ch.id}`, totalToProcess);
   }
 
-  if (updatedChannels.length > 0) {
-    pushLog('refreshAll', `Guardando ${updatedChannels.length} canales actualizados en Firestore...`);
+  const removedJunk = dropJunkChannels(channels, 'refreshAll');
+
+  if (updatedChannels.length > 0 || removedJunk > 0) {
+    pushLog('refreshAll', `Guardando ${updatedChannels.length} canales actualizados en Supabase...`);
     await saveSyncData({ ...synced, channels, updatedAt: Date.now() });
     memoryCache.del('live:channels');
     pushLog('refreshAll', '✅ Guardado exitoso');
