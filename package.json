@@ -20,7 +20,7 @@
     "@fastify/rate-limit": "^9.1.0",
     "@fastify/redis": "^6.1.1",
     "@fastify/sensible": "^5.6.0",
-    "@fastify/static": "^10.1.2",
+    "@fastify/static": "^7.0.4",
     "axios": "^1.7.2",
     "cheerio": "^1.0.0-rc.12",
     "dotenv": "^16.4.5",
