@@ -81,9 +81,14 @@ function rewritePlaylist(content: string, baseUrl: string, referer?: string, coo
 /**
  * Reescribe un manifiesto DASH (.mpd): envuelve en el proxy las URLs de
  * segmentos y BaseURL para que el reproductor nunca acceda directo al CDN.
+ * Ojo: los placeholders de plantilla ($Number$, $Time$, …) NO pueden quedar
+ * codificados (%24Number%24): el reproductor los sustituye solo si están
+ * literales en el atributo media/initialization.
  */
+const DASH_TEMPLATE_PLACEHOLDERS = /%24(Number|Time|RepresentationID|Bandwidth|SubNumber|SubTime|ESID|SegmentID)%24/g;
 function rewriteDash(content: string, baseUrl: string, referer?: string, cookies?: string): string {
-  const wrap = (u: string): string => buildProxyUrl(resolveUrl(baseUrl, u.trim()), referer, cookies);
+  const wrap = (u: string): string => buildProxyUrl(resolveUrl(baseUrl, u.trim()), referer, cookies)
+    .replace(DASH_TEMPLATE_PLACEHOLDERS, (_m, name: string) => `$${name}$`);
   let out = content.replace(/(<BaseURL[^>]*>)([^<]*?)(<\/BaseURL>)/g, (_m, open: string, url: string, close: string) => {
     const t = url.trim();
     if (!t) return _m;
@@ -247,6 +252,10 @@ export async function proxyRoutes(app: FastifyInstance) {
         const content = Buffer.concat(chunks).toString('utf-8');
         const rewritten = rewriteDash(content, upstream.finalUrl, effectiveReferer, effectiveCookies);
         reply.header('Content-Type', 'application/dash+xml');
+        // Los MPD en vivo también se actualizan periódicamente: nunca cachear
+        // (un manifest viejo congela la reproducción en vivo).
+        reply.header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+        reply.header('Pragma', 'no-cache');
         reply.header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
         reply.header('Pragma', 'no-cache');
         return reply.send(rewritten);

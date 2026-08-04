@@ -127,7 +127,7 @@ var PRESET = ${safeJson(preset)};
   }
   async function loadChannels() {
     try {
-      const res = await fetch('/live/channels?all=true&limit=1000');
+      const res = await fetch('/live/channels?all=true&limit=1000', { signal: AbortSignal.timeout(15000) });
       const data = await res.json();
       channels = (data.items || []).filter(function (c) { return c && c.url; });
       renderSelect('');
@@ -141,7 +141,9 @@ var PRESET = ${safeJson(preset)};
         setStatus('⚠ Canal "' + PRESET.id + '" no está en la lista (¿refrescar canales?)', 'error');
       }
     } catch (e) {
-      setStatus('❌ No se pudieron cargar los canales', 'error');
+      if (STATUS.textContent === 'Sin reproducir') {
+        setStatus('❌ No se pudieron cargar los canales', 'error');
+      }
       logError(e);
     }
   }
@@ -152,7 +154,7 @@ var PRESET = ${safeJson(preset)};
     fillInfo(manifest, drm);
     setStatus('⏳ Cargando ' + kindOf(manifest) + '...', 'busy');
     try {
-      if (player) await player.unload();
+      if (player && player.getManifest()) await player.unload();
     } catch (e) {}
     try {
       const clearKeys = {};
@@ -204,11 +206,23 @@ var PRESET = ${safeJson(preset)};
       logError(ev.detail);
       setStatus('❌ Error de reproducción', 'error');
     });
-    player.attach(VIDEO).catch(logError);
+    try {
+      await player.attach(VIDEO);
+    } catch (e) {
+      logError(e);
+    }
     VIDEO.addEventListener('playing', function () { setStatus('▶ Reproduciendo', 'ok'); });
     VIDEO.addEventListener('waiting', function () { setStatus('⏳ Buffering...', 'busy'); });
     VIDEO.addEventListener('pause', function () { setStatus('⏸ En pausa', 'idle'); });
     VIDEO.addEventListener('stalled', function () { setStatus('⏳ Sin datos...', 'busy'); });
+    if (PRESET && PRESET.url) {
+      document.getElementById('customUrl').value = PRESET.url;
+      document.getElementById('customKeyId').value = PRESET.keyId || '';
+      document.getElementById('customKey').value = PRESET.key || '';
+      await playCustom();
+      loadChannels();
+      return;
+    }
     await loadChannels();
   }
   SEARCH.addEventListener('input', function () { renderSelect(SEARCH.value); });
