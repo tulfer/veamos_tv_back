@@ -27,6 +27,7 @@ RUN npx playwright install --with-deps chromium
 # Compilar TypeScript
 COPY tsconfig.json ./
 COPY src ./src
+COPY frontend ./frontend
 RUN npm run build
 
 # Limpieza: quitar fuentes TS, devDependencies (typescript, eslint, tsx...) y caché de npm
