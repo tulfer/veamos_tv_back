@@ -5,6 +5,7 @@ interface Preset {
   url?: string;
   keyId?: string;
   key?: string;
+  embed?: boolean;
 }
 
 function safeJson(value: unknown): string {
@@ -46,11 +47,14 @@ video{width:100%;max-width:960px;background:#000;border-radius:12px;border:1px s
 .errors div{padding:.2rem 0;border-bottom:1px solid rgba(255,255,255,.05);word-break:break-all}
 a.back{color:#58a6ff;text-decoration:none;font-size:.85rem;display:inline-block;margin-bottom:1rem}
 a.back:hover{text-decoration:underline}
+body.embed a.back, body.embed h1, body.embed .toolbar, body.embed .info, body.embed .errors {display:none}
+body.embed video{max-width:none;width:100%;height:100vh;border:none;border-radius:0}
+body.embed{padding:0;background:#000}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/shaka-player@4/dist/shaka-player.compiled.min.js"></script>
 <script src="https://unpkg.com/shaka-player@4/dist/shaka-player.compiled.min.js" onerror="this.remove()"></script>
 </head>
-<body>
+<body${preset.embed ? ' class="embed"' : ''}>
 <a class="back" href="/sync/status?code=1992">← Panel de Sincronización</a>
 <h1>🧪 Probador de canales DASH / HLS (ClearKey)</h1>
 <div class="toolbar">
@@ -234,12 +238,13 @@ var PRESET = ${safeJson(preset)};
 }
 
 export async function playerHandler(request: FastifyRequest, reply: FastifyReply) {
-  const query = request.query as { id?: string; url?: string; keyId?: string; key?: string };
+  const query = request.query as { id?: string; url?: string; keyId?: string; key?: string; embed?: string };
   const preset: Preset = {
     id: typeof query.id === 'string' ? query.id : undefined,
     url: typeof query.url === 'string' ? query.url : undefined,
     keyId: typeof query.keyId === 'string' ? query.keyId : undefined,
     key: typeof query.key === 'string' ? query.key : undefined,
+    embed: query.embed === '1',
   };
   return reply.type('text/html').send(generatePlayerPage(preset));
 }
