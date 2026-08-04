@@ -1296,7 +1296,7 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
 .btn-secondary{background:rgba(255,255,255,.1);color:#e0e0e0}
 .btn-danger{background:linear-gradient(135deg,#f87171,#dc2626);color:#fff}
 .provider-rows{display:grid;gap:.55rem;margin-top:.9rem}
-.provider-row{display:grid;grid-template-columns:auto minmax(120px,1fr) 76px minmax(105px,auto) auto;align-items:center;gap:.65rem;padding:.7rem .75rem;border:1px solid rgba(255,255,255,.07);border-radius:10px;background:rgba(255,255,255,.035)}
+.provider-row{display:grid;grid-template-columns:auto minmax(130px,1fr) 86px minmax(130px,1fr) 112px;align-items:center;gap:.65rem;padding:.7rem .75rem;border:1px solid rgba(255,255,255,.07);border-radius:10px;background:rgba(255,255,255,.035);min-width:0}
 .provider-row:hover{background:rgba(255,255,255,.07);border-color:rgba(129,140,248,.45)}
 .provider-name{font-size:.9rem;font-weight:600;white-space:nowrap}
 .provider-last{font-size:.72rem;color:#9292ad}
@@ -1305,11 +1305,13 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
 .provider-run{padding:.42rem .65rem;white-space:nowrap;background:rgba(99,102,241,.18);color:#c7d2fe;border:1px solid rgba(129,140,248,.35)}
 .provider-run.running{color:#fde68a;border-color:rgba(251,191,36,.35);background:rgba(251,191,36,.12)}
 .provider-run.queued{color:#c4b5fd;background:rgba(139,92,246,.15)}
-@media(max-width:640px){.provider-row{grid-template-columns:auto 1fr auto}.provider-input{grid-column:2}.provider-last{grid-column:1 / -1}.provider-run{grid-column:3;grid-row:1 / span 2}}
+@media(max-width:640px){.provider-row{grid-template-columns:auto minmax(0,1fr) auto}.provider-input{grid-column:2}.provider-last{grid-column:1 / -1}.provider-run{grid-column:3;grid-row:1 / span 2}}
 
 /* Migration card */
 .migration-section{margin-top:0}
-.large-card-wrap{min-width:0}
+.large-card-wrap{min-width:0;grid-column:1 / -1}
+.large-card-wrap>.migration-section>h2{display:none}
+.large-card-wrap .migration-card,.large-card-wrap .add-channel-card{width:100%;max-width:none}
 .section-toolbar{display:flex;align-items:center;gap:.55rem;margin-bottom:.7rem;color:#9292ad}
 .section-toolbar .drag-handle{font-size:1.05rem}
 .section-toolbar .section-title{font-size:1.05rem;font-weight:600;color:#a0a0c0;flex:1}
