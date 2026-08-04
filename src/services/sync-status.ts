@@ -1,3 +1,6 @@
+import { getRow, setRow, storeKeys } from './store';
+import { logger } from '../utils/logger';
+
 export type SyncType =
   | 'movies'
   | 'series'
@@ -43,6 +46,69 @@ const defaultStatus: SyncJobStatus = { status: 'idle', lastRun: null };
 const logs: Record<string, string[]> = {};
 const LOG_MAX = 500;
 
+// ── Persistencia en Supabase (store): el estado y los logs sobreviven
+//    refrescos de página y reinicios del proceso. ──
+const LOG_PERSIST_DELAY_MS = 2000;
+let logFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+async function persistStateRow(): Promise<void> {
+  try {
+    await setRow(storeKeys.syncStatus, state);
+  } catch (error) {
+    logger.error({ error: (error as Error).message }, 'sync-status: no se pudo persistir el estado');
+  }
+}
+
+function scheduleLogsPersist(): void {
+  if (logFlushTimer) clearTimeout(logFlushTimer);
+  logFlushTimer = setTimeout(() => {
+    logFlushTimer = null;
+    void setRow(storeKeys.syncLogs, { logs, updatedAt: Date.now() }).catch((error: Error) => {
+      logger.error({ error: error?.message }, 'sync-status: no se pudieron persistir los logs');
+    });
+  }, LOG_PERSIST_DELAY_MS);
+}
+
+/**
+ * Restaura el estado y los logs persistidos al arrancar el servidor.
+ * Solo se restauran estados terminales (completed/failed): un 'running'
+ * guardado proviene de un proceso que murió a mitad de ejecución.
+ */
+export async function hydrateSyncState(): Promise<void> {
+  try {
+    const [statusRow, logsRow] = await Promise.all([
+      getRow<Partial<Record<SyncType, Partial<SyncJobStatus>>>>(storeKeys.syncStatus),
+      getRow<{ logs?: Record<string, string[]> }>(storeKeys.syncLogs),
+    ]);
+
+    if (statusRow) {
+      for (const [key, value] of Object.entries(statusRow)) {
+        if (!(key in state) || !value) continue;
+        if (value.status !== 'completed' && value.status !== 'failed') continue;
+        state[key as SyncType] = {
+          status: value.status,
+          lastRun: typeof value.lastRun === 'number' ? value.lastRun : null,
+          duration: typeof value.duration === 'number' ? value.duration : undefined,
+          count: typeof value.count === 'number' ? value.count : undefined,
+          error: typeof value.error === 'string' ? value.error : undefined,
+        };
+      }
+    }
+
+    if (logsRow?.logs && typeof logsRow.logs === 'object') {
+      for (const [type, lines] of Object.entries(logsRow.logs)) {
+        if (Array.isArray(lines) && lines.length > 0) {
+          logs[type] = lines.slice(-LOG_MAX);
+        }
+      }
+    }
+
+    logger.info('sync-status: estado y logs restaurados desde la BD');
+  } catch (error) {
+    logger.error({ error: (error as Error).message }, 'sync-status: falló la restauración de estado/logs');
+  }
+}
+
 function logTimestamp(): string {
   const tz = process.env.LOG_TIMEZONE || 'America/Bogota';
   try {
@@ -56,6 +122,7 @@ export function pushLog(type: string, message: string): void {
   if (!logs[type]) logs[type] = [];
   logs[type].push(`[${logTimestamp()}] ${message}`);
   if (logs[type].length > LOG_MAX) logs[type].splice(0, logs[type].length - LOG_MAX);
+  scheduleLogsPersist();
 }
 
 export function getLogs(type: string): string[] {
@@ -64,6 +131,7 @@ export function getLogs(type: string): string[] {
 
 export function clearLogs(type: string): void {
   delete logs[type];
+  scheduleLogsPersist();
 }
 
 const state: SyncState = {
@@ -111,6 +179,7 @@ export function completeSync(type: SyncType, count?: number): void {
     progress: count !== undefined ? { current: count, message: count > 0 ? `${count} items procesados` : 'Completado sin datos' } : undefined,
     count,
   };
+  void persistStateRow();
 }
 
 export function failSync(type: SyncType, error: string): void {
@@ -122,6 +191,7 @@ export function failSync(type: SyncType, error: string): void {
     duration: started ? Date.now() - started : undefined,
     error,
   };
+  void persistStateRow();
 }
 
 export function getSyncStatus(): SyncState {

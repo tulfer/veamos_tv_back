@@ -977,7 +977,7 @@ a:hover{text-decoration:underline}
 <a href="/sync/status?code=1992">← Volver al Dashboard</a>
 <h1>📋 Detalle: ${type}</h1>
 <div class="auto-refresh" id="dbCount" style="color:#7ee787"></div>
-<div class="auto-refresh" id="status">Actualizando automáticamente... <button id="toggleBtn" onclick="togglePause()" style="margin-left:.5rem;cursor:pointer;background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:4px;padding:2px 8px;font-size:.7rem">⏸ Pausar</button></div>
+<div class="auto-refresh" id="status">Actualizando automáticamente... <button id="toggleBtn" onclick="togglePause()" style="margin-left:.5rem;cursor:pointer;background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:4px;padding:2px 8px;font-size:.7rem">⏸ Pausar</button> <button id="copyBtn" onclick="copyLogs()" style="margin-left:.5rem;cursor:pointer;background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:4px;padding:2px 8px;font-size:.7rem">📋 Copiar logs</button></div>
 <div class="terminal" id="logContainer">${logHtml || '<div class="line" style="color:#8b949e">Sin registros aún</div>'}</div>
 <script>
 // Consulta UN solo conteo de Firestore al abrir el Detalle (por eso el dashboard ya no consulta nada)
@@ -993,9 +993,16 @@ let prevLen = 0;
 let autoScroll = true;
 let paused = false;
 let timer = null;
-document.getElementById('logContainer').addEventListener('scroll', function() {
+const logEl = document.getElementById('logContainer');
+logEl.addEventListener('scroll', function() {
   const el = this;
   autoScroll = el.scrollTop + el.clientHeight >= el.scrollHeight - 10;
+});
+// Si el usuario empieza a seleccionar texto dentro del terminal, se pausa
+// el auto-refresh para que la reconstrucción del DOM no cancele la selección.
+logEl.addEventListener('mousedown', function() {
+  if (paused || timer === null) return;
+  setPaused(true);
 });
 async function checkDone() {
   try {
@@ -1013,39 +1020,65 @@ async function checkDone() {
     }
   } catch {}
 }
-function togglePause() {
-  paused = !paused;
+function setPaused(value) {
+  paused = value;
   document.getElementById('toggleBtn').textContent = paused ? '▶ Reanudar' : '⏸ Pausar';
   const el = document.getElementById('status');
-  el.firstChild.textContent = paused ? '⏸ En pausa (puedes seleccionar texto)' : 'Actualizando automáticamente...';
+  el.firstChild.textContent = paused ? '⏸ En pausa (puedes seleccionar/copiar texto)' : 'Actualizando automáticamente...';
   if (paused) {
     if (timer) { clearInterval(timer); timer = null; }
   } else {
-    refreshLogs();
+    refreshLogs(true);
     checkDone();
     timer = setInterval(tick, 1500);
   }
+}
+function togglePause() {
+  setPaused(!paused);
+}
+function copyLogs() {
+  const text = document.getElementById('logContainer').innerText;
+  const done = function () {
+    const btn = document.getElementById('copyBtn');
+    btn.textContent = '✅ Copiado';
+    setTimeout(function () { btn.textContent = '📋 Copiar logs'; }, 1500);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(function () { fallbackCopy(text); done(); });
+  } else {
+    fallbackCopy(text);
+    done();
+  }
+}
+function fallbackCopy(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  document.body.appendChild(ta);
+  ta.select();
+  document.execCommand('copy');
+  document.body.removeChild(ta);
 }
 async function tick() {
   await refreshLogs();
   checkDone();
 }
-async function refreshLogs() {
+async function refreshLogs(force) {
   try {
     const res = await fetch('/sync/detail/${type}');
     if (res.ok) {
       const data = await res.json();
-      const container = document.getElementById('logContainer');
       const hasNew = data.length !== prevLen;
+      prevLen = data.length;
+      if (!hasNew && !force) return;
+      const container = document.getElementById('logContainer');
       container.innerHTML = data.map(line =>
         '<div class="line">' + line.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</div>'
       ).join('') || '<div class="line" style="color:#8b949e">Sin registros aún</div>';
-      if (autoScroll && hasNew) container.scrollTop = container.scrollHeight;
-      prevLen = data.length;
+      if (autoScroll) container.scrollTop = container.scrollHeight;
     }
   } catch {}
 }
-refreshLogs();
+refreshLogs(true);
 timer = setInterval(tick, 1500);
 checkDone();
 </script>
@@ -1138,11 +1171,14 @@ function generateSyncDashboard(
     const prog = s?.progress;
     const hasParams = def.needsPages || def.needsUrl || def.needsBody || def.needsId || def.needsJson || def.needsProvider;
     return `
+    <div class="card-wrap" id="wrap-${def.key}">
     <div class="card" id="card-${def.key}">
       <div class="card-header">
+        <span class="drag-handle" draggable="true" title="Arrastrar para reordenar">⠿</span>
         <span class="badge">${badge}</span>
         <span class="card-title">${def.label}</span>
         <span class="status-text ${s?.status}">${s?.status || 'idle'}</span>
+        <button class="card-hide-btn" id="hidebtn-${def.key}" onclick="toggleCardHide('${def.key}')" title="Ocultar tarjeta">🚫</button>
       </div>
       <div class="card-body">
         <div class="card-row"><span class="label">Última ejecución</span><span>${lastRun}</span></div>
@@ -1160,6 +1196,7 @@ function generateSyncDashboard(
         ${hasParams ? `<button class="btn btn-secondary btn-sm" onclick="showParamsModal('${def.key}','${def.route}','${def.label}','${def.method}','${def.needsId ? '1' : ''}','${def.needsJson ? '1' : ''}','${def.needsProvider ? '1' : ''}')">⚙ Parámetros</button>` : ''}
         ${def.key === 'refreshAll' || def.key === 'refreshExpired' || def.key === 'refreshOne' || def.key === 'refreshProvider' ? `<a href="/sync/detail/${def.key}" class="btn btn-secondary btn-sm" style="text-decoration:none">📋 Detalle</a>` : ''}
       </div>
+    </div>
     </div>`;
   }).join('\n');
 
@@ -1187,6 +1224,16 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
 .dashboard{display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:1rem}
 .card{background:rgba(255,255,255,.05);border-radius:12px;padding:1.2rem;
   backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.08)}
+.card-wrap.dragging{opacity:.45;transform:scale(.98)}
+.card-wrap.drag-over{outline:2px dashed #667eea;outline-offset:3px;border-radius:14px}
+.card-wrap.card-hidden{display:none}
+.drag-handle{cursor:grab;color:#6e6e8e;font-size:1rem;line-height:1;user-select:none;padding:0 .2rem}
+.drag-handle:active{cursor:grabbing}
+.card-hide-btn{background:none;border:none;cursor:pointer;font-size:.95rem;color:#888;padding:.1rem .3rem;border-radius:6px;margin-left:auto}
+.card-hide-btn:hover{background:rgba(255,255,255,.1);color:#fff}
+#hiddenBar{display:none;margin-bottom:1rem;font-size:.85rem;color:#888;align-items:center;gap:.5rem;flex-wrap:wrap}
+#hiddenBar a{color:#667eea;cursor:pointer;margin-right:.6rem;text-decoration:none}
+#hiddenBar a:hover{text-decoration:underline}
 .card-header{display:flex;align-items:center;gap:.6rem;margin-bottom:.8rem}
 .badge{font-size:1.2rem}
 .card-title{font-weight:600;font-size:1.05rem;flex:1}
@@ -1259,6 +1306,11 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
 <div class="dashboard" id="dashboard">
   ${rows}
 </div>
+<div id="hiddenBar">
+  <span>👁 Ocultas:</span>
+  <span id="hiddenList"></span>
+  <button class="btn btn-secondary btn-sm" onclick="unhideAllCards()">Mostrar todas</button>
+</div>
 
 <div class="migration-section">
   <h2 style="margin-bottom:1rem;font-size:1.2rem;color:#a0a0c0">⏱️ Refresh automático por proveedor</h2>
@@ -1289,7 +1341,7 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
         }).join('\n')}
       </div>
       <div style="display:flex;align-items:center;gap:.8rem;margin-top:.8rem">
-        <button class="btn btn-secondary btn-sm" onclick="refreshAutoRefreshState()">🔄 Consultar estado</button>
+        <button class="btn btn-secondary btn-sm" onclick="refreshAutoRefreshState(true)">🔄 Consultar estado</button>
         <span id="arHint" style="font-size:.8rem;color:#888">—</span>
       </div>
     </div>
@@ -2151,7 +2203,7 @@ function arRow(name, minutes, lastRun) {
     + '<span style="font-size:.75rem;color:#888">' + arFmtLast(lastRun) + '</span>'
     + '</div>';
 }
-async function refreshAutoRefreshState() {
+async function refreshAutoRefreshState(withRows) {
   try {
     const res = await fetch('/sync/auto-refresh');
     const data = await res.json();
@@ -2174,11 +2226,19 @@ async function refreshAutoRefreshState() {
         ? (active ? active + ' proveedor(es) con refresh automático' : 'Ningún proveedor configurado aún (marca uno y pon los minutos)')
         : 'Pausado por el dashboard';
     }
-    const rows = document.getElementById('arRows');
-    if (rows) {
-      rows.innerHTML = AR_PROVIDERS.map(function (name) {
-        return arRow(name, provs[name], lastRuns[name]);
-      }).join('');
+    // Las filas SOLO se reconstruyen al pulsar "Consultar estado" (withRows=true)
+    // y nunca si el usuario está escribiendo en un input, para no borrar lo tecleado.
+    if (withRows) {
+      const activeEl = document.activeElement;
+      const typing = activeEl && activeEl.id && (activeEl.id.indexOf('arP-') === 0 || activeEl.id.indexOf('arM-') === 0);
+      if (!typing) {
+        const rows = document.getElementById('arRows');
+        if (rows) {
+          rows.innerHTML = AR_PROVIDERS.map(function (name) {
+            return arRow(name, provs[name], lastRuns[name]);
+          }).join('');
+        }
+      }
     }
   } catch {}
 }
@@ -2200,8 +2260,126 @@ async function saveAutoRefresh() {
     });
     await res.json();
   } catch {}
-  refreshAutoRefreshState();
+  refreshAutoRefreshState(false);
 }
+
+// ── Tarjetas: ordenar / ocultar (persistido en localStorage) ──
+const CARD_LAYOUT_KEY = 'veamos.syncCards';
+let cardLayout = null;
+let dragKey = null;
+function loadCardLayout() {
+  try {
+    const raw = localStorage.getItem(CARD_LAYOUT_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    cardLayout = {
+      order: Array.isArray(parsed.order) ? parsed.order : [],
+      hidden: Array.isArray(parsed.hidden) ? parsed.hidden : [],
+    };
+  } catch {
+    cardLayout = { order: [], hidden: [] };
+  }
+}
+function saveCardLayout() {
+  try { localStorage.setItem(CARD_LAYOUT_KEY, JSON.stringify(cardLayout)); } catch {}
+}
+function applyCardLayout() {
+  const grid = document.getElementById('dashboard');
+  if (!grid) return;
+  const wraps = Array.prototype.slice.call(grid.children);
+  const order = cardLayout.order.filter(function (k) {
+    return wraps.some(function (w) { return w.id === 'wrap-' + k; });
+  });
+  const rest = wraps.filter(function (w) { return order.indexOf(w.id.replace('wrap-', '')) === -1; });
+  order.forEach(function (k) {
+    const w = document.getElementById('wrap-' + k);
+    if (w) grid.appendChild(w);
+  });
+  rest.forEach(function (w) { grid.appendChild(w); });
+  wraps.forEach(function (w) {
+    const key = w.id.replace('wrap-', '');
+    const hidden = cardLayout.hidden.indexOf(key) !== -1;
+    w.classList.toggle('card-hidden', hidden);
+    const btn = document.getElementById('hidebtn-' + key);
+    if (btn) {
+      btn.textContent = hidden ? '👁' : '🚫';
+      btn.title = hidden ? 'Mostrar tarjeta' : 'Ocultar tarjeta';
+    }
+  });
+  updateHiddenBar();
+}
+function toggleCardHide(key) {
+  const i = cardLayout.hidden.indexOf(key);
+  if (i === -1) cardLayout.hidden.push(key); else cardLayout.hidden.splice(i, 1);
+  saveCardLayout();
+  applyCardLayout();
+}
+function unhideAllCards() {
+  cardLayout.hidden = [];
+  saveCardLayout();
+  applyCardLayout();
+}
+function updateHiddenBar() {
+  const bar = document.getElementById('hiddenBar');
+  if (!bar) return;
+  const hidden = cardLayout.hidden.filter(function (k) { return document.getElementById('wrap-' + k); });
+  if (hidden.length === 0) { bar.style.display = 'none'; return; }
+  bar.style.display = 'flex';
+  const list = document.getElementById('hiddenList');
+  list.innerHTML = hidden.map(function (k) {
+    const wrap = document.getElementById('wrap-' + k);
+    const titleEl = wrap ? wrap.querySelector('.card-title') : null;
+    const label = titleEl && titleEl.textContent ? titleEl.textContent : k;
+    return '<a onclick="toggleCardHide(' + k + ')" title="Restaurar">' + label + '</a>';
+  }).join('');
+}
+document.addEventListener('dragstart', function (e) {
+  const t = e.target;
+  if (t && t.classList && t.classList.contains('drag-handle')) {
+    const wrap = t.closest('.card-wrap');
+    if (!wrap) return;
+    dragKey = wrap.id.replace('wrap-', '');
+    e.dataTransfer.setData('text/plain', dragKey);
+    e.dataTransfer.effectAllowed = 'move';
+    wrap.classList.add('dragging');
+  }
+});
+document.addEventListener('dragend', function () {
+  document.querySelectorAll('.card-wrap').forEach(function (w) {
+    w.classList.remove('dragging', 'drag-over');
+  });
+  dragKey = null;
+});
+document.addEventListener('dragover', function (e) {
+  const w = e.target && e.target.closest ? e.target.closest('.card-wrap') : null;
+  if (w && dragKey && w.id !== 'wrap-' + dragKey) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    w.classList.add('drag-over');
+  }
+});
+document.addEventListener('dragleave', function (e) {
+  const w = e.target && e.target.closest ? e.target.closest('.card-wrap') : null;
+  if (w) w.classList.remove('drag-over');
+});
+document.addEventListener('drop', function (e) {
+  e.preventDefault();
+  const w = e.target && e.target.closest ? e.target.closest('.card-wrap') : null;
+  if (!w || !dragKey || w.id === 'wrap-' + dragKey) return;
+  const grid = document.getElementById('dashboard');
+  const order = Array.prototype.slice.call(grid.children).map(function (c) {
+    return c.id.replace('wrap-', '');
+  });
+  const from = order.indexOf(dragKey);
+  const to = order.indexOf(w.id.replace('wrap-', ''));
+  if (from === -1 || to === -1) return;
+  order.splice(from, 1);
+  order.splice(to, 0, dragKey);
+  cardLayout.order = order;
+  saveCardLayout();
+  applyCardLayout();
+});
+loadCardLayout();
+applyCardLayout();
 </script>
 </body>
 </html>`;

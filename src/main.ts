@@ -19,6 +19,7 @@ import { syncRoutes } from './modules/sync/routes';
 import { dbExplorerRoutes } from './modules/db-explorer/routes';
 import { proxyRoutes } from './modules/proxy/routes';
 import { startAutoRefreshScheduler } from './services/auto-refresh';
+import { hydrateSyncState } from './services/sync-status';
 
 process.stderr.write('=== Veamos TV API starting ===\n');
 process.stderr.write(`Node version: ${process.version}\n`);
@@ -231,6 +232,9 @@ async function start() {
   try {
     process.stderr.write('start: verificando tabla store (Supabase)...\n');
     await ensureStoreTable();
+
+    process.stderr.write('start: restaurando estado y logs de sincronización...\n');
+    await hydrateSyncState();
 
     process.stderr.write('start: building server...\n');
     const app = await buildServer();

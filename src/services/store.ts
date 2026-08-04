@@ -142,6 +142,8 @@ export const storeKeys = {
   collection: (name: string) => name,
   syncMeta: 'sync-meta' as const,
   autoRefresh: 'auto:cfg' as const,
+  syncStatus: 'sync:status' as const,
+  syncLogs: 'sync:logs' as const,
   home: 'home:cineby' as const,
   gnulahdHome: 'home:gnulahd' as const,
   user: (uid: string) => `user:${uid}`,
