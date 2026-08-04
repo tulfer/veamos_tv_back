@@ -954,6 +954,7 @@ export async function syncDetailHandler(request: FastifyRequest, reply: FastifyR
     const logHtml = logEntries.map(line =>
       `<div class="line">${line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>`
     ).join('\n');
+    const summary = { total: 0, running: 0, pending: 0, failed: 0, completed: 0 };
 
     return reply.type('text/html').send(`<!DOCTYPE html>
 <html lang="es">
@@ -974,6 +975,24 @@ a:hover{text-decoration:underline}
 </style>
 </head>
 <body>
+<!--
+<div class="dashboard-layout">
+<aside class="app-sidebar">
+  <div class="brand-mark"><span class="brand-icon">✦</span><span>Panel de<br><strong>Sincronización</strong></span></div>
+  <div class="system-pill"><span class="pulse-dot"></span> Sistema operativo</div>
+  <nav class="side-nav"><a class="active" href="#dashboard">▦ <span>Resumen</span></a><a href="#dashboard">▱ <span>Procesos</span></a><a href="#dashboard">▷ <span>Ejecuciones</span></a><a href="/player">◉ <span>Canales</span></a><a href="/sync/detail/refreshProvider">▤ <span>Registros</span></a><a href="#dashboard">◇ <span>Alertas</span></a></nav>
+  <div class="sidebar-status"><span class="pulse-dot"></span><strong>Sistema saludable</strong><small>Versión 2.4.1</small></div>
+</aside>
+<main class="app-main">
+<header class="topbar"><div><span class="eyebrow">CENTRO DE OPERACIONES</span><h1>Panel de Sincronización</h1></div><div class="topbar-actions"><span>Actualizar&nbsp; ↻</span><a href="/db?code=1992">▣ Explorador BD</a><a href="/player">▷ Probador</a><span class="avatar">AD</span></div></header>
+<section class="summary-grid">
+  <div class="summary-card"><span class="summary-icon purple">▱</span><div><small>Procesos totales</small><strong>${summary.total}</strong><em>100% del total</em></div></div>
+  <div class="summary-card"><span class="summary-icon green">▷</span><div><small>Ejecutándose</small><strong>${summary.running}</strong><em>${summary.total ? ((summary.running / summary.total) * 100).toFixed(1) : 0}% del total</em></div></div>
+  <div class="summary-card"><span class="summary-icon amber">◷</span><div><small>En espera</small><strong>${summary.pending}</strong><em>${summary.total ? ((summary.pending / summary.total) * 100).toFixed(1) : 0}% del total</em></div></div>
+  <div class="summary-card"><span class="summary-icon red">□</span><div><small>Con errores</small><strong>${summary.failed}</strong><em>${summary.total ? ((summary.failed / summary.total) * 100).toFixed(1) : 0}% del total</em></div></div>
+  <div class="summary-card"><span class="summary-icon blue">✓</span><div><small>Completados</small><strong>${summary.completed}</strong><em>${summary.total ? ((summary.completed / summary.total) * 100).toFixed(1) : 0}% del total</em></div></div>
+</section>
+-->
 <a href="/sync/status?code=1992">← Volver al Dashboard</a>
 <h1>📋 Detalle: ${type}</h1>
 <div class="auto-refresh" id="dbCount" style="color:#7ee787"></div>
@@ -1208,6 +1227,15 @@ function generateSyncDashboard(
   const fsBadge = fsRunning ? '🟡' : fsMigStatus.progress === 'completed' ? '🟢' : fsMigStatus.progress === 'error' ? '🔴' : '⚪';
   const fsMsg = fsRunning ? 'Migrando...' : fsMigStatus.progress === 'completed' ? 'Completado' : fsMigStatus.progress === 'error' ? 'Error' : fsMigStatus.progress === 'reading' || fsMigStatus.progress === 'writing' ? 'En curso' : 'Inactivo';
   const fsBarWidth = fsMigStatus.progress === 'idle' ? 0 : fsMigStatus.progress === 'completed' || fsMigStatus.progress === 'error' ? 100 : 55;
+  const summary = syncDefs.reduce((acc, def) => {
+    const current = status[def.key];
+    acc.total++;
+    if (current?.status === 'running') acc.running++;
+    else if (current?.status === 'completed') acc.completed++;
+    else if (current?.status === 'failed') acc.failed++;
+    else acc.pending++;
+    return acc;
+  }, { total: 0, running: 0, completed: 0, failed: 0, pending: 0 });
 
   return `<!DOCTYPE html>
 <html lang="es">
@@ -1219,6 +1247,17 @@ function generateSyncDashboard(
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
   background:radial-gradient(circle at 10% 0%,#242052 0,#0f0c29 42%,#090817 100%);color:#e0e0e0;min-height:100vh;padding:clamp(1rem,3vw,2.5rem)}
+.dashboard-layout{display:grid;grid-template-columns:220px minmax(0,1fr);min-height:calc(100vh - 2rem);max-width:1700px;margin:0 auto;background:rgba(7,8,25,.42);border:1px solid rgba(148,163,184,.12);border-radius:18px;overflow:hidden;box-shadow:0 25px 70px rgba(0,0,0,.28)}
+.app-sidebar{display:flex;flex-direction:column;gap:1.2rem;padding:1.35rem 1rem;background:rgba(8,9,28,.72);border-right:1px solid rgba(148,163,184,.1)}
+.brand-mark{display:flex;align-items:center;gap:.7rem;font-size:.78rem;line-height:1.25;color:#d8d8ed}.brand-mark strong{font-size:.95rem;color:#fff}.brand-icon{display:grid;place-items:center;width:38px;height:38px;border-radius:12px;background:linear-gradient(135deg,#7c3aed,#2563eb);font-size:1.45rem;color:#fff;box-shadow:0 7px 20px rgba(99,102,241,.35)}
+.system-pill{align-self:flex-start;padding:.42rem .7rem;border-radius:999px;background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.2);font-size:.7rem;color:#86efac;text-transform:capitalize}.pulse-dot{display:inline-block;width:7px;height:7px;margin-right:.35rem;border-radius:50%;background:#34d399;box-shadow:0 0 10px #34d399}
+.side-nav{display:grid;gap:.35rem;margin-top:.55rem}.side-nav a{display:flex;align-items:center;gap:.7rem;padding:.7rem .75rem;border-radius:9px;color:#9495b5;text-decoration:none;font-size:.82rem;transition:.2s}.side-nav a:hover,.side-nav a.active{color:#fff;background:linear-gradient(90deg,rgba(99,102,241,.85),rgba(99,102,241,.3));box-shadow:0 7px 20px rgba(79,70,229,.16)}
+.sidebar-status{margin-top:auto;display:grid;gap:.4rem;padding:.85rem .75rem;border:1px solid rgba(148,163,184,.12);border-radius:11px;background:rgba(255,255,255,.035);font-size:.75rem;color:#86efac}.sidebar-status small{padding-top:.45rem;border-top:1px solid rgba(148,163,184,.12);color:#777993}
+.app-main{min-width:0;padding:1.25rem 1.35rem 2rem}.topbar{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:.25rem 0 1.2rem;border-bottom:1px solid rgba(148,163,184,.1)}.eyebrow{font-size:.62rem;letter-spacing:.16em;color:#8183a9}.topbar h1{margin:.25rem 0 0;font-size:1.45rem}.topbar-actions{display:flex;align-items:center;gap:.85rem;font-size:.75rem;color:#a7a8c2}.topbar-actions a{padding:.45rem .65rem;border-radius:7px;background:rgba(255,255,255,.06);color:#d4d4e9;text-decoration:none}.avatar{display:grid;place-items:center;width:31px;height:31px;border-radius:50%;background:linear-gradient(135deg,#5b21b6,#2563eb);font-size:.7rem;color:#fff}
+.summary-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:.75rem;margin:1.15rem 0}.summary-card{display:flex;align-items:center;gap:.7rem;padding:.85rem;border-radius:12px;background:linear-gradient(145deg,rgba(26,28,56,.88),rgba(15,17,37,.9));border:1px solid rgba(148,163,184,.11);box-shadow:0 9px 25px rgba(0,0,0,.13)}.summary-icon{display:grid;place-items:center;width:36px;height:36px;border-radius:11px;font-size:1.1rem}.summary-icon.purple{background:rgba(124,58,237,.25);color:#c4b5fd}.summary-icon.green{background:rgba(34,197,94,.22);color:#86efac}.summary-icon.amber{background:rgba(245,158,11,.22);color:#fcd34d}.summary-icon.red{background:rgba(239,68,68,.22);color:#fca5a5}.summary-icon.blue{background:rgba(37,99,235,.25);color:#93c5fd}.summary-card div{display:grid;gap:.15rem;min-width:0}.summary-card small{color:#9b9dbb;font-size:.68rem}.summary-card strong{font-size:1.35rem;color:#fff}.summary-card em{font-size:.62rem;color:#777993;font-style:normal}
+.app-main>.app-main>h1,.app-main>h1{display:none}.app-main>h1+div{display:none}
+@media(max-width:1100px){.summary-grid{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:760px){body{padding:.4rem}.dashboard-layout{display:block}.app-sidebar{display:none}.app-main{padding:.85rem}.topbar-actions span:not(.avatar),.topbar-actions a{display:none}.summary-grid{grid-template-columns:repeat(2,1fr)}.summary-card{padding:.65rem}.dashboard{grid-template-columns:1fr}}
 h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea,#764ba2);
   -webkit-background-clip:text;-webkit-text-fill-color:transparent}
 .dashboard{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,380px),1fr));gap:1.15rem}
@@ -1320,6 +1359,22 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
   <a href="/db?code=1992" style="display:inline-block;padding:.5rem 1rem;border-radius:8px;background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;text-decoration:none;font-size:.9rem;font-weight:600">🗄️ Explorador de Base de Datos</a>
   <a href="/player" style="display:inline-block;padding:.5rem 1rem;border-radius:8px;background:linear-gradient(135deg,#10b981,#059669);color:#fff;text-decoration:none;font-size:.9rem;font-weight:600">🧪 Probador de canales</a>
 </div>
+<div class="dashboard-layout">
+<aside class="app-sidebar">
+  <div class="brand-mark"><span class="brand-icon">✦</span><span>Panel de<br><strong>Sincronización</strong></span></div>
+  <div class="system-pill"><span class="pulse-dot"></span> Sistema operativo</div>
+  <nav class="side-nav"><a class="active" href="#dashboard">▦ <span>Resumen</span></a><a href="#dashboard">▱ <span>Procesos</span></a><a href="#dashboard">▷ <span>Ejecuciones</span></a><a href="/player">◉ <span>Canales</span></a><a href="/sync/detail/refreshProvider">▤ <span>Registros</span></a><a href="#dashboard">◇ <span>Alertas</span></a></nav>
+  <div class="sidebar-status"><span class="pulse-dot"></span><strong>Sistema saludable</strong><small>Versión 2.4.1</small></div>
+</aside>
+<main class="app-main">
+<header class="topbar"><div><span class="eyebrow">CENTRO DE OPERACIONES</span><h1>Panel de Sincronización</h1></div><div class="topbar-actions"><span>Actualizar&nbsp; ↻</span><a href="/db?code=1992">▣ Explorador BD</a><a href="/player">▷ Probador</a><span class="avatar">AD</span></div></header>
+<section class="summary-grid">
+  <div class="summary-card"><span class="summary-icon purple">▱</span><div><small>Procesos totales</small><strong>${summary.total}</strong><em>100% del total</em></div></div>
+  <div class="summary-card"><span class="summary-icon green">▷</span><div><small>Ejecutándose</small><strong>${summary.running}</strong><em>${summary.total ? ((summary.running / summary.total) * 100).toFixed(1) : 0}% del total</em></div></div>
+  <div class="summary-card"><span class="summary-icon amber">◷</span><div><small>En espera</small><strong>${summary.pending}</strong><em>${summary.total ? ((summary.pending / summary.total) * 100).toFixed(1) : 0}% del total</em></div></div>
+  <div class="summary-card"><span class="summary-icon red">□</span><div><small>Con errores</small><strong>${summary.failed}</strong><em>${summary.total ? ((summary.failed / summary.total) * 100).toFixed(1) : 0}% del total</em></div></div>
+  <div class="summary-card"><span class="summary-icon blue">✓</span><div><small>Completados</small><strong>${summary.completed}</strong><em>${summary.total ? ((summary.completed / summary.total) * 100).toFixed(1) : 0}% del total</em></div></div>
+</section>
 <div class="dashboard" id="dashboard">
   ${rows}
 </div>
@@ -2230,8 +2285,10 @@ function arRow(name, minutes, lastRun) {
     + '<input type="checkbox" id="arP-' + name + '" ' + (minutes ? 'checked' : '') + ' onchange="saveAutoRefresh()" style="width:18px;height:18px;accent-color:#667eea">'
     + '<label class="provider-name" for="arP-' + name + '">' + name + '</label>'
     + '<input class="provider-input" type="number" id="arM-' + name + '" min="1" step="1" value="' + (minutes || '') + '" placeholder="min" onchange="saveAutoRefresh()">'
-    + '<span class="provider-last">' + arFmtLast(lastRun) + '</span>'
+    + '<span class="provider-last">' + arFmtLast(lastRun) + '</span>' /*
     + '<button class="btn provider-run" type="button" onclick="manualRefreshProvider(\'' + name + '\', this)" title="Ejecutar refresh de este proveedor">▶ Ejecutar</button>'
+    */
+    + '<button class="btn provider-run" type="button" data-provider="' + name + '" onclick="manualRefreshProviderFromButton(this)" title="Ejecutar refresh de este proveedor">â–¶ Ejecutar</button>'
     + '</div>';
 }
 async function refreshAutoRefreshState(withRows) {
@@ -2285,6 +2342,9 @@ async function refreshAutoRefreshState(withRows) {
   } catch {}
 }
 
+function manualRefreshProviderFromButton(button) {
+  return manualRefreshProvider(button.getAttribute('data-provider') || '', button);
+}
 async function manualRefreshProvider(provider, button) {
   if (!button || button.disabled) return;
   button.disabled = true;
@@ -2402,8 +2462,10 @@ function updateHiddenBar() {
   list.innerHTML = hidden.map(function (k) {
     const wrap = document.getElementById('wrap-' + k);
     const titleEl = wrap ? wrap.querySelector('.card-title') : null;
-    const label = titleEl && titleEl.textContent ? titleEl.textContent : k;
+    const label = titleEl && titleEl.textContent ? titleEl.textContent : k; /*
     return '<a onclick="toggleCardHide(\'' + k + '\')" title="Restaurar">' + label + '</a>';
+    */
+    return '<a data-card-key="' + k + '" onclick="toggleCardHide(this.dataset.cardKey)" title="Restaurar">' + label + '</a>';
   }).join('');
 }
 document.addEventListener('dragstart', function (e) {
@@ -2455,6 +2517,8 @@ document.addEventListener('drop', function (e) {
 loadCardLayout();
 applyCardLayout();
 </script>
+</main>
+</div>
 </body>
 </html>`;
 }
@@ -2673,3 +2737,7 @@ export async function runFirestoreToSupabaseHandler(_request: FastifyRequest, re
 export async function firestoreToSupabaseStatusHandler(_request: FastifyRequest, reply: FastifyReply) {
   return reply.send(getFirestoreMigrationStatus());
 }
+/*
+-->
+<a href="/sync/status?code=1992">â† Volver al Dashboard</a>
+*/
