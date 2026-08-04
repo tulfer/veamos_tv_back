@@ -47,7 +47,7 @@ video{width:100%;max-width:960px;background:#000;border-radius:12px;border:1px s
 .errors div{padding:.2rem 0;border-bottom:1px solid rgba(255,255,255,.05);word-break:break-all}
 a.back{color:#58a6ff;text-decoration:none;font-size:.85rem;display:inline-block;margin-bottom:1rem}
 a.back:hover{text-decoration:underline}
-body.embed a.back, body.embed h1, body.embed .toolbar, body.embed .info, body.embed .errors {display:none}
+body.embed a.back, body.embed h1, body.embed .toolbar, body.embed .info, body.embed #status {display:none}
 body.embed video{max-width:none;width:100%;height:100vh;border:none;border-radius:0}
 body.embed{padding:0;background:#000}
 </style>
@@ -68,7 +68,7 @@ body.embed{padding:0;background:#000}
   <input type="text" id="customKey" placeholder="key (hex)" style="width:180px">
   <button class="btn" onclick="playCustom()">▶ Probar URL</button>
 </div>
-<video id="video" controls playsinline></video>
+<video id="video" ${preset.embed ? '' : 'controls '}playsinline></video>
 <div>
   <span class="status idle" id="status">Sin reproducir</span>
 </div>
@@ -230,6 +230,16 @@ var PRESET = ${safeJson(preset)};
     await loadChannels();
   }
   SEARCH.addEventListener('input', function () { renderSelect(SEARCH.value); });
+  // API para el WebView de la app: play/pausa sin depender de los controles nativos
+  window.__veamosTogglePlay = function () {
+    const v = document.getElementById('video');
+    if (!v) return;
+    if (v.paused) {
+      v.play().catch(function () {});
+    } else {
+      v.pause();
+    }
+  };
   init();
 })();
 </script>
