@@ -174,7 +174,7 @@ const state: SyncState = {
 };
 
 export function startSync(type: SyncType): boolean {
-  if (state[type].status === 'running') return false;
+  if (state[type].status === 'running' && type !== 'refreshProvider') return false;
   state[type] = { status: 'running', lastRun: Date.now(), duration: undefined, count: undefined, error: undefined, progress: undefined };
   emitSyncEvent({ type: 'status', status: getSyncStatus() });
   return true;

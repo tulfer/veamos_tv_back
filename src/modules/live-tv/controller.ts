@@ -4,7 +4,7 @@ import { fetchLiveChannels, getChannelsByGroup, getChannelsByCountry, getChannel
 import { getChannelStream, isJunkStreamUrl } from '../../providers/custom-channels';
 import { getCachedOrFetch, memoryCache } from '../../cache';
 import { loadSyncData, saveSyncData, loadChannels, getCollectionCount, getProviderChannelId } from '../../services/data-store';
-import { LiveChannel } from '../../types';
+import { LiveChannel, SyncData } from '../../types';
 import { logger } from '../../utils/logger';
 import { startSync, completeSync, failSync, updateSyncProgress, pushLog, clearLogs, getSyncStatus } from '../../services/sync-status';
 import { fetchHTML, fetchHTMLWithReferer, httpClient } from '../../utils/http';
@@ -13,20 +13,6 @@ import { verifyCookies } from '../../utils/cookie-token';
 
 const CACHE_KEY = 'live:channels';
 const PAGE_SIZE = 10;
-
-/** Elimina de la lista los canales cuya URL siga siendo rota (script/CDN) tras el refresh. */
-function dropJunkChannels(channels: LiveChannel[], logKey: string): number {
-  let removed = 0;
-  for (let i = channels.length - 1; i >= 0; i--) {
-    if (isJunkStreamUrl(channels[i].url)) {
-      pushLog(logKey, `  🗑️ Eliminando canal con URL inválida: ${channels[i].title || channels[i].id}`);
-      channels.splice(i, 1);
-      removed++;
-    }
-  }
-  if (removed > 0) pushLog(logKey, `  🧹 Se eliminaron ${removed} canales con URL inválida`);
-  return removed;
-}
 
 /**
  * Extrae el parámetro `expires` de la URL del stream (tokens de m3u8).
@@ -320,6 +306,30 @@ export async function getChannelDetailHandler(request: FastifyRequest, reply: Fa
   }
 
   return reply.send(channel);
+}
+
+/** Guarda únicamente los cambios de stream sobre la versión más reciente de la colección.
+ * Así un refresh iniciado antes de un alta no puede sobrescribir ese canal nuevo. */
+async function saveMergedRefreshUpdates(base: SyncData, updates: LiveChannel[], logKey: string): Promise<void> {
+  if (updates.length === 0) return;
+  const latest = await loadSyncData() || base;
+  const updatesById = new Map(updates.map((channel) => [channel.id, channel]));
+  const channels = latest.channels.map((channel) => {
+    const update = updatesById.get(channel.id);
+    if (!update) return channel;
+    return {
+      ...channel,
+      url: update.url,
+      online: update.online,
+      expires: update.expires,
+      expiresDate: update.expiresDate,
+      ...(update.drm ? { drm: update.drm } : {}),
+    };
+  });
+  pushLog(logKey, `Guardando ${updates.length} streams actualizados sin reemplazar canales nuevos...`);
+  await saveSyncData({ ...latest, channels, updatedAt: Date.now() });
+  memoryCache.del('live:channels');
+  pushLog(logKey, '✅ Guardado fusionado exitoso');
 }
 
 /** Conteo liviano para clientes que solo necesitan saber cuántos canales existen. */
@@ -744,15 +754,7 @@ export async function refreshExpiredChannelsHandler(_request: FastifyRequest, re
     updateSyncProgress('refreshExpired', processed, `[${processed}/${totalToProcess}] ✅ ${ch.title || ch.id}`, totalToProcess);
   }
 
-  const removedJunk = dropJunkChannels(channels, 'refreshExpired');
-
-  if (updatedChannels.length > 0 || removedJunk > 0) {
-    pushLog('refreshExpired', `Guardando ${updatedChannels.length} canales actualizados en Supabase...`);
-    await saveSyncData({ ...synced, channels, updatedAt: Date.now() });
-    memoryCache.del('live:channels');
-    pushLog('refreshExpired', '✅ Guardado exitoso');
-  }
-
+  await saveMergedRefreshUpdates(synced, updatedChannels, 'refreshExpired');
   const count = updatedChannels.length;
   if (failedChannels.length > 0) {
     const errorGroups: Record<string, number> = {};
@@ -909,15 +911,7 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
     updateSyncProgress('refreshAll', processed, `[${processed}/${totalToProcess}] ✅ ${ch.title || ch.id}`, totalToProcess);
   }
 
-  const removedJunk = dropJunkChannels(channels, 'refreshAll');
-
-  if (updatedChannels.length > 0 || removedJunk > 0) {
-    pushLog('refreshAll', `Guardando ${updatedChannels.length} canales actualizados en Supabase...`);
-    await saveSyncData({ ...synced, channels, updatedAt: Date.now() });
-    memoryCache.del('live:channels');
-    pushLog('refreshAll', '✅ Guardado exitoso');
-  }
-
+  await saveMergedRefreshUpdates(synced, updatedChannels, 'refreshAll');
   const count = updatedChannels.length;
   if (failedChannels.length > 0) {
     const errorGroups: Record<string, number> = {};
@@ -943,41 +937,33 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
 export const REFRESH_PROVIDERS = ['wsdeportes', 'cablevisionhd', 'tvporinternet2', 'tvenvivo2', 'chatytv', 'senalcolombia', 'vertvcable'] as const;
 export type RefreshProvider = (typeof REFRESH_PROVIDERS)[number];
 
-// Los refrescos se ejecutan uno a uno porque todos escriben el mismo documento
-// de canales y comparten el log/progreso `refreshProvider`. Las solicitudes
-// manuales adicionales no se pierden: quedan en cola y arrancan al terminar.
+// Cada proveedor tiene su propia ejecución. Así varios proveedores pueden
+// refrescarse a la vez, pero nunca se lanzan dos refresh del mismo proveedor.
+const runningProviderRefreshes = new Set<RefreshProvider>();
 const queuedProviderRefreshes = new Set<RefreshProvider>();
-let providerRefreshStarting = false;
-
-function drainProviderRefreshQueue(): void {
-  if (providerRefreshStarting || getSyncStatus().refreshProvider.status === 'running') return;
-  const next = queuedProviderRefreshes.values().next().value as RefreshProvider | undefined;
-  if (!next) return;
-  queuedProviderRefreshes.delete(next);
-  scheduleProviderRefresh(next);
-}
+const CHANNEL_REFRESH_CONCURRENCY = 4;
 
 export function getProviderRefreshQueueStatus(): { active: boolean; queued: RefreshProvider[] } {
   return {
-    active: providerRefreshStarting || getSyncStatus().refreshProvider.status === 'running',
+    active: runningProviderRefreshes.size > 0,
     queued: Array.from(queuedProviderRefreshes),
   };
 }
 
 export function scheduleProviderRefresh(providerName: RefreshProvider): { queued: boolean } {
-  if (providerRefreshStarting || getSyncStatus().refreshProvider.status === 'running') {
+  if (runningProviderRefreshes.has(providerName)) {
     queuedProviderRefreshes.add(providerName);
     return { queued: true };
   }
-  providerRefreshStarting = true;
+  runningProviderRefreshes.add(providerName);
   void refreshProviderChannels(providerName)
     .catch((error: Error) => {
       pushLog('refreshProvider', `❌ Error inesperado: ${error?.message || error}`);
       failSync('refreshProvider', error?.message || 'Error inesperado');
     })
     .finally(() => {
-      providerRefreshStarting = false;
-      drainProviderRefreshQueue();
+      runningProviderRefreshes.delete(providerName);
+      if (queuedProviderRefreshes.delete(providerName)) scheduleProviderRefresh(providerName);
     });
   return { queued: false };
 }
@@ -1007,7 +993,7 @@ export async function refreshByProviderHandler(request: FastifyRequest, reply: F
 }
 
 /** Lógica de refresh por proveedor (usada por el endpoint y por el auto-refresh). */
-export async function refreshProviderChannels(providerName: RefreshProvider): Promise<void> {
+export async function refreshProviderChannels(providerName: RefreshProvider, selectedChannels?: LiveChannel[]): Promise<void> {
   const synced = await loadSyncData();
   if (!synced || !Array.isArray(synced.channels)) {
     pushLog('refreshProvider', '⛔ No sync data found');
@@ -1024,12 +1010,27 @@ export async function refreshProviderChannels(providerName: RefreshProvider): Pr
   pushLog('refreshProvider', `=== Iniciando refresh de canales del proveedor: ${providerName} ===`);
 
   const channels = synced.channels;
-  const providerChannels = channels.filter((ch) =>
+  const providerChannels = selectedChannels || channels.filter((ch) =>
     (ch.proveedor || extractRefreshSource(ch.refreshUrl)) === providerName && ch.refreshUrl,
   );
   const totalToProcess = providerChannels.length;
   pushLog('refreshProvider', `Canales totales en BD: ${channels.length}`);
   pushLog('refreshProvider', `Canales de ${providerName} con refreshUrl: ${totalToProcess}`);
+
+  // Divide el trabajo en lotes independientes. Cada lote ejecuta su propia
+  // tarea async y guarda mediante merge, por lo que un canal nuevo no se
+  // pierde aunque otro lote termine después.
+  if (!selectedChannels && providerChannels.length > CHANNEL_REFRESH_CONCURRENCY) {
+    const pending = [...providerChannels];
+    const workers = Array.from({ length: CHANNEL_REFRESH_CONCURRENCY }, async () => {
+      while (pending.length > 0) {
+        const next = pending.shift();
+        if (next) await refreshProviderChannels(providerName, [next]);
+      }
+    });
+    await Promise.all(workers);
+    return;
+  }
 
   if (totalToProcess === 0) {
     pushLog('refreshProvider', '⚠ No hay canales de este proveedor');
@@ -1146,13 +1147,7 @@ export async function refreshProviderChannels(providerName: RefreshProvider): Pr
   // No ejecutar una limpieza global aquí. Este refresh solo debe actualizar
   // los canales del proveedor solicitado; una respuesta temporal o inesperada
   // de vertvcable no debe borrar canales recién agregados.
-  if (updatedChannels.length > 0) {
-    pushLog('refreshProvider', `Guardando ${updatedChannels.length} canales actualizados en Supabase...`);
-    await saveSyncData({ ...synced, channels, updatedAt: Date.now() });
-    memoryCache.del('live:channels');
-    pushLog('refreshProvider', '✅ Guardado exitoso');
-  }
-
+  await saveMergedRefreshUpdates(synced, updatedChannels, 'refreshProvider');
   const count = updatedChannels.length;
   if (failedChannels.length > 0) {
     const errorGroups: Record<string, number> = {};
