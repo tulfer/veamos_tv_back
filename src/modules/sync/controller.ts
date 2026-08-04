@@ -1300,8 +1300,9 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
 </head>
 <body>
 <h1>🔄 Panel de Sincronización</h1>
-<div style="margin-bottom:1.5rem">
+<div style="margin-bottom:1.5rem;display:flex;gap:.6rem;flex-wrap:wrap">
   <a href="/db?code=1992" style="display:inline-block;padding:.5rem 1rem;border-radius:8px;background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;text-decoration:none;font-size:.9rem;font-weight:600">🗄️ Explorador de Base de Datos</a>
+  <a href="/player" style="display:inline-block;padding:.5rem 1rem;border-radius:8px;background:linear-gradient(135deg,#10b981,#059669);color:#fff;text-decoration:none;font-size:.9rem;font-weight:600">🧪 Probador de canales</a>
 </div>
 <div class="dashboard" id="dashboard">
   ${rows}
