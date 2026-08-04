@@ -66,7 +66,6 @@ async function buildServer() {
   await app.register(fastifyStatic, {
     root: path.join(process.cwd(), 'public/dashboard'),
     prefix: '/dashboard-assets/',
-    decorateReply: false,
   });
   app.get('/sync/app', async (_request, reply) => reply.sendFile('index.html'));
 
