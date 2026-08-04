@@ -13,7 +13,7 @@ import { memoryCache } from '../../cache/memory';
 import { SyncMovie, SyncSeries, SyncData, LiveChannel } from '../../types';
 import { startSync, completeSync, failSync, updateSyncProgress, getLogs, clearLogs, SyncType, getSyncStatus } from '../../services/sync-status';
 import { firestoreMigrationStatus, getFirestoreMigrationStatus, runFirestoreToSupabase, FirestoreMigrationStatus } from '../../services/firestore-migrate';
-import { REFRESH_PROVIDERS } from '../live-tv/controller';
+import { REFRESH_PROVIDERS, getProviderRefreshQueueStatus } from '../live-tv/controller';
 import { AutoRefreshConfig } from '../../services/data-store';
 
 interface MigrationStatus {
@@ -921,7 +921,7 @@ export async function syncCountHandler(request: FastifyRequest, reply: FastifyRe
 
 export async function getAutoRefreshHandler(_request: FastifyRequest, reply: FastifyReply) {
   const config = await getAutoRefreshConfig();
-  return reply.send(config);
+  return reply.send({ ...config, refreshProviderStatus: getProviderRefreshQueueStatus() });
 }
 
 export async function setAutoRefreshHandler(request: FastifyRequest, reply: FastifyReply) {
@@ -1218,12 +1218,13 @@ function generateSyncDashboard(
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
-  background:#0f0c29;color:#e0e0e0;min-height:100vh;padding:2rem}
+  background:radial-gradient(circle at 10% 0%,#242052 0,#0f0c29 42%,#090817 100%);color:#e0e0e0;min-height:100vh;padding:clamp(1rem,3vw,2.5rem)}
 h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea,#764ba2);
   -webkit-background-clip:text;-webkit-text-fill-color:transparent}
-.dashboard{display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:1rem}
+.dashboard{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,380px),1fr));gap:1.15rem}
 .card{background:rgba(255,255,255,.05);border-radius:12px;padding:1.2rem;
-  backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.08)}
+  backdrop-filter:blur(16px);border:1px solid rgba(255,255,255,.1);box-shadow:0 12px 35px rgba(0,0,0,.16);transition:transform .2s,box-shadow .2s}
+.card:hover{transform:translateY(-2px);box-shadow:0 16px 40px rgba(0,0,0,.25)}
 .card-wrap.dragging{opacity:.45;transform:scale(.98)}
 .card-wrap.drag-over{outline:2px dashed #667eea;outline-offset:3px;border-radius:14px}
 .card-wrap.card-hidden{display:none}
@@ -1255,6 +1256,17 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
 .btn-primary{background:linear-gradient(135deg,#667eea,#764ba2);color:#fff}
 .btn-secondary{background:rgba(255,255,255,.1);color:#e0e0e0}
 .btn-danger{background:linear-gradient(135deg,#f87171,#dc2626);color:#fff}
+.provider-rows{display:grid;gap:.55rem;margin-top:.9rem}
+.provider-row{display:grid;grid-template-columns:auto minmax(120px,1fr) 76px minmax(105px,auto) auto;align-items:center;gap:.65rem;padding:.7rem .75rem;border:1px solid rgba(255,255,255,.07);border-radius:10px;background:rgba(255,255,255,.035)}
+.provider-row:hover{background:rgba(255,255,255,.07);border-color:rgba(129,140,248,.45)}
+.provider-name{font-size:.9rem;font-weight:600;white-space:nowrap}
+.provider-last{font-size:.72rem;color:#9292ad}
+.provider-input{width:76px;padding:.4rem .45rem;border-radius:7px;border:1px solid rgba(255,255,255,.15);background:rgba(0,0,0,.15);color:#fff;font-size:.85rem}
+.provider-input:focus{outline:none;border-color:#818cf8;box-shadow:0 0 0 3px rgba(129,140,248,.15)}
+.provider-run{padding:.42rem .65rem;white-space:nowrap;background:rgba(99,102,241,.18);color:#c7d2fe;border:1px solid rgba(129,140,248,.35)}
+.provider-run.running{color:#fde68a;border-color:rgba(251,191,36,.35);background:rgba(251,191,36,.12)}
+.provider-run.queued{color:#c4b5fd;background:rgba(139,92,246,.15)}
+@media(max-width:640px){.provider-row{grid-template-columns:auto 1fr auto}.provider-input{grid-column:2}.provider-last{grid-column:1 / -1}.provider-run{grid-column:3;grid-row:1 / span 2}}
 
 /* Migration card */
 .migration-section{margin-top:2rem}
@@ -1326,18 +1338,19 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
         <input type="checkbox" id="arToggle" ${autoCfg.enabled ? 'checked' : ''} onchange="saveAutoRefresh()" style="width:22px;height:22px;accent-color:#667eea">
         <span id="arLabel" style="font-size:.95rem">${autoCfg.enabled ? 'Activado' : 'Pausado'}</span>
       </label>
-      <div id="arRows" style="margin-top:.6rem">
+      <div id="arRows" class="provider-rows">
         ${REFRESH_PROVIDERS.map((name) => {
           const minutes = autoCfg.providers[name];
           const lastRun = autoCfg.providerLastRuns[name];
           const lastText = lastRun
             ? `último: ${new Date(lastRun).toLocaleString('es-CO', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`
             : 'sin ejecutar';
-          return `<div style="display:flex;align-items:center;gap:.8rem;padding:.45rem 0;border-bottom:1px solid rgba(255,255,255,.06)">
+          return `<div class="provider-row" id="arRow-${name}">
             <input type="checkbox" id="arP-${name}" ${minutes ? 'checked' : ''} onchange="saveAutoRefresh()" style="width:18px;height:18px;accent-color:#667eea">
-            <label for="arP-${name}" style="font-size:.95rem;flex:0 0 160px">${name}</label>
-            <input type="number" id="arM-${name}" min="1" step="1" value="${minutes || ''}" placeholder="min" onchange="saveAutoRefresh()" style="width:80px;padding:.4rem;border-radius:6px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.05);color:#fff;font-size:.9rem">
-            <span style="font-size:.75rem;color:#888">${lastText}</span>
+            <label class="provider-name" for="arP-${name}">${name}</label>
+            <input class="provider-input" type="number" id="arM-${name}" min="1" step="1" value="${minutes || ''}" placeholder="min" onchange="saveAutoRefresh()">
+            <span class="provider-last">${lastText}</span>
+            <button class="btn provider-run" type="button" onclick="manualRefreshProvider('${name}', this)" title="Ejecutar refresh de este proveedor">▶ Ejecutar</button>
           </div>`;
         }).join('\n')}
       </div>
@@ -2197,11 +2210,12 @@ function arFmtLast(ts) {
   return 'último: ' + d.toLocaleString('es-CO', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 function arRow(name, minutes, lastRun) {
-  return '<div style="display:flex;align-items:center;gap:.8rem;padding:.45rem 0;border-bottom:1px solid rgba(255,255,255,.06)">'
+  return '<div class="provider-row" id="arRow-' + name + '">'
     + '<input type="checkbox" id="arP-' + name + '" ' + (minutes ? 'checked' : '') + ' onchange="saveAutoRefresh()" style="width:18px;height:18px;accent-color:#667eea">'
-    + '<label for="arP-' + name + '" style="font-size:.95rem;flex:0 0 160px">' + name + '</label>'
-    + '<input type="number" id="arM-' + name + '" min="1" step="1" value="' + (minutes || '') + '" placeholder="min" onchange="saveAutoRefresh()" style="width:80px;padding:.4rem;border-radius:6px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.05);color:#fff;font-size:.9rem">'
-    + '<span style="font-size:.75rem;color:#888">' + arFmtLast(lastRun) + '</span>'
+    + '<label class="provider-name" for="arP-' + name + '">' + name + '</label>'
+    + '<input class="provider-input" type="number" id="arM-' + name + '" min="1" step="1" value="' + (minutes || '') + '" placeholder="min" onchange="saveAutoRefresh()">'
+    + '<span class="provider-last">' + arFmtLast(lastRun) + '</span>'
+    + '<button class="btn provider-run" type="button" onclick="manualRefreshProvider(\'' + name + '\', this)" title="Ejecutar refresh de este proveedor">▶ Ejecutar</button>'
     + '</div>';
 }
 async function refreshAutoRefreshState(withRows) {
@@ -2220,6 +2234,7 @@ async function refreshAutoRefreshState(withRows) {
     statusText.className = 'status-text ' + (on ? 'completed' : 'failed');
     const provs = data.providers || {};
     const lastRuns = data.providerLastRuns || {};
+    const refreshState = data.refreshProviderStatus || { active: false, queued: [] };
     const hint = document.getElementById('arHint');
     if (hint) {
       const active = Object.keys(provs).length;
@@ -2241,7 +2256,37 @@ async function refreshAutoRefreshState(withRows) {
         }
       }
     }
+    AR_PROVIDERS.forEach(function (name) {
+      const button = document.querySelector('#arRow-' + name + ' .provider-run');
+      if (!button) return;
+      const queued = (refreshState.queued || []).indexOf(name) !== -1;
+      button.classList.toggle('queued', queued);
+      button.classList.toggle('running', refreshState.active && !queued);
+      if (queued) button.textContent = '⏳ En cola';
+      else if (refreshState.active) button.textContent = '⏳ En curso';
+      else button.textContent = '▶ Ejecutar';
+    });
   } catch {}
+}
+
+async function manualRefreshProvider(provider, button) {
+  if (!button || button.disabled) return;
+  button.disabled = true;
+  button.textContent = '⏳ Solicitando...';
+  try {
+    const res = await fetch('/live/channels/refresh-provider/' + encodeURIComponent(provider), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Error al iniciar el refresh');
+    button.textContent = data.queued ? '⏳ En cola' : '⏳ En curso';
+    button.classList.add(data.queued ? 'queued' : 'running');
+    setTimeout(function () { refreshAutoRefreshState(true); }, 500);
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = '▶ Ejecutar';
+    alert(error.message || 'Error de red');
+  }
 }
 async function saveAutoRefresh() {
   const enabled = document.getElementById('arToggle').checked;

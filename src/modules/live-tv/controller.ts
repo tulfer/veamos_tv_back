@@ -933,6 +933,45 @@ export async function refreshAllChannelsHandler(_request: FastifyRequest, reply:
 export const REFRESH_PROVIDERS = ['wsdeportes', 'cablevisionhd', 'tvporinternet2', 'chatytv', 'senalcolombia', 'vertvcable'] as const;
 export type RefreshProvider = (typeof REFRESH_PROVIDERS)[number];
 
+// Los refrescos se ejecutan uno a uno porque todos escriben el mismo documento
+// de canales y comparten el log/progreso `refreshProvider`. Las solicitudes
+// manuales adicionales no se pierden: quedan en cola y arrancan al terminar.
+const queuedProviderRefreshes = new Set<RefreshProvider>();
+let providerRefreshStarting = false;
+
+function drainProviderRefreshQueue(): void {
+  if (providerRefreshStarting || getSyncStatus().refreshProvider.status === 'running') return;
+  const next = queuedProviderRefreshes.values().next().value as RefreshProvider | undefined;
+  if (!next) return;
+  queuedProviderRefreshes.delete(next);
+  scheduleProviderRefresh(next);
+}
+
+export function getProviderRefreshQueueStatus(): { active: boolean; queued: RefreshProvider[] } {
+  return {
+    active: providerRefreshStarting || getSyncStatus().refreshProvider.status === 'running',
+    queued: Array.from(queuedProviderRefreshes),
+  };
+}
+
+export function scheduleProviderRefresh(providerName: RefreshProvider): { queued: boolean } {
+  if (providerRefreshStarting || getSyncStatus().refreshProvider.status === 'running') {
+    queuedProviderRefreshes.add(providerName);
+    return { queued: true };
+  }
+  providerRefreshStarting = true;
+  void refreshProviderChannels(providerName)
+    .catch((error: Error) => {
+      pushLog('refreshProvider', `❌ Error inesperado: ${error?.message || error}`);
+      failSync('refreshProvider', error?.message || 'Error inesperado');
+    })
+    .finally(() => {
+      providerRefreshStarting = false;
+      drainProviderRefreshQueue();
+    });
+  return { queued: false };
+}
+
 /**
  * Refresca TODOS los canales de un proveedor concreto (campo "proveedor" o
  * detectado desde refreshUrl). Recibe el proveedor por param o body.
@@ -948,15 +987,12 @@ export async function refreshByProviderHandler(request: FastifyRequest, reply: F
     });
   }
 
-  if (getSyncStatus().refreshProvider.status === 'running') {
-    return reply.send({ ok: true, message: 'Refresh by provider already in progress' });
-  }
-
-  reply.send({ ok: true, message: `Refresh de canales ${providerName} iniciado`, provider: providerName });
-
-  void refreshProviderChannels(providerName as RefreshProvider).catch((error: Error) => {
-    pushLog('refreshProvider', `❌ Error inesperado: ${error?.message || error}`);
-    failSync('refreshProvider', error?.message || 'Error inesperado');
+  const scheduled = scheduleProviderRefresh(providerName as RefreshProvider);
+  return reply.send({
+    ok: true,
+    queued: scheduled.queued,
+    message: scheduled.queued ? `Refresh de ${providerName} agregado a la cola` : `Refresh de canales ${providerName} iniciado`,
+    provider: providerName,
   });
 }
 

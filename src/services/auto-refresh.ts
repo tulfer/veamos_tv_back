@@ -1,6 +1,6 @@
 import { getAutoRefreshConfig, setAutoRefreshProviderLastRun, AutoRefreshConfig } from './data-store';
 import { tryAcquireLock } from './store';
-import { refreshProviderChannels } from '../modules/live-tv/controller';
+import { scheduleProviderRefresh } from '../modules/live-tv/controller';
 import { logger } from '../utils/logger';
 
 /**
@@ -69,9 +69,7 @@ async function tick(): Promise<void> {
       continue;
     }
     logger.info({ provider: entry.provider, intervalMinutes: entry.minutes }, 'auto-refresh: refresco automático por proveedor iniciado');
-    void refreshProviderChannels(entry.provider as never).catch((error: Error) => {
-      logger.error({ error: error?.message, provider: entry.provider }, 'auto-refresh: falló el refresco del proveedor');
-    });
+    scheduleProviderRefresh(entry.provider as never);
   }
 }
 
