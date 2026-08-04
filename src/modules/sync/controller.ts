@@ -1269,7 +1269,11 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
 @media(max-width:640px){.provider-row{grid-template-columns:auto 1fr auto}.provider-input{grid-column:2}.provider-last{grid-column:1 / -1}.provider-run{grid-column:3;grid-row:1 / span 2}}
 
 /* Migration card */
-.migration-section{margin-top:2rem}
+.migration-section{margin-top:0}
+.large-card-wrap{min-width:0}
+.section-toolbar{display:flex;align-items:center;gap:.55rem;margin-bottom:.7rem;color:#9292ad}
+.section-toolbar .drag-handle{font-size:1.05rem}
+.section-toolbar .section-title{font-size:1.05rem;font-weight:600;color:#a0a0c0;flex:1}
 .migration-card{background:rgba(255,255,255,.05);border-radius:12px;padding:1.2rem;
   backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.08);max-width:600px}
 .migration-card .bar{height:6px;background:rgba(255,255,255,.1);border-radius:3px;margin:.8rem 0;overflow:hidden}
@@ -1325,9 +1329,11 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
   <button class="btn btn-secondary btn-sm" onclick="unhideAllCards()">Mostrar todas</button>
 </div>
 
+<div class="card-wrap large-card-wrap" id="wrap-autoRefresh">
 <div class="migration-section">
   <h2 style="margin-bottom:1rem;font-size:1.2rem;color:#a0a0c0">⏱️ Refresh automático por proveedor</h2>
   <div class="migration-card">
+    <div class="section-toolbar"><span class="drag-handle" draggable="true" title="Arrastrar para reordenar">↕</span><span class="section-title">Refresh automático por proveedor</span><button class="card-hide-btn" id="hidebtn-autoRefresh" onclick="toggleCardHide('autoRefresh')" title="Ocultar tarjeta">🚫</button></div>
     <div class="card-header">
       <span class="badge" id="arBadge">${autoCfg.enabled ? '🟢' : '🔴'}</span>
       <span class="card-title">Refrescar canales automáticamente (por proveedor)</span>
@@ -1361,10 +1367,13 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
     </div>
   </div>
 </div>
+</div>
 
+<div class="card-wrap large-card-wrap" id="wrap-migrationFirestore">
 <div class="migration-section">
   <h2 style="margin-bottom:1rem;font-size:1.2rem;color:#a0a0c0">🚀 Migración a Firestore</h2>
   <div class="migration-card">
+    <div class="section-toolbar"><span class="drag-handle" draggable="true" title="Arrastrar para reordenar">↕</span><span class="section-title">Migración a Firestore</span><button class="card-hide-btn" id="hidebtn-migrationFirestore" onclick="toggleCardHide('migrationFirestore')" title="Ocultar tarjeta">🚫</button></div>
     <div class="card-header">
       <span class="badge">${migBadge}</span>
       <span class="card-title">Migración desde sync-data.json</span>
@@ -1385,10 +1394,13 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
     </div>
   </div>
 </div>
+</div>
 
+<div class="card-wrap large-card-wrap" id="wrap-migrationSupabase">
 <div class="migration-section">
   <h2 style="margin-bottom:1rem;font-size:1.2rem;color:#a0a0c0">🚚 Migrar Firestore a Supabase</h2>
   <div class="migration-card" id="smigCard">
+    <div class="section-toolbar"><span class="drag-handle" draggable="true" title="Arrastrar para reordenar">↕</span><span class="section-title">Migrar Firestore a Supabase</span><button class="card-hide-btn" id="hidebtn-migrationSupabase" onclick="toggleCardHide('migrationSupabase')" title="Ocultar tarjeta">🚫</button></div>
     <div class="card-header">
       <span class="badge" id="smigBadge">${fsBadge}</span>
       <span class="card-title">Desde Firestore hacia Supabase</span>
@@ -1409,7 +1421,8 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
 </div>
 
 <!-- Modal para páginas -->
-<div class="modal-overlay" id="pagesModal">
+ </div>
+   <div class="modal-overlay" id="pagesModal">
   <div class="modal">
     <button class="modal-close" onclick="closeModal()" title="Cerrar">✕</button>
     <h2 id="modalTitle">Parámetros</h2>
@@ -1474,6 +1487,8 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
 <!-- Sección: Agregar Canales (multi-ejecución) -->
 <div class="migration-section">
   <h2 style="margin-bottom:1rem;font-size:1.2rem;color:#a0a0c0">📡 Agregar Canales en Vivo</h2>
+  <div class="card-wrap large-card-wrap" id="wrap-addChannels">
+  <div class="section-toolbar"><span class="drag-handle" draggable="true" title="Arrastrar para reordenar">↕</span><span class="section-title">Agregar Canales en Vivo</span><button class="card-hide-btn" id="hidebtn-addChannels" onclick="toggleCardHide('addChannels')" title="Ocultar tarjeta">🚫</button></div>
   <div class="add-channel-card">
     <div class="add-channel-form">
       <div class="form-row">
@@ -1548,6 +1563,7 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
     </div>
     <div class="server-log" id="chServerLog"><div class="log-empty">Sin registros aún</div></div>
   </div>
+</div>
 </div>
 
 <style>
@@ -2331,6 +2347,18 @@ function saveCardLayout() {
 function applyCardLayout() {
   const grid = document.getElementById('dashboard');
   if (!grid) return;
+  // Las tarjetas grandes estaban fuera de la cuadrícula original. Las
+  // incorporamos aquí para que compartan el mismo orden y ocultamiento.
+  document.querySelectorAll('.large-card-wrap').forEach(function (w) {
+    const parent = w.parentElement;
+    if (parent && parent.classList.contains('migration-section')) {
+      while (parent.firstElementChild && parent.firstElementChild !== w) {
+        w.insertBefore(parent.firstElementChild, w.firstChild);
+      }
+      parent.replaceWith(w);
+    }
+    if (w.parentElement !== grid) grid.appendChild(w);
+  });
   const wraps = Array.prototype.slice.call(grid.children);
   const order = cardLayout.order.filter(function (k) {
     return wraps.some(function (w) { return w.id === 'wrap-' + k; });
@@ -2375,7 +2403,7 @@ function updateHiddenBar() {
     const wrap = document.getElementById('wrap-' + k);
     const titleEl = wrap ? wrap.querySelector('.card-title') : null;
     const label = titleEl && titleEl.textContent ? titleEl.textContent : k;
-    return '<a onclick="toggleCardHide(' + k + ')" title="Restaurar">' + label + '</a>';
+    return '<a onclick="toggleCardHide(\'' + k + '\')" title="Restaurar">' + label + '</a>';
   }).join('');
 }
 document.addEventListener('dragstart', function (e) {
