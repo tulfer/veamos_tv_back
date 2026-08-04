@@ -1132,9 +1132,10 @@ export async function refreshProviderChannels(providerName: RefreshProvider): Pr
     updateSyncProgress('refreshProvider', processed, `[${processed}/${totalToProcess}] ✅ ${ch.title || ch.id}`, totalToProcess);
   }
 
-  const removedJunk = dropJunkChannels(channels, 'refreshProvider');
-
-  if (updatedChannels.length > 0 || removedJunk > 0) {
+  // No ejecutar una limpieza global aquí. Este refresh solo debe actualizar
+  // los canales del proveedor solicitado; una respuesta temporal o inesperada
+  // de vertvcable no debe borrar canales recién agregados.
+  if (updatedChannels.length > 0) {
     pushLog('refreshProvider', `Guardando ${updatedChannels.length} canales actualizados en Supabase...`);
     await saveSyncData({ ...synced, channels, updatedAt: Date.now() });
     memoryCache.del('live:channels');
