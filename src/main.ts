@@ -21,6 +21,7 @@ import { proxyRoutes } from './modules/proxy/routes';
 import { playerRoutes } from './modules/player/routes';
 import { startAutoRefreshScheduler } from './services/auto-refresh';
 import { hydrateSyncState } from './services/sync-status';
+import { migrateProviderChannelIds } from './services/data-store';
 
 process.stderr.write('=== Veamos TV API starting ===\n');
 process.stderr.write(`Node version: ${process.version}\n`);
@@ -236,6 +237,8 @@ async function start() {
   try {
     process.stderr.write('start: verificando tabla store (Supabase)...\n');
     await ensureStoreTable();
+    process.stderr.write('start: migrando IDs de canales por proveedor...\n');
+    await migrateProviderChannelIds();
 
     process.stderr.write('start: restaurando estado y logs de sincronización...\n');
     await hydrateSyncState();

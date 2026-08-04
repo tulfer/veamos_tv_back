@@ -60,6 +60,7 @@ async function captureCookiesFromContext(context: any, url: string): Promise<str
 const CHATYTVGRATIS_BASE = 'https://www.chatytvgratis.net';
 const WSDEPORTES_BASE = 'https://wsdeportes.net';
 const TVPORINTERNET2_BASE = 'https://www.tvporinternet2.com';
+const TVENVIVO2_BASE = 'https://www.tvenvivo2.com';
 const SENALCOLOMBIA_BASE = 'https://www.senalcolombia.tv';
 const SENALCOLOMBIA_STREAM_FALLBACK = 'https://streaming.rtvc.gov.co/TV_Senal_Colombia_live/smil:live.smil/playlist.m3u8';
 
@@ -824,14 +825,14 @@ async function extractTvPorInternet2Http(url: string, logType?: string): Promise
   }
 }
 
-export async function getTvPorInternet2(slug: string, option?: string, logType?: string): Promise<LiveChannel | null> {
-  const cacheKey = `tvporinternet2:${slug}:${option || 'default'}`;
+export async function getTvPorInternet2(slug: string, option?: string, logType?: string, siteBase = TVPORINTERNET2_BASE, providerName = 'tvporinternet2'): Promise<LiveChannel | null> {
+  const cacheKey = `${providerName}:${slug}:${option || 'default'}`;
   const cached = memoryCache.get<LiveChannel>(cacheKey);
   if (cached) return cached;
 
   let browser: any = null;
   try {
-    const url = `${TVPORINTERNET2_BASE}/${slug}.php`;
+    const url = `${siteBase}/${slug}.php`;
     logger.info({ slug, url, option }, 'Fetching channel from tvporinternet2');
     elog(logType, `=== tvporinternet2: ${slug} ===`);
     elog(logType, `Consultando: ${url}`);
@@ -1163,6 +1164,10 @@ export async function getTvPorInternet2(slug: string, option?: string, logType?:
       await browser.close().catch(() => {});
     }
   }
+}
+
+export async function getTvenvivo2(slug: string, option?: string, logType?: string): Promise<LiveChannel | null> {
+  return getTvPorInternet2(slug, option, logType, TVENVIVO2_BASE, 'tvenvivo2');
 }
 
 const CABLEVISIONHD_BASE = 'https://www.cablevisionhd.com';
@@ -1923,7 +1928,7 @@ export async function getVertvCable(slug: string, option?: string, logType?: str
   return result;
 }
 
-export async function getChannelStream(source: 'chatytv' | 'wsdeportes' | 'tvporinternet2' | 'cablevisionhd' | 'senalcolombia' | 'vertvcable', parameter: string, option?: string, logType?: string): Promise<LiveChannel | null> {
+export async function getChannelStream(source: 'chatytv' | 'wsdeportes' | 'tvporinternet2' | 'tvenvivo2' | 'cablevisionhd' | 'senalcolombia' | 'vertvcable', parameter: string, option?: string, logType?: string): Promise<LiveChannel | null> {
   let result: LiveChannel | null = null;
   if (source === 'chatytv') {
     result = await getChatytv(parameter, logType);
@@ -1931,6 +1936,8 @@ export async function getChannelStream(source: 'chatytv' | 'wsdeportes' | 'tvpor
     result = await getWsDeportes(parameter, logType);
   } else if (source === 'tvporinternet2') {
     result = await getTvPorInternet2(parameter, option, logType);
+  } else if (source === 'tvenvivo2') {
+    result = await getTvenvivo2(parameter, option, logType);
   } else if (source === 'cablevisionhd') {
     result = await getCablevisionHd(parameter, option, logType);
   } else if (source === 'senalcolombia') {

@@ -13,6 +13,77 @@ const COUNTS_CACHE_TTL_MS = 5 * 60_000;
 const COUNTS_PER_KEY_PREFIX = 'sync:count:';
 const COUNTS_PER_KEY_TTL_MS = 60_000;
 
+const PROVIDER_ID_PREFIXES: Record<string, string> = {
+  wsdeportes: 'wsd',
+  cablevisionhd: 'cvh',
+  tvporinternet2: 'tpi2',
+  tvenvivo2: 'tve2',
+  chatytv: 'ctv',
+  senalcolombia: 'sc',
+  vertvcable: 'vtc',
+};
+
+export function getProviderChannelId(provider: string | undefined, slug: string): string {
+  const prefix = PROVIDER_ID_PREFIXES[provider || ''] || provider || 'live';
+  const safeSlug = slug.trim().replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '').toLowerCase();
+  return `live_${prefix}_${safeSlug || 'channel'}`;
+}
+
+function providerFromChannel(channel: LiveChannel): string | undefined {
+  if (channel.proveedor && PROVIDER_ID_PREFIXES[channel.proveedor]) return channel.proveedor;
+  const url = channel.refreshUrl || '';
+  if (url.includes('wsdeportes.net')) return 'wsdeportes';
+  if (url.includes('cablevisionhd.com')) return 'cablevisionhd';
+  if (url.includes('tvporinternet2.com')) return 'tvporinternet2';
+  if (url.includes('tvenvivo2.com')) return 'tvenvivo2';
+  if (url.includes('chatytvgratis.net')) return 'chatytv';
+  if (url.includes('senalcolombia.tv')) return 'senalcolombia';
+  if (url.includes('vertvcable.com')) return 'vertvcable';
+  return undefined;
+}
+
+function slugFromChannel(channel: LiveChannel): string {
+  try {
+    const parsed = new URL(channel.refreshUrl || '');
+    const querySlug = parsed.searchParams.get('v');
+    if (querySlug) return querySlug;
+    const path = parsed.pathname.split('/').filter(Boolean).pop() || '';
+    if (path) return path.replace(/\.php$/i, '');
+  } catch {
+    // Se usa el id legado como respaldo.
+  }
+  return channel.id.replace(/^live_/, '');
+}
+
+/** Migra IDs legacy live_<slug> a IDs con proveedor, evitando colisiones. */
+export async function migrateProviderChannelIds(): Promise<number> {
+  const channels = await loadCollection<LiveChannel>('channels');
+  const used = new Set<string>();
+  let changed = 0;
+  const migrated = channels.map((channel) => {
+    const provider = providerFromChannel(channel);
+    if (!provider || channel.id.startsWith(`live_${PROVIDER_ID_PREFIXES[provider]}_`)) {
+      used.add(channel.id);
+      return channel;
+    }
+    const baseId = getProviderChannelId(provider, slugFromChannel(channel));
+    let id = baseId;
+    let suffix = 2;
+    while (used.has(id)) id = `${baseId}_${suffix++}`;
+    used.add(id);
+    changed++;
+    return { ...channel, id, proveedor: channel.proveedor || provider };
+  });
+
+  if (changed > 0) {
+    await saveCollection('channels', migrated);
+    memoryCache.del(SYNC_DATA_CACHE_KEY);
+    memoryCache.del(CHANNELS_CACHE_KEY);
+    logger.info({ changed }, 'Provider-scoped channel IDs migrated');
+  }
+  return changed;
+}
+
 const COLLECTION_KEYS = [
   'movies',
   'series',

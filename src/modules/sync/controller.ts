@@ -1508,6 +1508,7 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
         <option value="vertvcable">vertvcable</option>
         <option value="cablevisionhd">cablevisionhd</option>
         <option value="tvporinternet2">tvporinternet2</option>
+        <option value="tvenvivo2">tvenvivo2</option>
         <option value="chatytv">chatytv</option>
         <option value="wsdeportes">wsdeportes</option>
         <option value="senalcolombia">senalcolombia</option>
@@ -1555,6 +1556,7 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
             <option value="chatytv">ChatyTV</option>
             <option value="wsdeportes">WsDeportes</option>
             <option value="tvporinternet2">TVporInternet2</option>
+            <option value="tvenvivo2">TVEnVivo2</option>
             <option value="cablevisionhd">CablevisionHD</option>
             <option value="senalcolombia">Señal Colombia</option>
             <option value="vertvcable">VerTvCable</option>
@@ -1676,6 +1678,11 @@ document.getElementById('chProvider').addEventListener('change', function() {
     document.getElementById('chParam').placeholder = 'ej: mcu-24-7-en-vivo';
     titleField.required = true;
     optionField.style.display = 'block';
+  } else if (provider === 'tvenvivo2') {
+    label.textContent = 'Slug (URL del canal)';
+    document.getElementById('chParam').placeholder = 'ej: canal-sony-en-vivo-por-internet';
+    titleField.required = true;
+    optionField.style.display = 'none';
   } else {
     label.textContent = 'Slug';
     document.getElementById('chParam').placeholder = 'ej: fox-sports-en-vivo';
@@ -1695,7 +1702,7 @@ async function addChannel() {
   const option = document.getElementById('chOption').value.trim();
 
   if (!param) { alert('Ingresa el parámetro del canal'); return; }
-  if ((provider === 'wsdeportes' || provider === 'tvporinternet2' || provider === 'cablevisionhd' || provider === 'senalcolombia' || provider === 'vertvcable') && !title) {
+  if ((provider === 'wsdeportes' || provider === 'tvporinternet2' || provider === 'tvenvivo2' || provider === 'cablevisionhd' || provider === 'senalcolombia' || provider === 'vertvcable') && !title) {
     alert('Ingresa el título del canal'); return;
   }
 
@@ -2276,7 +2283,7 @@ async function refreshStatus() {
 setInterval(refreshStatus, 3000);
 
 // Refresh automático por proveedor (programador in-app): estado y filas por proveedor
-const AR_PROVIDERS = ['wsdeportes', 'cablevisionhd', 'tvporinternet2', 'chatytv', 'senalcolombia', 'vertvcable'];
+const AR_PROVIDERS = ['wsdeportes', 'cablevisionhd', 'tvporinternet2', 'tvenvivo2', 'chatytv', 'senalcolombia', 'vertvcable'];
 function arFmtLast(ts) {
   if (!ts) return 'sin ejecutar';
   const d = new Date(ts);
