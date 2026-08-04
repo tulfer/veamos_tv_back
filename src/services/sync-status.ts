@@ -45,6 +45,21 @@ const defaultStatus: SyncJobStatus = { status: 'idle', lastRun: null };
 // Logs detallados por tipo de sincronización
 const logs: Record<string, string[]> = {};
 const LOG_MAX = 500;
+type SyncEvent =
+  | { type: 'status'; status: SyncState }
+  | { type: 'log'; syncType: string; message: string };
+const eventListeners = new Set<(event: SyncEvent) => void>();
+
+function emitSyncEvent(event: SyncEvent): void {
+  for (const listener of eventListeners) {
+    try { listener(event); } catch (error) { logger.warn({ error }, 'sync-status: listener failed'); }
+  }
+}
+
+export function subscribeSyncEvents(listener: (event: SyncEvent) => void): () => void {
+  eventListeners.add(listener);
+  return () => eventListeners.delete(listener);
+}
 
 // ── Persistencia en Supabase (store): el estado y los logs sobreviven
 //    refrescos de página y reinicios del proceso. ──
@@ -122,6 +137,7 @@ export function pushLog(type: string, message: string): void {
   if (!logs[type]) logs[type] = [];
   logs[type].push(`[${logTimestamp()}] ${message}`);
   if (logs[type].length > LOG_MAX) logs[type].splice(0, logs[type].length - LOG_MAX);
+  emitSyncEvent({ type: 'log', syncType: type, message: logs[type][logs[type].length - 1] });
   scheduleLogsPersist();
 }
 
@@ -160,12 +176,14 @@ const state: SyncState = {
 export function startSync(type: SyncType): boolean {
   if (state[type].status === 'running') return false;
   state[type] = { status: 'running', lastRun: Date.now(), duration: undefined, count: undefined, error: undefined, progress: undefined };
+  emitSyncEvent({ type: 'status', status: getSyncStatus() });
   return true;
 }
 
 export function updateSyncProgress(type: SyncType, current: number, message: string, total?: number): void {
   if (state[type].status === 'running') {
     state[type].progress = { current, total, message };
+    emitSyncEvent({ type: 'status', status: getSyncStatus() });
   }
 }
 
@@ -179,6 +197,7 @@ export function completeSync(type: SyncType, count?: number): void {
     progress: count !== undefined ? { current: count, message: count > 0 ? `${count} items procesados` : 'Completado sin datos' } : undefined,
     count,
   };
+  emitSyncEvent({ type: 'status', status: getSyncStatus() });
   void persistStateRow();
 }
 
@@ -191,6 +210,7 @@ export function failSync(type: SyncType, error: string): void {
     duration: started ? Date.now() - started : undefined,
     error,
   };
+  emitSyncEvent({ type: 'status', status: getSyncStatus() });
   void persistStateRow();
 }
 

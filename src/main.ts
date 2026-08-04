@@ -1,6 +1,8 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import sensible from '@fastify/sensible';
+import fastifyStatic from '@fastify/static';
+import path from 'node:path';
 import { env } from './config/env';
 import { logger } from './utils/logger';
 import { errorHandler } from './middleware/error';
@@ -59,6 +61,14 @@ async function buildServer() {
   } catch (e) {
     process.stderr.write(`Warning: sensible plugin failed to register: ${e}\n`);
   }
+
+  process.stderr.write('buildServer: registering dashboard assets...\n');
+  await app.register(fastifyStatic, {
+    root: path.join(process.cwd(), 'public/dashboard'),
+    prefix: '/dashboard-assets/',
+    decorateReply: false,
+  });
+  app.get('/sync/app', async (_request, reply) => reply.sendFile('index.html'));
 
   process.stderr.write('buildServer: registering authRoutes...\n');
   await app.register(authRoutes);

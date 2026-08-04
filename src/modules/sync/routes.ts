@@ -1,4 +1,5 @@
 import { FastifyInstance } from 'fastify';
+import { getSyncStatus, subscribeSyncEvents } from '../../services/sync-status';
 import {
   syncMoviesHandler,
   syncSeriesHandler,
@@ -29,6 +30,25 @@ import {
 } from './controller';
 
 export async function syncRoutes(app: FastifyInstance) {
+  app.get('/sync/events', async (request, reply) => {
+    reply.hijack();
+    const response = reply.raw;
+    response.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    const send = (payload: unknown) => response.write(`data: ${JSON.stringify(payload)}\n\n`);
+    send({ type: 'status', status: getSyncStatus() });
+    const unsubscribe = subscribeSyncEvents(send);
+    const heartbeat = setInterval(() => response.write(': heartbeat\n\n'), 15000);
+    request.raw.on('close', () => {
+      clearInterval(heartbeat);
+      unsubscribe();
+    });
+  });
+
   app.post('/sync/movies', syncMoviesHandler);
   app.post('/sync/series', syncSeriesHandler);
   app.post('/sync/all', syncAllHandler);
