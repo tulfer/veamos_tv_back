@@ -3,7 +3,7 @@ import { env } from '../../config/env';
 import { fetchLiveChannels, getChannelsByGroup, getChannelsByCountry, getChannelGroups } from '../../providers/live-tv';
 import { getChannelStream, isJunkStreamUrl } from '../../providers/custom-channels';
 import { getCachedOrFetch, memoryCache } from '../../cache';
-import { loadSyncData, saveSyncData, loadChannels } from '../../services/data-store';
+import { loadSyncData, saveSyncData, loadChannels, getCollectionCount } from '../../services/data-store';
 import { LiveChannel } from '../../types';
 import { logger } from '../../utils/logger';
 import { startSync, completeSync, failSync, updateSyncProgress, pushLog, clearLogs, getSyncStatus } from '../../services/sync-status';
@@ -320,6 +320,12 @@ export async function getChannelDetailHandler(request: FastifyRequest, reply: Fa
   }
 
   return reply.send(channel);
+}
+
+/** Conteo liviano para clientes que solo necesitan saber cuántos canales existen. */
+export async function getChannelsCountHandler(_request: FastifyRequest, reply: FastifyReply) {
+  const count = await getCollectionCount('channels');
+  return reply.send({ count: count ?? 0 });
 }
 
 export async function getGroupsHandler(_request: FastifyRequest, reply: FastifyReply) {
