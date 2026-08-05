@@ -600,6 +600,7 @@ async function syncGnulahdList(
           results.push({
             id: detail.id,
             title: detail.title,
+            type: kind === 'anime' ? 'anime' : undefined,
             poster: detail.poster || item.poster,
             backdrop: detail.backdrop || item.poster,
             rating: detail.rating,
@@ -636,6 +637,7 @@ async function syncGnulahdList(
     results.push({
       id: item.id,
       title: item.title,
+      type: kind === 'anime' ? 'anime' : undefined,
       poster: item.poster,
       rating: item.rating,
       year: item.year,

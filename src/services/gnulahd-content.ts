@@ -59,7 +59,7 @@ function mapGnulahdSeries(series: SyncSeries): ContentDetail {
     country: series.country,
     genres: series.genres || ['Drama', 'Action'],
     cast: series.cast || [{ name: 'Reparto Principal' }],
-    type: 'series',
+    type: series.id.startsWith('gani_') || series.type === 'anime' ? 'anime' : 'series',
     seasons: series.seasons,
     videos: series.videos,
     downloads: series.downloads,

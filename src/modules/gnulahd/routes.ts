@@ -25,7 +25,11 @@ async function homeWithLiveChannels() {
   };
   const sections = [...data.sections.filter(section => section.type !== 'live'), liveSection].map(section => ({
     ...section,
-    seeAllRoute: section.type === 'live' ? '/live/channels' : `/${section.type}`,
+    seeAllRoute: section.type === 'live'
+      ? '/v2/live/channels'
+      : section.type === 'anime'
+        ? '/v2/anime'
+        : `/${section.type}`,
     items: section.items.map(item => {
       const { backdrop, ...rest } = item;
       return { ...rest, poster: backdrop || item.poster, title2: backdrop };
@@ -54,7 +58,7 @@ function registerGnulahdPrefix(app: FastifyInstance, prefix: '/v2' | '/gnulahd')
       // El detalle queda persistido para /content, pero no se duplica en cada
       // respuesta de listado.
       const items = ((synced?.[collection] || []) as unknown as Array<Record<string, unknown>>)
-        .map((item) => normalizeGnulahdItemId(item as { id: string; type: 'movie' | 'series' | 'live' }) as Record<string, unknown>)
+        .map((item) => normalizeGnulahdItemId(item as { id: string; type: 'movie' | 'series' | 'anime' | 'live' }) as Record<string, unknown>)
         .map(({ content: _content, ...item }) => item);
       return reply.send(paginate(items, page, limit));
     });

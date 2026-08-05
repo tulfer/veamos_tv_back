@@ -84,24 +84,30 @@ function parseRating(text: string): number | undefined {
   return Number.isFinite(value) ? value : undefined;
 }
 
-function typeFromTitle(title: string): 'movie' | 'series' {
+type GnulahdMediaType = 'movie' | 'series' | 'anime';
+
+function typeFromTitle(title: string): GnulahdMediaType {
   const t = title.toLowerCase();
-  if (t.includes('anime') || t.includes('serie')) return 'series';
+  if (t.includes('anime')) return 'anime';
+  if (t.includes('serie')) return 'series';
   return 'movie';
 }
 
-function typeFromBadge($el: cheerio.Cheerio<AnyNode>, fallback: 'movie' | 'series'): 'movie' | 'series' {
+function typeFromBadge($el: cheerio.Cheerio<AnyNode>, fallback: GnulahdMediaType): GnulahdMediaType {
   const badge = $el.find('.gnrd-type-badge').first().text().trim().toLowerCase();
   if (!badge) return fallback;
-  if (badge.includes('anime') || badge.includes('serie')) return 'series';
+  if (badge.includes('anime')) return 'anime';
+  if (badge.includes('serie')) return 'series';
   return 'movie';
 }
 
 /** Corrige registros antiguos cuyo prefijo no coincide con el tipo real. */
-export function normalizeGnulahdItemId<T extends { id: string; type: 'movie' | 'series' | 'live' }>(item: T): T {
+export function normalizeGnulahdItemId<T extends { id: string; type: 'movie' | 'series' | 'anime' | 'live' }>(item: T): T {
   if (item.type === 'live') return item;
   const slug = item.id.replace(/^(?:gmov_|gser_|gani_)/, '');
-  const prefix = item.type === 'series'
+  const prefix = item.type === 'anime'
+    ? 'gani_'
+    : item.type === 'series'
     ? (item.id.startsWith('gani_') ? 'gani_' : 'gser_')
     : 'gmov_';
   const id = `${prefix}${slug}`;
@@ -112,7 +118,7 @@ export function normalizeGnulahdItemId<T extends { id: string; type: 'movie' | '
 function parseGnrdCard(
   $: cheerio.CheerioAPI,
   el: AnyNode,
-  opts: { type: 'movie' | 'series'; prefix: string },
+  opts: { type: GnulahdMediaType; prefix: string },
 ): MediaItem | null {
   const $el = $(el);
   const href = $el.attr('href') || '';
@@ -122,9 +128,7 @@ function parseGnrdCard(
   const type = typeFromBadge($el, opts.type);
   // El badge de la tarjeta tiene prioridad sobre el tipo de la sección:
   // algunas filas de GNULA mezclan películas y series.
-  const prefix = type === 'series'
-    ? (opts.prefix === 'gani_' ? 'gani_' : 'gser_')
-    : 'gmov_';
+  const prefix = type === 'anime' ? 'gani_' : type === 'series' ? 'gser_' : 'gmov_';
 
   const title = $el.attr('title')?.trim() || $el.find('.gnrd-card-title').first().text().trim();
   if (!title) return null;
@@ -219,15 +223,16 @@ function parseHeroSlide($: cheerio.CheerioAPI, el: AnyNode): BannerItem | null {
   if (!backdrop) return null;
 
   const eyebrow = $el.find('.gnrd-eyebrow').first().text().trim().toLowerCase();
-  const isSeries = eyebrow.includes('serie') || eyebrow.includes('anime') || $el.find('.gnrd-hero-logo').length === 0 && eyebrow.includes('anime');
-  const type: 'movie' | 'series' = isSeries ? 'series' : 'movie';
+  const isAnime = eyebrow.includes('anime');
+  const isSeries = eyebrow.includes('serie') || isAnime;
+  const type: 'movie' | 'series' | 'anime' = isAnime ? 'anime' : isSeries ? 'series' : 'movie';
 
   const title = $el.find('.gnrd-hero-logo').first().attr('alt')?.trim() || $el.find('.gnrd-hero-title').first().text().trim();
   if (!title) return null;
 
   const href = $el.find('a.gnrd-btn-play').first().attr('href') || '';
   const slug = extractSlug(href) || slugify(title);
-  const prefix = type === 'movie' ? 'gmov_' : 'gser_';
+  const prefix = type === 'anime' ? 'gani_' : type === 'movie' ? 'gmov_' : 'gser_';
 
   const rating = parseRating($el.find('.gnrd-m-rating').first().text());
   const metaSpans = $el
@@ -262,12 +267,13 @@ function parseHomeRow($: cheerio.CheerioAPI, el: AnyNode): Section | null {
   const title = $el.find('.gnrd-row-head h2').first().text().trim();
   if (!title) return null;
 
-  const sectionType: 'movies' | 'series' = typeFromTitle(title) === 'series' ? 'series' : 'movies';
-  const prefix = typeFromTitle(title) === 'series' ? 'gser_' : 'gmov_';
+  const titleType = typeFromTitle(title);
+  const sectionType: 'movies' | 'series' | 'anime' = titleType === 'anime' ? 'anime' : titleType === 'series' ? 'series' : 'movies';
+  const prefix = titleType === 'anime' ? 'gani_' : titleType === 'series' ? 'gser_' : 'gmov_';
 
   const items: MediaItem[] = [];
   $el.find('.gnrd-rail > a.gnrd-card').each((_, card) => {
-    const item = parseGnrdCard($, card, { type: typeFromTitle(title), prefix });
+    const item = parseGnrdCard($, card, { type: titleType, prefix });
     if (item) items.push(item);
   });
   if (items.length === 0) return null;
@@ -332,7 +338,7 @@ export async function scrapeGnulahdList(
   const html = await fetchGnulahdHTML(url);
   const $ = cheerio.load(html);
 
-  const type: 'movie' | 'series' = kind === 'peliculas' ? 'movie' : 'series';
+  const type: GnulahdMediaType = kind === 'peliculas' ? 'movie' : kind === 'anime' ? 'anime' : 'series';
   const prefix = kind === 'peliculas' ? 'gmov_' : kind === 'series' ? 'gser_' : 'gani_';
 
   const items: MediaItem[] = [];
@@ -373,7 +379,7 @@ export async function searchGnulahd(query: string): Promise<{ items: MediaItem[]
     const isAnime = badge.includes('anime');
     const isSeries = badge.includes('serie') || isAnime;
     const item = parseGnrdCard($, el, {
-      type: isSeries ? 'series' : 'movie',
+      type: isAnime ? 'anime' : isSeries ? 'series' : 'movie',
       prefix: isAnime ? 'gani_' : isSeries ? 'gser_' : 'gmov_',
     });
     if (item) items.push(item);
@@ -517,7 +523,7 @@ export async function scrapeGnulahdDetail(id: string): Promise<ContentDetail | n
     country,
     genres: genres.length > 0 ? genres : ['Acción'],
     cast: cast.length > 0 ? cast : [{ name: 'Reparto Principal' }],
-    type: isSeries ? 'series' : 'movie',
+    type: prefix === 'gani_' ? 'anime' : isSeries ? 'series' : 'movie',
   };
 
   const vars = extractPlayerVars(html);

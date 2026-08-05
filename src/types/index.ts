@@ -6,7 +6,7 @@ export interface MediaItem {
   backdrop?: string;
   rating?: number;
   year?: number;
-  type: 'movie' | 'series' | 'live';
+  type: 'movie' | 'series' | 'anime' | 'live';
   genres?: string[];
 }
 
@@ -16,7 +16,7 @@ export interface BannerItem extends MediaItem {
 
 export interface Section {
   title: string;
-  type: 'movies' | 'series' | 'live';
+  type: 'movies' | 'series' | 'anime' | 'live';
   items: MediaItem[];
   seeAllRoute: string;
   totalItems: number;
@@ -88,7 +88,7 @@ export interface ContentDetail {
   video?: VideoInfo;
   videos?: VideoLanguage[];
   downloads?: DownloadLink[];
-  type: 'movie' | 'series' | 'live';
+  type: 'movie' | 'series' | 'anime' | 'live';
   seasons?: Season[];
 }
 
@@ -195,6 +195,7 @@ export interface SyncSeries {
   seasons?: Season[];
   videos?: VideoLanguage[];
   downloads?: DownloadLink[];
+  type?: 'anime';
   /** Detalle completo cacheado por los sync de GNULA HD. */
   content?: ContentDetail;
 }
