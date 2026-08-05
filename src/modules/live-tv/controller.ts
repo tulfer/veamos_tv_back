@@ -6,7 +6,7 @@ import { getCachedOrFetch, memoryCache } from '../../cache';
 import { loadSyncData, saveSyncData, loadChannels, getCollectionCount, getProviderChannelId } from '../../services/data-store';
 import { LiveChannel, SyncData } from '../../types';
 import { logger } from '../../utils/logger';
-import { startSync, completeSync, failSync, updateSyncProgress, pushLog, clearLogs, getSyncStatus, runWithSyncContext } from '../../services/sync-status';
+import { startSync, completeSync, failSync, updateSyncProgress, pushLog, clearLogs, getSyncStatus, runWithSyncContext, emitSyncEvent } from '../../services/sync-status';
 import { fetchHTML, fetchHTMLWithReferer, httpClient } from '../../utils/http';
 import { buildProxyUrl } from '../../utils/proxy-url';
 import { verifyCookies } from '../../utils/cookie-token';
@@ -943,10 +943,12 @@ const runningProviderRefreshes = new Set<RefreshProvider>();
 const queuedProviderRefreshes = new Set<RefreshProvider>();
 const CHANNEL_REFRESH_CONCURRENCY = 4;
 
-export function getProviderRefreshQueueStatus(): { active: boolean; queued: RefreshProvider[] } {
+export function getProviderRefreshQueueStatus(): { active: boolean; queued: RefreshProvider[]; activeProviders: RefreshProvider[]; activeCount: number } {
   return {
     active: runningProviderRefreshes.size > 0,
     queued: Array.from(queuedProviderRefreshes),
+    activeProviders: Array.from(runningProviderRefreshes),
+    activeCount: runningProviderRefreshes.size,
   };
 }
 
@@ -956,6 +958,7 @@ export function scheduleProviderRefresh(providerName: RefreshProvider): { queued
     return { queued: true };
   }
   runningProviderRefreshes.add(providerName);
+  emitSyncEvent({ type: 'provider-status', provider: providerName, running: true, active: runningProviderRefreshes.size });
   void refreshProviderChannels(providerName)
     .catch((error: Error) => {
       pushLog('refreshProvider', `❌ Error inesperado: ${error?.message || error}`);
@@ -963,6 +966,7 @@ export function scheduleProviderRefresh(providerName: RefreshProvider): { queued
     })
     .finally(() => {
       runningProviderRefreshes.delete(providerName);
+      emitSyncEvent({ type: 'provider-status', provider: providerName, running: false, active: runningProviderRefreshes.size });
       if (queuedProviderRefreshes.delete(providerName)) scheduleProviderRefresh(providerName);
     });
   return { queued: false };

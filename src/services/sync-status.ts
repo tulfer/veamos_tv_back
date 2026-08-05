@@ -48,7 +48,8 @@ const logs: Record<string, string[]> = {};
 const LOG_MAX = 500;
 type SyncEvent =
   | { type: 'status'; status: SyncState }
-  | { type: 'log'; syncType: string; message: string; provider?: string; threadId?: string };
+  | { type: 'log'; syncType: string; message: string; provider?: string; threadId?: string }
+  | { type: 'provider-status'; provider: string; running: boolean; active: number };
 const eventListeners = new Set<(event: SyncEvent) => void>();
 const syncContext = new AsyncLocalStorage<{ provider?: string; threadId?: string }>();
 
@@ -56,7 +57,7 @@ export function runWithSyncContext<T>(context: { provider?: string; threadId?: s
   return syncContext.run(context, callback);
 }
 
-function emitSyncEvent(event: SyncEvent): void {
+export function emitSyncEvent(event: SyncEvent): void {
   for (const listener of eventListeners) {
     try { listener(event); } catch (error) { logger.warn({ error }, 'sync-status: listener failed'); }
   }
