@@ -202,6 +202,7 @@ const state: SyncState = {
 export function startSync(type: SyncType): boolean {
   if (state[type].status === 'running' && type !== 'refreshProvider') return false;
   state[type] = { status: 'running', lastRun: Date.now(), duration: undefined, count: undefined, error: undefined, progress: undefined };
+  pushLog(type, '▶ Ejecución iniciada');
   emitSyncEvent({ type: 'status', status: getSyncStatus() });
   return true;
 }
@@ -209,6 +210,7 @@ export function startSync(type: SyncType): boolean {
 export function updateSyncProgress(type: SyncType, current: number, message: string, total?: number): void {
   if (state[type].status === 'running') {
     state[type].progress = { current, total, message };
+    pushLog(type, message);
     emitSyncEvent({ type: 'status', status: getSyncStatus() });
   }
 }
@@ -223,6 +225,7 @@ export function completeSync(type: SyncType, count?: number): void {
     progress: count !== undefined ? { current: count, message: count > 0 ? `${count} items procesados` : 'Completado sin datos' } : undefined,
     count,
   };
+  pushLog(type, `✅ Ejecución completada${count !== undefined ? `: ${count} items` : ''}`);
   emitSyncEvent({ type: 'status', status: getSyncStatus() });
   void persistStateRow();
 }
@@ -236,6 +239,7 @@ export function failSync(type: SyncType, error: string): void {
     duration: started ? Date.now() - started : undefined,
     error,
   };
+  pushLog(type, `❌ Ejecución fallida: ${error}`);
   emitSyncEvent({ type: 'status', status: getSyncStatus() });
   void persistStateRow();
 }

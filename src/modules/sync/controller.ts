@@ -11,7 +11,7 @@ import { fetchHTML } from '../../utils/http';
 import { logger } from '../../utils/logger';
 import { memoryCache } from '../../cache/memory';
 import { SyncMovie, SyncSeries, SyncData, LiveChannel } from '../../types';
-import { startSync, completeSync, failSync, updateSyncProgress, getLogs, clearLogs, SyncType, getSyncStatus } from '../../services/sync-status';
+import { startSync, completeSync, failSync, updateSyncProgress, getLogs, clearLogs, pushLog, SyncType, getSyncStatus } from '../../services/sync-status';
 import { firestoreMigrationStatus, getFirestoreMigrationStatus, runFirestoreToSupabase, FirestoreMigrationStatus } from '../../services/firestore-migrate';
 import { REFRESH_PROVIDERS, getProviderRefreshQueueStatus } from '../live-tv/controller';
 import { AutoRefreshConfig } from '../../services/data-store';
@@ -193,6 +193,7 @@ async function runBackgroundSync(
 ): Promise<void> {
   memoryCache.flush();
   try {
+    pushLog(type, '⏳ Procesando en segundo plano...');
     const count = await fn();
     completeSync(type, count);
   } catch (error: any) {
@@ -1216,6 +1217,7 @@ function generateSyncDashboard(
         <div class="progress-row" id="prog-${def.key}" ${isRunning && prog ? '' : 'style="display:none"'}>
           <span class="progress-msg">${isRunning && prog ? prog.message : ''}</span>
         </div>
+        <div class="card-log" id="log-${def.key}"><div class="card-log-empty">Sin registros aún</div></div>
       </div>
       <div class="card-actions">
         <button class="btn btn-primary btn-sm" onclick="runSync('${def.key}','${def.route}','${def.method}','${def.needsId ? 'id' : def.needsJson ? 'json' : def.needsPages ? 'pages' : def.needsProvider ? 'provider' : ''}')" ${isRunning ? 'disabled' : ''}>
@@ -1297,6 +1299,10 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
 .card-row .error{color:#f87171}
 .progress-row{padding:.4rem 0}
 .progress-msg{display:block;font-size:.82rem;color:#fbbf24;background:rgba(251,191,36,.1);padding:.3rem .6rem;border-radius:4px;text-align:center}
+.card-log{margin-top:.6rem;max-height:130px;overflow-y:auto;background:rgba(0,0,0,.2);border:1px solid rgba(255,255,255,.06);border-radius:6px;padding:.45rem;font-family:'Courier New',monospace;font-size:.7rem;line-height:1.35;color:#aeb0c8;white-space:pre-wrap;word-break:break-word}
+.card-log-empty{color:#666;text-align:center;font-family:inherit}
+.card-log-line{padding:.08rem 0;border-bottom:1px solid rgba(255,255,255,.035)}
+.card-log-line:last-child{border-bottom:none}
 .card-actions{display:flex;gap:.5rem;flex-wrap:wrap}
 .btn{padding:.5rem 1rem;border-radius:6px;border:none;cursor:pointer;font-size:.85rem;font-weight:600;transition:opacity .2s}
 .btn:hover{opacity:.85}
@@ -2286,10 +2292,29 @@ async function refreshStatus() {
           errorRow.remove();
         }
       }
+      await refreshCardLogs(Object.keys(data));
     }
   } catch {}
 }
 setInterval(refreshStatus, 3000);
+
+async function refreshCardLogs(keys) {
+  await Promise.all(keys.map(async function (key) {
+    const log = document.getElementById('log-' + key);
+    if (!log) return;
+    try {
+      const res = await fetch('/sync/detail/' + encodeURIComponent(key));
+      if (!res.ok) return;
+      const lines = await res.json();
+      const recent = Array.isArray(lines) ? lines.slice(-12) : [];
+      log.innerHTML = recent.length
+        ? recent.map(function (line) { return '<div class="card-log-line">' + String(line).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</div>'; }).join('')
+        : '<div class="card-log-empty">Sin registros aún</div>';
+      log.scrollTop = log.scrollHeight;
+    } catch {}
+  }));
+}
+refreshStatus();
 
 // Refresh automático por proveedor (programador in-app): estado y filas por proveedor
 const AR_PROVIDERS = ['wsdeportes', 'cablevisionhd', 'tvporinternet2', 'tvenvivo2', 'chatytv', 'senalcolombia', 'vertvcable'];
