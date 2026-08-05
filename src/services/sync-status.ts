@@ -1,5 +1,6 @@
 import { getRow, setRow, storeKeys } from './store';
 import { logger } from '../utils/logger';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 export type SyncType =
   | 'movies'
@@ -47,8 +48,13 @@ const logs: Record<string, string[]> = {};
 const LOG_MAX = 500;
 type SyncEvent =
   | { type: 'status'; status: SyncState }
-  | { type: 'log'; syncType: string; message: string };
+  | { type: 'log'; syncType: string; message: string; provider?: string; threadId?: string };
 const eventListeners = new Set<(event: SyncEvent) => void>();
+const syncContext = new AsyncLocalStorage<{ provider?: string; threadId?: string }>();
+
+export function runWithSyncContext<T>(context: { provider?: string; threadId?: string }, callback: () => Promise<T>): Promise<T> {
+  return syncContext.run(context, callback);
+}
 
 function emitSyncEvent(event: SyncEvent): void {
   for (const listener of eventListeners) {
@@ -134,15 +140,27 @@ function logTimestamp(): string {
 }
 
 export function pushLog(type: string, message: string): void {
+  const context = syncContext.getStore();
+  const line = `[${logTimestamp()}] ${message}`;
   if (!logs[type]) logs[type] = [];
-  logs[type].push(`[${logTimestamp()}] ${message}`);
+  logs[type].push(line);
   if (logs[type].length > LOG_MAX) logs[type].splice(0, logs[type].length - LOG_MAX);
-  emitSyncEvent({ type: 'log', syncType: type, message: logs[type][logs[type].length - 1] });
+  if (context?.provider && context.threadId) {
+    const scopedType = `${type}:${context.provider}:${context.threadId}`;
+    if (!logs[scopedType]) logs[scopedType] = [];
+    logs[scopedType].push(line);
+    if (logs[scopedType].length > LOG_MAX) logs[scopedType].splice(0, logs[scopedType].length - LOG_MAX);
+  }
+  emitSyncEvent({ type: 'log', syncType: type, message: line, provider: context?.provider, threadId: context?.threadId });
   scheduleLogsPersist();
 }
 
 export function getLogs(type: string): string[] {
   return logs[type] || [];
+}
+
+export function getLogsByPrefix(prefix: string): Record<string, string[]> {
+  return Object.fromEntries(Object.entries(logs).filter(([key]) => key.startsWith(prefix)).map(([key, lines]) => [key, [...lines]]));
 }
 
 export function clearLogs(type: string): void {

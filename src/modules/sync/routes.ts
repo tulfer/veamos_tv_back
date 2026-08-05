@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { getSyncStatus, subscribeSyncEvents } from '../../services/sync-status';
+import { getSyncStatus, subscribeSyncEvents, getLogsByPrefix } from '../../services/sync-status';
 import {
   syncMoviesHandler,
   syncSeriesHandler,
@@ -48,6 +48,7 @@ export async function syncRoutes(app: FastifyInstance) {
       unsubscribe();
     });
   });
+  app.get('/sync/provider-logs', async (_request, reply) => reply.send(getLogsByPrefix('refreshProvider:')));
 
   app.post('/sync/movies', syncMoviesHandler);
   app.post('/sync/series', syncSeriesHandler);
