@@ -21,3 +21,9 @@
 .thread-tabs button.ok{border-color:#2f8f6b}
 .thread-state{display:inline-flex;margin-left:6px;width:17px;height:17px;align-items:center;justify-content:center;border-radius:50%;font-size:11px;font-weight:800;background:#1d7655;color:#8effc3}
 .thread-tabs button.failed .thread-state{background:#ff596b;color:#fff}
+.refresh-one-log-card{margin-top:18px}
+.one-log-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
+.one-log-head>div{display:grid;gap:5px;min-width:0}
+.one-log-head span{color:#8d95b7}
+.one-log-body{max-height:230px;overflow:auto;overflow-wrap:anywhere;word-break:break-word;background:#080d1b;border:1px solid #ffffff10;border-radius:9px;padding:11px;color:#8be4b7;font:11px ui-monospace,SFMono-Regular,monospace;display:grid;gap:5px}
+.one-log-body>span{color:#858eaf;font-family:inherit}
