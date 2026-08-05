@@ -97,6 +97,17 @@ function typeFromBadge($el: cheerio.Cheerio<AnyNode>, fallback: 'movie' | 'serie
   return 'movie';
 }
 
+/** Corrige registros antiguos cuyo prefijo no coincide con el tipo real. */
+export function normalizeGnulahdItemId<T extends { id: string; type: 'movie' | 'series' | 'live' }>(item: T): T {
+  if (item.type === 'live') return item;
+  const slug = item.id.replace(/^(?:gmov_|gser_|gani_)/, '');
+  const prefix = item.type === 'series'
+    ? (item.id.startsWith('gani_') ? 'gani_' : 'gser_')
+    : 'gmov_';
+  const id = `${prefix}${slug}`;
+  return id === item.id ? item : { ...item, id };
+}
+
 /** Card de listado/fila: `a.gnrd-card` con `.gnrd-card-art img`, rating, langs, etc. */
 function parseGnrdCard(
   $: cheerio.CheerioAPI,
@@ -109,7 +120,11 @@ function parseGnrdCard(
   if (!slug) return null;
 
   const type = typeFromBadge($el, opts.type);
-  const prefix = type === 'series' && opts.prefix === 'gani_' ? 'gani_' : opts.prefix;
+  // El badge de la tarjeta tiene prioridad sobre el tipo de la sección:
+  // algunas filas de GNULA mezclan películas y series.
+  const prefix = type === 'series'
+    ? (opts.prefix === 'gani_' ? 'gani_' : 'gser_')
+    : 'gmov_';
 
   const title = $el.attr('title')?.trim() || $el.find('.gnrd-card-title').first().text().trim();
   if (!title) return null;
@@ -291,7 +306,16 @@ export async function saveGnulahdHomeData(data: GnulahdHomeData): Promise<void> 
 }
 
 export async function loadGnulahdHomeData(): Promise<GnulahdHomeData | null> {
-  return getRow<GnulahdHomeData>(storeKeys.gnulahdHome);
+  const data = await getRow<GnulahdHomeData>(storeKeys.gnulahdHome);
+  if (!data) return null;
+  return {
+    ...data,
+    banners: data.banners.map(normalizeGnulahdItemId),
+    sections: data.sections.map((section) => ({
+      ...section,
+      items: section.items.map(normalizeGnulahdItemId),
+    })),
+  };
 }
 
 // ---- Listados ----

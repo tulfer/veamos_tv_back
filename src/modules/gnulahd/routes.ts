@@ -1,6 +1,6 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { loadSyncData, loadChannels } from '../../services/data-store';
-import { loadGnulahdHomeData, scrapeGnulahdList, searchGnulahd } from '../../providers/gnulahd';
+import { loadGnulahdHomeData, normalizeGnulahdItemId, scrapeGnulahdList, searchGnulahd } from '../../providers/gnulahd';
 import { getGnulahdDetailContent } from '../../services/gnulahd-content';
 import { unwrapDetailProxy } from '../../services/content-detail';
 import { getChannelsHandler } from '../live-tv/controller';
@@ -53,7 +53,9 @@ function registerGnulahdPrefix(app: FastifyInstance, prefix: '/v2' | '/gnulahd')
       const limit = Math.min(60, Math.max(1, parseInt(query.limit || String(PAGE_SIZE), 10) || PAGE_SIZE));
       // El detalle queda persistido para /content, pero no se duplica en cada
       // respuesta de listado.
-      const items = ((synced?.[collection] || []) as unknown as Array<Record<string, unknown>>).map(({ content: _content, ...item }) => item);
+      const items = ((synced?.[collection] || []) as unknown as Array<Record<string, unknown>>)
+        .map((item) => normalizeGnulahdItemId(item as { id: string; type: 'movie' | 'series' | 'live' }) as Record<string, unknown>)
+        .map(({ content: _content, ...item }) => item);
       return reply.send(paginate(items, page, limit));
     });
   }
