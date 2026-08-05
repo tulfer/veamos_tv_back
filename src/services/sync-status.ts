@@ -169,6 +169,13 @@ export function clearLogs(type: string): void {
   scheduleLogsPersist();
 }
 
+export function clearLogsByPrefix(prefix: string): void {
+  for (const key of Object.keys(logs)) {
+    if (key.startsWith(prefix)) delete logs[key];
+  }
+  scheduleLogsPersist();
+}
+
 const state: SyncState = {
   movies: { ...defaultStatus },
   series: { ...defaultStatus },

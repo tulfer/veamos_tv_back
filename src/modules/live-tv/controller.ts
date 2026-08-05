@@ -6,7 +6,7 @@ import { getCachedOrFetch, memoryCache } from '../../cache';
 import { loadSyncData, saveSyncData, loadChannels, getCollectionCount, getProviderChannelId } from '../../services/data-store';
 import { LiveChannel, SyncData } from '../../types';
 import { logger } from '../../utils/logger';
-import { startSync, completeSync, failSync, updateSyncProgress, pushLog, clearLogs, getSyncStatus, runWithSyncContext, emitSyncEvent } from '../../services/sync-status';
+import { startSync, completeSync, failSync, updateSyncProgress, pushLog, clearLogs, clearLogsByPrefix, getSyncStatus, runWithSyncContext, emitSyncEvent } from '../../services/sync-status';
 import { fetchHTML, fetchHTMLWithReferer, httpClient } from '../../utils/http';
 import { buildProxyUrl } from '../../utils/proxy-url';
 import { verifyCookies } from '../../utils/cookie-token';
@@ -999,7 +999,15 @@ export async function refreshByProviderHandler(request: FastifyRequest, reply: F
 /** Lógica de refresh por proveedor (usada por el endpoint y por el auto-refresh). */
 export async function refreshProviderChannels(providerName: RefreshProvider, selectedChannels?: LiveChannel[]): Promise<void> {
   const threadId = `${providerName}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-  return runWithSyncContext({ provider: providerName, threadId }, () => refreshProviderChannelsWorker(providerName, selectedChannels));
+  return runWithSyncContext({ provider: providerName, threadId }, async () => {
+    if (!selectedChannels) {
+      startSync('refreshProvider');
+      clearLogs('refreshProvider');
+      clearLogsByPrefix('refreshProvider:');
+      pushLog('refreshProvider', `=== Iniciando refresh de canales del proveedor: ${providerName} ===`);
+    }
+    return refreshProviderChannelsWorker(providerName, selectedChannels);
+  });
 }
 
 async function refreshProviderChannelsWorker(providerName: RefreshProvider, selectedChannels?: LiveChannel[]): Promise<void> {
@@ -1009,14 +1017,6 @@ async function refreshProviderChannelsWorker(providerName: RefreshProvider, sele
     failSync('refreshProvider', 'No sync data found');
     return;
   }
-
-  if (!startSync('refreshProvider')) {
-    pushLog('refreshProvider', '⏭ Refresh por proveedor ya en curso, omitiendo');
-    return;
-  }
-
-  clearLogs('refreshProvider');
-  pushLog('refreshProvider', `=== Iniciando refresh de canales del proveedor: ${providerName} ===`);
 
   const channels = synced.channels;
   const providerChannels = selectedChannels || channels.filter((ch) =>
