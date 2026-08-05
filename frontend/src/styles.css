@@ -27,3 +27,4 @@
 .one-log-head span{color:#8d95b7}
 .one-log-body{max-height:230px;overflow:auto;overflow-wrap:anywhere;word-break:break-word;background:#080d1b;border:1px solid #ffffff10;border-radius:9px;padding:11px;color:#8be4b7;font:11px ui-monospace,SFMono-Regular,monospace;display:grid;gap:5px}
 .one-log-body>span{color:#858eaf;font-family:inherit}
+ .process-log{flex-basis:100%;max-height:150px;overflow:auto;background:#080d1b;border:1px solid #ffffff10;border-radius:8px;padding:9px;color:#8be4b7;font:11px ui-monospace,SFMono-Regular,monospace;white-space:pre-wrap;word-break:break-word;display:grid;gap:4px}.process-log span{color:#858eaf}
