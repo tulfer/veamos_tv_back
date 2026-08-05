@@ -16,3 +16,8 @@
 .provider-row .run-button:disabled{opacity:.5;cursor:not-allowed;transform:none}
 .dot:not(.active){background:#ff596b;box-shadow:0 0 10px #ff596b}
 @media(max-width:700px){.process-actions small{white-space:normal}.provider-row{grid-template-columns:9px minmax(80px,1fr) 28px 64px 38px}.provider-row .interval{padding-inline:6px}}
+.thread-tabs button.failed{border-color:#ff596b;background:#4a202c;color:#ff9ba4}
+.thread-tabs button.failed.active{background:#b5334c;color:#fff}
+.thread-tabs button.ok{border-color:#2f8f6b}
+.thread-state{display:inline-flex;margin-left:6px;width:17px;height:17px;align-items:center;justify-content:center;border-radius:50%;font-size:11px;font-weight:800;background:#1d7655;color:#8effc3}
+.thread-tabs button.failed .thread-state{background:#ff596b;color:#fff}
