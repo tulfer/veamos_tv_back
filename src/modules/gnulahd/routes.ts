@@ -51,7 +51,10 @@ function registerGnulahdPrefix(app: FastifyInstance, prefix: '/v2' | '/gnulahd')
       const query = request.query as { page?: string; limit?: string };
       const page = Math.max(1, parseInt(query.page || '1', 10) || 1);
       const limit = Math.min(60, Math.max(1, parseInt(query.limit || String(PAGE_SIZE), 10) || PAGE_SIZE));
-      return reply.send(paginate((synced?.[collection] || []) as unknown[], page, limit));
+      // El detalle queda persistido para /content, pero no se duplica en cada
+      // respuesta de listado.
+      const items = ((synced?.[collection] || []) as unknown as Array<Record<string, unknown>>).map(({ content: _content, ...item }) => item);
+      return reply.send(paginate(items, page, limit));
     });
   }
 

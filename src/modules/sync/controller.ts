@@ -656,8 +656,12 @@ export async function syncGnulahdHomeHandler(_request: FastifyRequest, reply: Fa
   runBackgroundSync('gnulahdHome', async () => {
     updateSyncProgress('gnulahdHome', 0, 'Scrapeando home de gnulahd.nu...');
     const { scrapeGnulahdHome, saveGnulahdHomeData } = await import('../../providers/gnulahd');
+    const { prefetchGnulahdDetails } = await import('../../services/gnulahd-content');
     const data = await scrapeGnulahdHome();
-    updateSyncProgress('gnulahdHome', 1, 'Guardando datos...');
+    const ids = [...data.banners, ...data.sections.flatMap((section) => section.items)].map((item) => item.id);
+    updateSyncProgress('gnulahdHome', 0, `${ids.length} ítems encontrados, obteniendo contenidos...`);
+    const cached = await prefetchGnulahdDetails(ids);
+    updateSyncProgress('gnulahdHome', cached, `${cached}/${ids.length} contenidos guardados, guardando home...`);
     await saveGnulahdHomeData(data);
     const count = data.banners.length + data.sections.length;
     updateSyncProgress('gnulahdHome', count, `${count} banners/secciones guardadas`);
@@ -685,6 +689,9 @@ async function syncGnulahdByKindHandler(
 
   runBackgroundSync(type, async () => {
     const items = await syncGnulahdList(kind, pages, type);
+    const { prefetchGnulahdDetails } = await import('../../services/gnulahd-content');
+    const cached = await prefetchGnulahdDetails(items.map((item) => item.id));
+    updateSyncProgress(type, cached, `${cached}/${items.length} contenidos guardados`);
     const existing = await loadSyncData();
     const shouldReplace = body?.replace === true;
     const current = (existing && existing[field]) || [];

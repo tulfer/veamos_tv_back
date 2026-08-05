@@ -177,6 +177,8 @@ export interface SyncMovie {
   country?: string;
   videos?: VideoLanguage[];
   downloads?: DownloadLink[];
+  /** Detalle completo cacheado por los sync de GNULA HD. */
+  content?: ContentDetail;
 }
 
 export interface SyncSeries {
@@ -193,6 +195,8 @@ export interface SyncSeries {
   seasons?: Season[];
   videos?: VideoLanguage[];
   downloads?: DownloadLink[];
+  /** Detalle completo cacheado por los sync de GNULA HD. */
+  content?: ContentDetail;
 }
 
 export interface SyncData {

@@ -408,6 +408,18 @@ export async function upsertItemByCol<T extends { id: string }>(collection: stri
   await setRow(storeKeys.collection(collection), items);
 }
 
+/** Actualiza varios documentos en una sola lectura/escritura de la colección. */
+export async function upsertItemsByCol<T extends { id: string }>(collection: string, newItems: T[]): Promise<void> {
+  if (newItems.length === 0) return;
+  const items = await loadCollection<T>(collection);
+  const byId = new Map(items.map((item) => [item.id, item]));
+  for (const item of newItems) {
+    const { id, ...data } = item;
+    byId.set(id, { id, ...stripUndefined(data) } as T);
+  }
+  await setRow(storeKeys.collection(collection), Array.from(byId.values()));
+}
+
 export async function loadHomeData<T = unknown>(): Promise<T | null> {
   try {
     return await getRow<T>(storeKeys.home);
