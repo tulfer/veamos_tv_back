@@ -577,6 +577,7 @@ async function syncGnulahdList(
   onItem?: (item: SyncMovie | SyncSeries) => Promise<void>,
 ): Promise<SyncMovie[] | SyncSeries[]> {
   const { scrapeGnulahdList, scrapeGnulahdDetail } = await import('../../providers/gnulahd');
+  const { enrichGnulahdDetail } = await import('../../services/gnulahd-content');
   const isSeries = kind !== 'peliculas';
 
   const allItems: { id: string; title: string; poster?: string; rating?: number; year?: number }[] = [];
@@ -596,7 +597,10 @@ async function syncGnulahdList(
   await processBatch(allItems, async (item) => {
     const slug = item.id.replace(/^g(?:mov|ser|ani)_/, '');
     try {
-      const detail = await scrapeGnulahdDetail(item.id);
+      const rawDetail = await scrapeGnulahdDetail(item.id);
+      const detail = rawDetail
+        ? await enrichGnulahdDetail(rawDetail, type as 'gnulahdMovies' | 'gnulahdSeries' | 'gnulahdAnime')
+        : rawDetail;
       processed++;
       updateSyncProgress(type, processed, `Procesando detalles (${processed}/${allItems.length}) - ${slug}...`, allItems.length);
       if (detail) {
@@ -719,11 +723,6 @@ async function syncGnulahdByKindHandler(
       await write;
     });
     await persistQueue;
-    const { prefetchGnulahdDetails } = await import('../../services/gnulahd-content');
-    const cached = await prefetchGnulahdDetails(items.map((item) => item.id), (completed, total, saved) => {
-      updateSyncProgress(type, completed, `Obteniendo contenidos (${completed}/${total}), ${saved} guardados...`, total);
-    }, type as 'gnulahdMovies' | 'gnulahdSeries' | 'gnulahdAnime');
-    updateSyncProgress(type, items.length, `${cached}/${items.length} contenidos guardados`, items.length);
     return items.length;
   });
 }

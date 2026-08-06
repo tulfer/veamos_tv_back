@@ -55,7 +55,7 @@ function mergeEpisodeVideos(primary: Episode, extra: Episode): void {
 }
 
 /** Completa un detalle V2 con servidores PelisPlus cuando V2 solo tiene uno. */
-async function enrichWithPelisplus(detail: ContentDetail, logType: GnulahdLogType): Promise<ContentDetail> {
+export async function enrichGnulahdDetail(detail: ContentDetail, logType: GnulahdLogType): Promise<ContentDetail> {
   unwrapDetailProxy(detail);
   const slug = detail.id.replace(/^g(?:mov|ser|ani)_/, '');
   if (!slug) return detail;
@@ -200,7 +200,7 @@ export async function prefetchGnulahdDetails(
     const results = await Promise.allSettled(batch.map(async (id) => {
       try {
         const detail = await scrapeGnulahdDetail(id);
-        return detail ? await enrichWithPelisplus(detail, logType) : detail;
+        return detail ? await enrichGnulahdDetail(detail, logType) : detail;
       } finally {
         completedInBatch++;
         onProgress?.(Math.min(i + completedInBatch, uniqueIds.length), uniqueIds.length, savedDetails);
