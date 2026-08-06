@@ -4,6 +4,7 @@ import { scrapeGnulahdDetail } from '../providers/gnulahd';
 import { scrapeMovieDetail } from '../providers/movies';
 import { scrapeSeriesDetail } from '../providers/series';
 import { scrapeLatanimeDetail } from '../providers/latanime';
+import { scrapeJkanimeDetail } from '../providers/jkanime';
 import { unwrapDetailProxy } from './content-detail';
 import { logger } from '../utils/logger';
 import { memoryCache } from '../cache/memory';
@@ -98,6 +99,22 @@ async function enrichWithPelisplus(detail: ContentDetail, logType: GnulahdLogTyp
     } else {
       pushLog(logType, `Latanime no devolviÃ³ servidores para ${slug}`);
     }
+    pushLog(logType, `Consultando JKAnime para ${slug}...`);
+    const jkanime = await scrapeJkanimeDetail(slug);
+    if (jkanime?.seasons?.length) {
+      const jEpisodes = jkanime.seasons.reduce((total, season) => total + season.episodes.length, 0);
+      const jServers = jkanime.seasons.reduce((total, season) => total + season.episodes.reduce((count, episode) => count + serverCount(episode.videos), 0), 0);
+      pushLog(logType, `JKAnime devolviÃ³ ${jEpisodes} episodios y ${jServers} servidores para ${slug}`);
+      for (const season of detail.seasons) {
+        const extraSeason = jkanime.seasons.find((item) => item.season_number === season.season_number) || jkanime.seasons[0];
+        for (const episode of season.episodes) {
+          const extraEpisode = extraSeason.episodes.find((item) => item.episode_number === episode.episode_number);
+          if (extraEpisode) mergeEpisodeVideos(episode, extraEpisode);
+        }
+      }
+    } else {
+      pushLog(logType, `JKAnime no devolviÃ³ servidores para ${slug}`);
+    }
   }
   return detail;
 }
@@ -175,6 +192,7 @@ export async function prefetchGnulahdDetails(
 ): Promise<number> {
   const uniqueIds = Array.from(new Set(ids.filter(Boolean)));
   const details: ContentDetail[] = [];
+  const failedIds: string[] = [];
   let savedDetails = 0;
   for (let i = 0; i < uniqueIds.length; i += 5) {
     const batch = uniqueIds.slice(i, i + 5);
@@ -197,12 +215,21 @@ export async function prefetchGnulahdDetails(
         } catch (error) {
           logger.warn({ error, id: result.value.id }, 'No se pudo guardar detalle GNULA; el sync continuarÃ¡');
         }
+      } else if (result.status === 'fulfilled') {
+        failedIds.push(batch[results.indexOf(result)]);
+      } else {
+        failedIds.push(batch[results.indexOf(result)]);
       }
     }
     onProgress?.(Math.min(i + batch.length, uniqueIds.length), uniqueIds.length, savedDetails);
   }
 
   memoryCache.del('sync:data');
+  if (failedIds.length > 0) {
+    pushLog(logType, `Fallaron ${failedIds.length} detalles: ${failedIds.join(', ')}`);
+  } else {
+    pushLog(logType, 'Todos los detalles fueron procesados correctamente.');
+  }
   return savedDetails;
 }
 

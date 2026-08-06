@@ -590,6 +590,7 @@ async function syncGnulahdList(
   }
 
   const results: (SyncMovie | SyncSeries)[] = [];
+  const failedSlugs: string[] = [];
   let processed = 0;
 
   await processBatch(allItems, async (item) => {
@@ -641,8 +642,10 @@ async function syncGnulahdList(
         }
         return;
       }
+      failedSlugs.push(slug);
       logger.warn({ id: item.id }, 'Detalle GNULA no disponible; item omitido y el sync continuarÃ¡');
     } catch (error) {
+      failedSlugs.push(slug);
       processed++;
       updateSyncProgress(type, processed, `Detalle fallido (${processed}/${allItems.length}) - ${slug}; continuando...`, allItems.length);
       logger.warn({ error, id: item.id }, 'Error obteniendo detalle GNULA; item omitido y el sync continuarÃ¡');
@@ -650,6 +653,11 @@ async function syncGnulahdList(
   });
 
   updateSyncProgress(type, results.length, `${results.length} items de ${kind} procesados`);
+  if (failedSlugs.length > 0) {
+    pushLog(type, `Fallaron ${failedSlugs.length} detalles: ${failedSlugs.join(', ')}`);
+  } else {
+    pushLog(type, 'Todos los detalles fueron procesados correctamente.');
+  }
   return results;
 }
 

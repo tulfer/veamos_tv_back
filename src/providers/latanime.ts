@@ -49,8 +49,17 @@ function extractServers($: cheerio.CheerioAPI, pageUrl: string): VideoLanguage[]
 }
 
 export async function scrapeLatanimeDetail(slug: string): Promise<{ seasons: Season[] } | null> {
-  const detailUrl = `${BASE_URL}/anime/${encodeURIComponent(slug)}`;
   try {
+    const query = slug.replace(/-/g, '+');
+    const searchHtml = await fetchHTML(`${BASE_URL}/buscar?q=${query}`);
+    const search = cheerio.load(searchHtml);
+    let detailUrl: string | null = null;
+    search('a[href]').each((_, element) => {
+      if (detailUrl) return;
+      const href = absoluteUrl(search(element).attr('href') || '', `${BASE_URL}/buscar`);
+      if (href && new URL(href).hostname === 'latanime.org' && /\/anime\//i.test(new URL(href).pathname)) detailUrl = href;
+    });
+    if (!detailUrl) detailUrl = `${BASE_URL}/anime/${encodeURIComponent(slug)}`;
     const html = await fetchHTML(detailUrl);
     const $ = cheerio.load(html);
     const links = new Map<number, string>();
