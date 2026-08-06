@@ -5,6 +5,7 @@ import { scrapeSeriesDetail } from '../providers/series';
 import { logger } from '../utils/logger';
 import { memoryCache } from '../cache/memory';
 import { isNetuHost } from './netu-resolver';
+import { buildProxyUrl, toPublicProxyUrl } from '../utils/proxy-url';
 
 /**
  * Detalles de contenido con "enriquecimiento en lectura":
@@ -29,6 +30,19 @@ function unwrapProxyServerUrl(url: string): string {
   return url;
 }
 
+/** Hosts que entregan una página embed y no un stream reproducible directo. */
+function requiresEmbedProxy(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return host === 'dtpg.rpmplay.xyz' ||
+      host === 'bysevepoin.com' ||
+      host === 'ok.ru' || host.endsWith('.ok.ru') ||
+      host === 'voe.sx' || host.endsWith('.voe.sx');
+  } catch {
+    return false;
+  }
+}
+
 /** Quita del resultado los servidores "netu": no son reproducibles por la app
  *  (embed JS-driven con captcha/adchain y tokens ligados a IP). */
 function unwrapVideoServers(videos?: ContentDetail['videos']): void {
@@ -42,7 +56,11 @@ function unwrapVideoServers(videos?: ContentDetail['videos']): void {
           logger.info({ url: server.url.substring(0, 120) }, 'Netu server omitido (no reproducible por la app)');
         }
         return !isNetu;
-      });
+      })
+      .map((server) => ({
+        ...server,
+        url: requiresEmbedProxy(server.url) ? toPublicProxyUrl(buildProxyUrl(server.url)) : server.url,
+      }));
   });
 }
 

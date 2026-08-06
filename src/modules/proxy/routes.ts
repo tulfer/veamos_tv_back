@@ -5,6 +5,7 @@ import { verifyCookies } from '../../utils/cookie-token';
 import { buildProxyUrl } from '../../utils/proxy-url';
 import { refreshExpiredChannelUrl } from '../live-tv/controller';
 import { isNetuHost, resolveNetuStream } from '../../services/netu-resolver';
+import { resolveEmbeddedStream } from '../../services/embed-resolver';
 
 // Importante: el CDN de tvporinternet2 (playlist.php) SOLO acepta este
 // User-Agent exacto (Chrome/120). Cualquier otra versión → 403.
@@ -191,6 +192,25 @@ export async function proxyRoutes(app: FastifyInstance) {
           if (resolved.cookies) effectiveCookies = resolved.cookies;
           upstream = await fetchUpstream(target, effectiveReferer, effectiveCookies);
           logger.info({ url: target.substring(0, 160) }, 'Proxy: stream netu resuelto');
+        }
+      }
+
+      // Los servidores de películas suelen ser páginas embed (RPMPlay, Voe,
+      // OK.ru, etc.), no manifiestos. Abrirlos en Chromium permite capturar
+      // el manifiesto real que luego se sirve por este mismo proxy.
+      if (upstream.contentType.toLowerCase().includes('text/html')) {
+        const resolved = await resolveEmbeddedStream(target);
+        if (resolved?.url) {
+          upstream.res.data.resume();
+          target = resolved.url;
+          effectiveReferer = resolved.referer || target;
+          effectiveCookies = resolved.cookies;
+          upstream = await fetchUpstream(target, effectiveReferer, effectiveCookies);
+          logger.info({ embed: url.substring(0, 160), stream: target.substring(0, 180) }, 'Proxy: embed de video resuelto');
+        }
+        if (upstream.contentType.toLowerCase().includes('text/html')) {
+          upstream.res.data.resume();
+          return reply.status(422).send({ error: 'El servidor embed no expuso un stream reproducible' });
         }
       }
 
