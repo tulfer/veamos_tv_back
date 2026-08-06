@@ -48,10 +48,12 @@ function extractServers($: cheerio.CheerioAPI, pageUrl: string): VideoLanguage[]
   return servers.length ? [{ language: 'Latino', servers }] : [];
 }
 
-export async function scrapeLatanimeDetail(slug: string): Promise<{ seasons: Season[] } | null> {
+export async function scrapeLatanimeDetail(slug: string, onLog?: (message: string) => void): Promise<{ seasons: Season[] } | null> {
   try {
     const query = slug.replace(/-/g, '+');
-    const searchHtml = await fetchHTML(`${BASE_URL}/buscar?q=${query}`);
+    const searchUrl = `${BASE_URL}/buscar?q=${query}`;
+    onLog?.(`Latanime: consultando búsqueda ${searchUrl}`);
+    const searchHtml = await fetchHTML(searchUrl);
     const search = cheerio.load(searchHtml);
     let detailUrl: string | null = null;
     search('a[href]').each((_, element) => {
@@ -59,7 +61,11 @@ export async function scrapeLatanimeDetail(slug: string): Promise<{ seasons: Sea
       const href = absoluteUrl(search(element).attr('href') || '', `${BASE_URL}/buscar`);
       if (href && new URL(href).hostname === 'latanime.org' && /\/anime\//i.test(new URL(href).pathname)) detailUrl = href;
     });
-    if (!detailUrl) detailUrl = `${BASE_URL}/anime/${encodeURIComponent(slug)}`;
+    if (!detailUrl) {
+      onLog?.('Latanime: no se encontró resultado en la búsqueda');
+      return null;
+    }
+    onLog?.(`Latanime: resultado encontrado ${detailUrl}`);
     const html = await fetchHTML(detailUrl);
     const $ = cheerio.load(html);
     const links = new Map<number, string>();
@@ -70,6 +76,7 @@ export async function scrapeLatanimeDetail(slug: string): Promise<{ seasons: Sea
       const number = episodeNumber(text);
       if (number && number > 0 && !links.has(number)) links.set(number, href);
     });
+    onLog?.(`Latanime: ${links.size} enlaces de episodios detectados`);
 
     const episodes: Episode[] = [];
     if (links.size === 0) {
@@ -80,12 +87,15 @@ export async function scrapeLatanimeDetail(slug: string): Promise<{ seasons: Sea
         try {
           const episodeHtml = await fetchHTML(url);
           const episodeVideos = extractServers(cheerio.load(episodeHtml), url);
+          onLog?.(`Latanime: episodio ${number}, ${episodeVideos.reduce((total, language) => total + language.servers.length, 0)} servidores`);
           if (episodeVideos.length) episodes.push({ id: `${slug}_e${number}`, title: `Episodio ${number}`, duration: '45m', episode_number: number, videos: episodeVideos });
         } catch { /* episodio no disponible */ }
       }
     }
+    onLog?.(`Latanime: ${episodes.length} episodios con videos`);
     return episodes.length ? { seasons: [{ season_number: 1, title: 'Temporada 1', episodes }] } : null;
-  } catch {
+  } catch (error) {
+    onLog?.(`Latanime: error ${(error as Error).message}`);
     return null;
   }
 }

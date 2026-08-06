@@ -84,7 +84,7 @@ async function enrichWithPelisplus(detail: ContentDetail, logType: GnulahdLogTyp
   const needsAnimeEnrichment = detail.seasons?.some((season) => season.episodes.some((episode) => hasFewerThanTwoServersPerLanguage(episode.videos)));
   if (detail.type === 'anime' && needsAnimeEnrichment && detail.seasons?.length) {
     pushLog(logType, `Consultando Latanime para ${slug}...`);
-    const extra = await scrapeLatanimeDetail(slug);
+    const extra = await scrapeLatanimeDetail(slug, (message) => pushLog(logType, message));
     if (extra?.seasons?.length) {
       const extraEpisodes = extra.seasons.reduce((total, season) => total + season.episodes.length, 0);
       const extraServers = extra.seasons.reduce((total, season) => total + season.episodes.reduce((count, episode) => count + serverCount(episode.videos), 0), 0);
@@ -100,7 +100,7 @@ async function enrichWithPelisplus(detail: ContentDetail, logType: GnulahdLogTyp
       pushLog(logType, `Latanime no devolviÃ³ servidores para ${slug}`);
     }
     pushLog(logType, `Consultando JKAnime para ${slug}...`);
-    const jkanime = await scrapeJkanimeDetail(slug);
+    const jkanime = await scrapeJkanimeDetail(slug, (message) => pushLog(logType, message));
     if (jkanime?.seasons?.length) {
       const jEpisodes = jkanime.seasons.reduce((total, season) => total + season.episodes.length, 0);
       const jServers = jkanime.seasons.reduce((total, season) => total + season.episodes.reduce((count, episode) => count + serverCount(episode.videos), 0), 0);

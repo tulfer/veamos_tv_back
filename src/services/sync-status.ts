@@ -201,6 +201,7 @@ const state: SyncState = {
 
 export function startSync(type: SyncType): boolean {
   if (state[type].status === 'running' && type !== 'refreshProvider') return false;
+  clearLogs(type);
   state[type] = { status: 'running', lastRun: Date.now(), duration: undefined, count: undefined, error: undefined, progress: undefined };
   pushLog(type, '▶ Ejecución iniciada');
   emitSyncEvent({ type: 'status', status: getSyncStatus() });

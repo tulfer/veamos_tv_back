@@ -34,10 +34,11 @@ function extractServers($: cheerio.CheerioAPI, pageUrl: string): VideoLanguage[]
   return servers.length ? [{ language: 'Subtitulado', servers }] : [];
 }
 
-export async function scrapeJkanimeDetail(slug: string): Promise<{ seasons: Season[] } | null> {
+export async function scrapeJkanimeDetail(slug: string, onLog?: (message: string) => void): Promise<{ seasons: Season[] } | null> {
   try {
     const query = slug.replace(/-/g, ' ');
     const searchUrl = `${BASE_URL}/buscar/${encodeURIComponent(query)}`;
+    onLog?.(`JKAnime: consultando búsqueda ${searchUrl}`);
     const searchHtml = await fetchHTML(searchUrl);
     const search = cheerio.load(searchHtml);
     let detailUrl: string | null = null;
@@ -46,7 +47,11 @@ export async function scrapeJkanimeDetail(slug: string): Promise<{ seasons: Seas
       const href = absoluteUrl(search(element).attr('href') || '', searchUrl);
       if (href && new URL(href).hostname === 'jkanime.net' && /\/(?:anime|ver)\//i.test(new URL(href).pathname)) detailUrl = href;
     });
-    if (!detailUrl) return null;
+    if (!detailUrl) {
+      onLog?.('JKAnime: no se encontró resultado en la búsqueda');
+      return null;
+    }
+    onLog?.(`JKAnime: resultado encontrado ${detailUrl}`);
     const html = await fetchHTML(detailUrl);
     const $ = cheerio.load(html);
     const links = new Map<number, string>();
@@ -56,13 +61,19 @@ export async function scrapeJkanimeDetail(slug: string): Promise<{ seasons: Seas
       const number = episodeNumber(`${$(element).text()} ${href}`);
       if (number && number > 0 && !links.has(number)) links.set(number, href);
     });
+    onLog?.(`JKAnime: ${links.size} enlaces de episodios detectados`);
     const episodes: Episode[] = [];
     for (const [number, url] of [...links.entries()].sort(([a], [b]) => a - b)) {
       try {
         const episodeVideos = extractServers(cheerio.load(await fetchHTML(url)), url);
+        onLog?.(`JKAnime: episodio ${number}, ${episodeVideos.reduce((total, language) => total + language.servers.length, 0)} servidores`);
         if (episodeVideos.length) episodes.push({ id: `${slug}_e${number}`, title: `Episodio ${number}`, duration: '45m', episode_number: number, videos: episodeVideos });
       } catch { /* episodio no disponible */ }
     }
+    onLog?.(`JKAnime: ${episodes.length} episodios con videos`);
     return episodes.length ? { seasons: [{ season_number: 1, title: 'Temporada 1', episodes }] } : null;
-  } catch { return null; }
+  } catch (error) {
+    onLog?.(`JKAnime: error ${(error as Error).message}`);
+    return null;
+  }
 }
