@@ -45,7 +45,7 @@ export async function scrapeJkanimeDetail(slug: string, onLog?: (message: string
     search('a[href]').each((_, element) => {
       if (detailUrl) return;
       const href = absoluteUrl(search(element).attr('href') || '', searchUrl);
-      if (href && new URL(href).hostname === 'jkanime.net' && /\/(?:anime|ver)\//i.test(new URL(href).pathname)) detailUrl = href;
+      if (href && new URL(href).hostname === 'jkanime.net' && !/\/buscar(?:\/|$)/i.test(new URL(href).pathname) && !/\.(?:css|js|png|jpg|jpeg|gif)$/i.test(new URL(href).pathname)) detailUrl = href;
     });
     if (!detailUrl) {
       onLog?.('JKAnime: no se encontró resultado en la búsqueda');
@@ -54,6 +54,12 @@ export async function scrapeJkanimeDetail(slug: string, onLog?: (message: string
     onLog?.(`JKAnime: resultado encontrado ${detailUrl}`);
     const html = await fetchHTML(detailUrl);
     const $ = cheerio.load(html);
+    const directEpisode = episodeNumber(detailUrl);
+    if (directEpisode) {
+      const videos = extractServers($, detailUrl);
+      onLog?.(`JKAnime: episodio ${directEpisode}, ${videos.reduce((total, language) => total + language.servers.length, 0)} servidores`);
+      return videos.length ? { seasons: [{ season_number: 1, title: 'Temporada 1', episodes: [{ id: `${slug}_e${directEpisode}`, title: `Episodio ${directEpisode}`, duration: '45m', episode_number: directEpisode, videos }] }] } : null;
+    }
     const links = new Map<number, string>();
     $('a[href]').each((_, element) => {
       const href = absoluteUrl($(element).attr('href') || '', detailUrl!);

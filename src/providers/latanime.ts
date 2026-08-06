@@ -36,16 +36,19 @@ function extractServers($: cheerio.CheerioAPI, pageUrl: string): VideoLanguage[]
     servers.push({ name: name?.trim() || `Servidor ${servers.length + 1}`, url });
   };
 
-  $('[data-url],[data-src],[data-video], iframe[src], video source[src]').each((_, element) => {
+  $('[data-url],[data-src],[data-video],[data-link],[data-embed],[data-iframe], iframe[src], video source[src]').each((_, element) => {
     const $element = $(element);
-    add($element.attr('data-url') || $element.attr('data-src') || $element.attr('data-video') || $element.attr('src'), $element.text());
+    add($element.attr('data-url') || $element.attr('data-src') || $element.attr('data-video') || $element.attr('data-link') || $element.attr('data-embed') || $element.attr('data-iframe') || $element.attr('src'), $element.text());
   });
-  $('[data-url],[data-src],[data-video], .server-list a[href], .servers a[href], .video-servers a[href], [class*="server"] a[href], [id*="server"] a[href]').each((_, element) => {
+  $('[onclick], .server-list a[href], .servers a[href], .video-servers a[href], [class*="server"] a[href], [id*="server"] a[href]').each((_, element) => {
     const $element = $(element);
     const href = $element.attr('href') || '';
+    const onclick = $element.attr('onclick') || '';
+    if (/descarg|download|mediafire|gofile/i.test(`${$element.text()} ${$element.attr('class') || ''} ${$element.parent().text()}`)) return;
+    const eventUrl = onclick.match(/https?:[^'"\s)]+/i)?.[0];
     if (/\.(?:jpg|jpeg|png|gif|css|js)(?:\?|$)/i.test(href)) return;
-    if (streamingNames.test($element.text()) || $element.attr('data-url') || $element.attr('data-src') || $element.attr('data-video')) {
-      add(href || $element.attr('data-url') || $element.attr('data-src') || $element.attr('data-video'), $element.text());
+    if (streamingNames.test($element.text()) || eventUrl || href.startsWith('http')) {
+      add(eventUrl || href || $element.attr('data-url') || $element.attr('data-src') || $element.attr('data-video'), $element.text());
     }
   });
   return servers.length ? [{ language: 'Latino', servers }] : [];
