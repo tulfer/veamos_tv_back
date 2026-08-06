@@ -3,6 +3,7 @@ import { loadSyncData, upsertItemByCol, upsertItemsByCol } from './data-store';
 import { scrapeGnulahdDetail } from '../providers/gnulahd';
 import { scrapeMovieDetail } from '../providers/movies';
 import { scrapeSeriesDetail } from '../providers/series';
+import { scrapeLatanimeDetail } from '../providers/latanime';
 import { unwrapDetailProxy } from './content-detail';
 import { logger } from '../utils/logger';
 import { memoryCache } from '../cache/memory';
@@ -49,8 +50,8 @@ function mergeEpisodeVideos(primary: Episode, extra: Episode): void {
 /** Completa un detalle V2 con servidores PelisPlus cuando V2 solo tiene uno. */
 async function enrichWithPelisplus(detail: ContentDetail): Promise<ContentDetail> {
   unwrapDetailProxy(detail);
-  const slug = detail.id.replace(/^g(?:mov|ser)_/, '');
-  if (!slug || detail.type === 'anime') return detail;
+  const slug = detail.id.replace(/^g(?:mov|ser|ani)_/, '');
+  if (!slug) return detail;
 
   if (detail.type === 'movie' && serverCount(detail.videos) < 2) {
     const extra = await scrapeMovieDetail(`mov_${slug}`);
@@ -66,6 +67,19 @@ async function enrichWithPelisplus(detail: ContentDetail): Promise<ContentDetail
       for (const season of detail.seasons) {
         const extraSeason = extra.seasons.find((item) => item.season_number === season.season_number);
         if (!extraSeason) continue;
+        for (const episode of season.episodes) {
+          const extraEpisode = extraSeason.episodes.find((item) => item.episode_number === episode.episode_number);
+          if (extraEpisode) mergeEpisodeVideos(episode, extraEpisode);
+        }
+      }
+    }
+  }
+  const needsAnimeEnrichment = detail.seasons?.some((season) => season.episodes.some((episode) => serverCount(episode.videos) < 2));
+  if (detail.type === 'anime' && needsAnimeEnrichment && detail.seasons?.length) {
+    const extra = await scrapeLatanimeDetail(slug);
+    if (extra?.seasons?.length) {
+      for (const season of detail.seasons) {
+        const extraSeason = extra.seasons.find((item) => item.season_number === season.season_number) || extra.seasons[0];
         for (const episode of season.episodes) {
           const extraEpisode = extraSeason.episodes.find((item) => item.episode_number === episode.episode_number);
           if (extraEpisode) mergeEpisodeVideos(episode, extraEpisode);
