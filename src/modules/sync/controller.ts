@@ -663,8 +663,10 @@ export async function syncGnulahdHomeHandler(_request: FastifyRequest, reply: Fa
     const data = await scrapeGnulahdHome();
     const ids = [...data.banners, ...data.sections.flatMap((section) => section.items)].map((item) => item.id);
     updateSyncProgress('gnulahdHome', 0, `${ids.length} ítems encontrados, obteniendo contenidos...`);
-    const cached = await prefetchGnulahdDetails(ids);
-    updateSyncProgress('gnulahdHome', cached, `${cached}/${ids.length} contenidos guardados, guardando home...`);
+    const cached = await prefetchGnulahdDetails(ids, (completed, total, saved) => {
+      updateSyncProgress('gnulahdHome', completed, `Obteniendo contenidos (${completed}/${total}), ${saved} guardados...`, total);
+    });
+    updateSyncProgress('gnulahdHome', ids.length, `${cached}/${ids.length} contenidos guardados, guardando home...`, ids.length);
     await saveGnulahdHomeData(data);
     const count = data.banners.length + data.sections.length;
     updateSyncProgress('gnulahdHome', count, `${count} banners/secciones guardadas`);
@@ -693,8 +695,10 @@ async function syncGnulahdByKindHandler(
   runBackgroundSync(type, async () => {
     const items = await syncGnulahdList(kind, pages, type);
     const { prefetchGnulahdDetails } = await import('../../services/gnulahd-content');
-    const cached = await prefetchGnulahdDetails(items.map((item) => item.id));
-    updateSyncProgress(type, cached, `${cached}/${items.length} contenidos guardados`);
+    const cached = await prefetchGnulahdDetails(items.map((item) => item.id), (completed, total, saved) => {
+      updateSyncProgress(type, completed, `Obteniendo contenidos (${completed}/${total}), ${saved} guardados...`, total);
+    });
+    updateSyncProgress(type, items.length, `${cached}/${items.length} contenidos guardados`, items.length);
     const existing = await loadSyncData();
     const shouldReplace = body?.replace === true;
     const current = (existing && existing[field]) || [];

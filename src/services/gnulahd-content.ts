@@ -79,17 +79,40 @@ async function healGnulahd(collection: GnulahdCollection, detail: ContentDetail)
 
 /** Obtiene y guarda el detalle de una lista de ítems sin abortar el sync si
  * algún detalle individual falla. */
-export async function prefetchGnulahdDetails(ids: string[]): Promise<number> {
+export async function prefetchGnulahdDetails(
+  ids: string[],
+  onProgress?: (completed: number, total: number, saved: number) => void,
+): Promise<number> {
   const uniqueIds = Array.from(new Set(ids.filter(Boolean)));
   const details: ContentDetail[] = [];
   for (let i = 0; i < uniqueIds.length; i += 5) {
     const batch = uniqueIds.slice(i, i + 5);
-    const results = await Promise.allSettled(batch.map((id) => scrapeGnulahdDetail(id)));
+    let completedInBatch = 0;
+    const results = await Promise.allSettled(batch.map(async (id) => {
+      try {
+        return await scrapeGnulahdDetail(id);
+      } finally {
+        completedInBatch++;
+        onProgress?.(Math.min(i + completedInBatch, uniqueIds.length), uniqueIds.length, details.length);
+      }
+    }));
+    const batchDetails: ContentDetail[] = [];
     for (const result of results) {
-      if (result.status === 'fulfilled' && result.value) details.push(result.value);
+      if (result.status === 'fulfilled' && result.value) {
+        details.push(result.value);
+        batchDetails.push(result.value);
+      }
     }
+
+    await persistGnulahdDetails(batchDetails);
+    onProgress?.(Math.min(i + batch.length, uniqueIds.length), uniqueIds.length, details.length);
   }
 
+  memoryCache.del('sync:data');
+  return details.length;
+}
+
+async function persistGnulahdDetails(details: ContentDetail[]): Promise<void> {
   const grouped = new Map<GnulahdCollection, ContentDetail[]>();
   for (const detail of details) {
     const collection = collectionForDetail(detail);
@@ -98,15 +121,12 @@ export async function prefetchGnulahdDetails(ids: string[]): Promise<number> {
     grouped.set(collection, group);
   }
   for (const [collection, collectionDetails] of grouped) {
-    const items = collectionDetails.map((detail) => ({
+    await upsertItemsByCol(collection, collectionDetails.map((detail) => ({
       id: detail.id,
       content: detail,
       ...detail,
-    }));
-    await upsertItemsByCol(collection, items);
+    })));
   }
-  memoryCache.del('sync:data');
-  return details.length;
 }
 
 export async function getGnulahdDetailContent(id: string): Promise<ContentDetail | null> {
