@@ -1,6 +1,9 @@
-import { ContentDetail, SyncMovie, SyncSeries } from '../types';
+import { ContentDetail, SyncMovie, SyncSeries, Episode, VideoLanguage } from '../types';
 import { loadSyncData, upsertItemByCol, upsertItemsByCol } from './data-store';
 import { scrapeGnulahdDetail } from '../providers/gnulahd';
+import { scrapeMovieDetail } from '../providers/movies';
+import { scrapeSeriesDetail } from '../providers/series';
+import { unwrapDetailProxy } from './content-detail';
 import { logger } from '../utils/logger';
 import { memoryCache } from '../cache/memory';
 
@@ -12,6 +15,66 @@ import { memoryCache } from '../cache/memory';
  */
 
 type GnulahdCollection = 'gnulahd-movies' | 'gnulahd-series' | 'gnulahd-anime';
+
+function serverCount(videos?: VideoLanguage[]): number {
+  return videos?.reduce((total, language) => total + (language.servers?.length || 0), 0) || 0;
+}
+
+function mergeVideoLanguages(primary: VideoLanguage[] | undefined, extra: VideoLanguage[] | undefined): VideoLanguage[] | undefined {
+  if (!extra?.length) return primary;
+  const result = (primary || []).map((language) => ({ ...language, servers: [...language.servers] }));
+  for (const language of extra) {
+    const existing = result.find((item) => item.language.toLowerCase() === language.language.toLowerCase());
+    if (!existing) {
+      result.push({ ...language, servers: [...language.servers] });
+      continue;
+    }
+    const urls = new Set(existing.servers.map((server) => server.url));
+    for (const server of language.servers) {
+      if (!urls.has(server.url)) {
+        existing.servers.push(server);
+        urls.add(server.url);
+      }
+    }
+  }
+  return result;
+}
+
+function mergeEpisodeVideos(primary: Episode, extra: Episode): void {
+  if (serverCount(primary.videos) >= 2) return;
+  const merged = mergeVideoLanguages(primary.videos, extra.videos);
+  if (merged?.length) primary.videos = merged;
+}
+
+/** Completa un detalle V2 con servidores PelisPlus cuando V2 solo tiene uno. */
+async function enrichWithPelisplus(detail: ContentDetail): Promise<ContentDetail> {
+  unwrapDetailProxy(detail);
+  const slug = detail.id.replace(/^g(?:mov|ser)_/, '');
+  if (!slug || detail.type === 'anime') return detail;
+
+  if (detail.type === 'movie' && serverCount(detail.videos) < 2) {
+    const extra = await scrapeMovieDetail(`mov_${slug}`);
+    if (extra && serverCount(extra.videos) > 0) {
+      detail.videos = mergeVideoLanguages(detail.videos, extra.videos);
+    }
+  }
+
+  const needsSeriesEnrichment = detail.seasons?.some((season) => season.episodes.some((episode) => serverCount(episode.videos) < 2));
+  if (detail.type === 'series' && needsSeriesEnrichment && detail.seasons?.length) {
+    const extra = await scrapeSeriesDetail(`ser_${slug}`);
+    if (extra?.seasons?.length) {
+      for (const season of detail.seasons) {
+        const extraSeason = extra.seasons.find((item) => item.season_number === season.season_number);
+        if (!extraSeason) continue;
+        for (const episode of season.episodes) {
+          const extraEpisode = extraSeason.episodes.find((item) => item.episode_number === episode.episode_number);
+          if (extraEpisode) mergeEpisodeVideos(episode, extraEpisode);
+        }
+      }
+    }
+  }
+  return detail;
+}
 
 function collectionForDetail(detail: ContentDetail): GnulahdCollection {
   if (detail.id.startsWith('gmov_')) return 'gnulahd-movies';
@@ -90,7 +153,8 @@ export async function prefetchGnulahdDetails(
     let completedInBatch = 0;
     const results = await Promise.allSettled(batch.map(async (id) => {
       try {
-        return await scrapeGnulahdDetail(id);
+        const detail = await scrapeGnulahdDetail(id);
+        return detail ? await enrichWithPelisplus(detail) : detail;
       } finally {
         completedInBatch++;
         onProgress?.(Math.min(i + completedInBatch, uniqueIds.length), uniqueIds.length, details.length);
