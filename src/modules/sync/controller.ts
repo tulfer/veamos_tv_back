@@ -3,7 +3,7 @@ import path from 'path';
 import { FastifyRequest, FastifyReply } from 'fastify';
 import { scrapeMovies, scrapeMovieDetail, scrapePopularMovies } from '../../providers/movies';
 import { scrapeSeries, scrapeSeriesDetail, scrapePopularSeries } from '../../providers/series';
-import { saveSyncData, loadSyncData, saveHomeData, loadHomeData, getCollectionCounts, getCollectionCount, getAutoRefreshConfig, setAutoRefreshConfig } from '../../services/data-store';
+import { saveSyncData, loadSyncData, saveHomeData, loadHomeData, getCollectionCounts, getCollectionCount, getAutoRefreshConfig, setAutoRefreshConfig, upsertItemByCol, replaceCollection } from '../../services/data-store';
 import { fetchItemDetails } from '../../providers/cineby';
 import { closeBrowser } from '../../services/video-resolver';
 import { fetchLiveChannels, parseM3U, validateBatch } from '../../providers/live-tv';
@@ -574,6 +574,7 @@ async function syncGnulahdList(
   kind: 'peliculas' | 'series' | 'anime',
   pages: number[],
   type: SyncType,
+  onItem?: (item: SyncMovie | SyncSeries) => Promise<void>,
 ): Promise<SyncMovie[] | SyncSeries[]> {
   const { scrapeGnulahdList, scrapeGnulahdDetail } = await import('../../providers/gnulahd');
   const isSeries = kind !== 'peliculas';
@@ -598,7 +599,7 @@ async function syncGnulahdList(
       updateSyncProgress(type, processed, `Procesando detalles (${processed}/${allItems.length})...`, allItems.length);
       if (detail) {
         if (isSeries) {
-          results.push({
+          const result: SyncSeries = {
             id: detail.id,
             title: detail.title,
             type: kind === 'anime' ? 'anime' : undefined,
@@ -613,9 +614,12 @@ async function syncGnulahdList(
             seasons: detail.seasons,
             videos: detail.videos,
             downloads: detail.downloads,
-          });
+            content: detail,
+          };
+          results.push(result);
+          try { await onItem?.(result); } catch (error) { logger.warn({ error, id: result.id }, 'No se pudo guardar item GNULA durante el sync'); }
         } else {
-          results.push({
+          const result: SyncMovie = {
             id: detail.id,
             title: detail.title,
             poster: detail.poster || item.poster,
@@ -629,20 +633,19 @@ async function syncGnulahdList(
             country: detail.country,
             videos: detail.videos,
             downloads: detail.downloads,
-          });
+            content: detail,
+          };
+          results.push(result);
+          try { await onItem?.(result); } catch (error) { logger.warn({ error, id: result.id }, 'No se pudo guardar item GNULA durante el sync'); }
         }
         return;
       }
-    } catch { /* fallback below */ }
-
-    results.push({
-      id: item.id,
-      title: item.title,
-      type: kind === 'anime' ? 'anime' : undefined,
-      poster: item.poster,
-      rating: item.rating,
-      year: item.year,
-    } as SyncMovie);
+      logger.warn({ id: item.id }, 'Detalle GNULA no disponible; item omitido y el sync continuarÃ¡');
+    } catch (error) {
+      processed++;
+      updateSyncProgress(type, processed, `Detalle fallido (${processed}/${allItems.length}); continuando...`, allItems.length);
+      logger.warn({ error, id: item.id }, 'Error obteniendo detalle GNULA; item omitido y el sync continuarÃ¡');
+    }
   });
 
   updateSyncProgress(type, results.length, `${results.length} items de ${kind} procesados`);
@@ -662,10 +665,11 @@ export async function syncGnulahdHomeHandler(_request: FastifyRequest, reply: Fa
     const { prefetchGnulahdDetails } = await import('../../services/gnulahd-content');
     const data = await scrapeGnulahdHome();
     const ids = [...data.banners, ...data.sections.flatMap((section) => section.items)].map((item) => item.id);
+    await saveGnulahdHomeData(data);
     updateSyncProgress('gnulahdHome', 0, `${ids.length} ítems encontrados, obteniendo contenidos...`);
     const cached = await prefetchGnulahdDetails(ids, (completed, total, saved) => {
       updateSyncProgress('gnulahdHome', completed, `Obteniendo contenidos (${completed}/${total}), ${saved} guardados...`, total);
-    });
+    }, 'gnulahdHome');
     updateSyncProgress('gnulahdHome', ids.length, `${cached}/${ids.length} contenidos guardados, guardando home...`, ids.length);
     await saveGnulahdHomeData(data);
     const count = data.banners.length + data.sections.length;
@@ -693,18 +697,25 @@ async function syncGnulahdByKindHandler(
   reply.send({ ok: true, message: `${type} sync started` });
 
   runBackgroundSync(type, async () => {
-    const items = await syncGnulahdList(kind, pages, type);
+    const shouldReplace = body?.replace === true;
+    const collection = field === 'gnulahdMovies' ? 'gnulahd-movies' : field === 'gnulahdSeries' ? 'gnulahd-series' : 'gnulahd-anime';
+    if (shouldReplace) {
+      await replaceCollection(collection, []);
+      updateSyncProgress(type, 0, 'Colección vaciada; guardando items individualmente...');
+    }
+    let persistQueue = Promise.resolve();
+    const items = await syncGnulahdList(kind, pages, type, async (item) => {
+      const write = persistQueue.then(() => upsertItemByCol(collection, item));
+      persistQueue = write.catch(() => undefined);
+      await write;
+    });
+    await persistQueue;
     const { prefetchGnulahdDetails } = await import('../../services/gnulahd-content');
     const cached = await prefetchGnulahdDetails(items.map((item) => item.id), (completed, total, saved) => {
       updateSyncProgress(type, completed, `Obteniendo contenidos (${completed}/${total}), ${saved} guardados...`, total);
-    });
+    }, type as 'gnulahdMovies' | 'gnulahdSeries' | 'gnulahdAnime');
     updateSyncProgress(type, items.length, `${cached}/${items.length} contenidos guardados`, items.length);
-    const existing = await loadSyncData();
-    const shouldReplace = body?.replace === true;
-    const current = (existing && existing[field]) || [];
-    const finalItems = shouldReplace ? items : mergeByIdGeneric(items as { id: string }[], current as { id: string }[]);
-    await saveSyncData(buildSyncData(existing, { [field]: finalItems } as Partial<SyncData>));
-    return finalItems.length;
+    return items.length;
   });
 }
 

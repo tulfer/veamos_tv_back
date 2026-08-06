@@ -7,6 +7,7 @@ import { scrapeLatanimeDetail } from '../providers/latanime';
 import { unwrapDetailProxy } from './content-detail';
 import { logger } from '../utils/logger';
 import { memoryCache } from '../cache/memory';
+import { pushLog } from './sync-status';
 
 /**
  * Detalle de contenido de GNULA HD con "enriquecimiento en lectura"
@@ -16,6 +17,7 @@ import { memoryCache } from '../cache/memory';
  */
 
 type GnulahdCollection = 'gnulahd-movies' | 'gnulahd-series' | 'gnulahd-anime';
+type GnulahdLogType = 'gnulahdHome' | 'gnulahdMovies' | 'gnulahdSeries' | 'gnulahdAnime';
 
 function serverCount(videos?: VideoLanguage[]): number {
   return videos?.reduce((total, language) => total + (language.servers?.length || 0), 0) || 0;
@@ -48,7 +50,7 @@ function mergeEpisodeVideos(primary: Episode, extra: Episode): void {
 }
 
 /** Completa un detalle V2 con servidores PelisPlus cuando V2 solo tiene uno. */
-async function enrichWithPelisplus(detail: ContentDetail): Promise<ContentDetail> {
+async function enrichWithPelisplus(detail: ContentDetail, logType: GnulahdLogType): Promise<ContentDetail> {
   unwrapDetailProxy(detail);
   const slug = detail.id.replace(/^g(?:mov|ser|ani)_/, '');
   if (!slug) return detail;
@@ -76,8 +78,12 @@ async function enrichWithPelisplus(detail: ContentDetail): Promise<ContentDetail
   }
   const needsAnimeEnrichment = detail.seasons?.some((season) => season.episodes.some((episode) => serverCount(episode.videos) < 2));
   if (detail.type === 'anime' && needsAnimeEnrichment && detail.seasons?.length) {
+    pushLog(logType, `Consultando Latanime para ${slug}...`);
     const extra = await scrapeLatanimeDetail(slug);
     if (extra?.seasons?.length) {
+      const extraEpisodes = extra.seasons.reduce((total, season) => total + season.episodes.length, 0);
+      const extraServers = extra.seasons.reduce((total, season) => total + season.episodes.reduce((count, episode) => count + serverCount(episode.videos), 0), 0);
+      pushLog(logType, `Latanime devolviÃ³ ${extraEpisodes} episodios y ${extraServers} servidores para ${slug}`);
       for (const season of detail.seasons) {
         const extraSeason = extra.seasons.find((item) => item.season_number === season.season_number) || extra.seasons[0];
         for (const episode of season.episodes) {
@@ -85,6 +91,8 @@ async function enrichWithPelisplus(detail: ContentDetail): Promise<ContentDetail
           if (extraEpisode) mergeEpisodeVideos(episode, extraEpisode);
         }
       }
+    } else {
+      pushLog(logType, `Latanime no devolviÃ³ servidores para ${slug}`);
     }
   }
   return detail;
@@ -159,35 +167,39 @@ async function healGnulahd(collection: GnulahdCollection, detail: ContentDetail)
 export async function prefetchGnulahdDetails(
   ids: string[],
   onProgress?: (completed: number, total: number, saved: number) => void,
+  logType: GnulahdLogType = 'gnulahdAnime',
 ): Promise<number> {
   const uniqueIds = Array.from(new Set(ids.filter(Boolean)));
   const details: ContentDetail[] = [];
+  let savedDetails = 0;
   for (let i = 0; i < uniqueIds.length; i += 5) {
     const batch = uniqueIds.slice(i, i + 5);
     let completedInBatch = 0;
     const results = await Promise.allSettled(batch.map(async (id) => {
       try {
         const detail = await scrapeGnulahdDetail(id);
-        return detail ? await enrichWithPelisplus(detail) : detail;
+        return detail ? await enrichWithPelisplus(detail, logType) : detail;
       } finally {
         completedInBatch++;
-        onProgress?.(Math.min(i + completedInBatch, uniqueIds.length), uniqueIds.length, details.length);
+        onProgress?.(Math.min(i + completedInBatch, uniqueIds.length), uniqueIds.length, savedDetails);
       }
     }));
-    const batchDetails: ContentDetail[] = [];
     for (const result of results) {
       if (result.status === 'fulfilled' && result.value) {
         details.push(result.value);
-        batchDetails.push(result.value);
+        try {
+          await persistGnulahdDetails([result.value]);
+          savedDetails++;
+        } catch (error) {
+          logger.warn({ error, id: result.value.id }, 'No se pudo guardar detalle GNULA; el sync continuarÃ¡');
+        }
       }
     }
-
-    await persistGnulahdDetails(batchDetails);
-    onProgress?.(Math.min(i + batch.length, uniqueIds.length), uniqueIds.length, details.length);
+    onProgress?.(Math.min(i + batch.length, uniqueIds.length), uniqueIds.length, savedDetails);
   }
 
   memoryCache.del('sync:data');
-  return details.length;
+  return savedDetails;
 }
 
 async function persistGnulahdDetails(details: ContentDetail[]): Promise<void> {

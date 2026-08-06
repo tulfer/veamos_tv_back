@@ -397,15 +397,10 @@ export async function getCollectionCount(key: string): Promise<number | null> {
 /** Actualiza (o crea) un item dentro de una colección por su id. */
 export async function upsertItemByCol<T extends { id: string }>(collection: string, item: T): Promise<void> {
   const items = await loadCollection<T>(collection);
+  const byId = new Map(items.map((existing) => [existing.id, existing]));
   const { id, ...data } = item;
-  const idx = items.findIndex((i) => i.id === id);
-  const clean = stripUndefined(data);
-  if (idx >= 0) {
-    items[idx] = { id, ...clean } as unknown as T;
-  } else {
-    items.push({ id, ...clean } as unknown as T);
-  }
-  await setRow(storeKeys.collection(collection), items);
+  byId.set(id, { id, ...stripUndefined(data) } as unknown as T);
+  await setRow(storeKeys.collection(collection), Array.from(byId.values()));
 }
 
 /** Actualiza varios documentos en una sola lectura/escritura de la colección. */
@@ -418,6 +413,16 @@ export async function upsertItemsByCol<T extends { id: string }>(collection: str
     byId.set(id, { id, ...stripUndefined(data) } as T);
   }
   await setRow(storeKeys.collection(collection), Array.from(byId.values()));
+}
+
+/** Reemplaza una colecciÃ³n completa y mantiene los cachÃ©s coherentes. */
+export async function replaceCollection<T>(collection: string, items: T[]): Promise<void> {
+  await setRow(storeKeys.collection(collection), stripUndefined(items));
+  memoryCache.del(SYNC_DATA_CACHE_KEY);
+  memoryCache.del(COUNTS_CACHE_KEY);
+  for (const key of Object.keys(TYPE_TO_COLLECTION_KEY)) {
+    memoryCache.del(COUNTS_PER_KEY_PREFIX + key);
+  }
 }
 
 export async function loadHomeData<T = unknown>(): Promise<T | null> {
