@@ -25,6 +25,7 @@ function episodeNumber(value: string): number | null {
 function extractServers($: cheerio.CheerioAPI, pageUrl: string): VideoLanguage[] {
   const servers: VideoServer[] = [];
   const seen = new Set<string>();
+  const streamingNames = /dsvplay|byse|hexload|savefiles|mega|mixdrop|voe|mp4upload|streamtape|filemoon|doodstream|streamwish|filelions/i;
   const add = (raw: string | undefined, name?: string) => {
     const url = raw ? absoluteUrl(raw.trim(), pageUrl) : null;
     if (!url || seen.has(url) || isUnsupportedVideoHost(url)) return;
@@ -39,11 +40,13 @@ function extractServers($: cheerio.CheerioAPI, pageUrl: string): VideoLanguage[]
     const $element = $(element);
     add($element.attr('data-url') || $element.attr('data-src') || $element.attr('data-video') || $element.attr('src'), $element.text());
   });
-  $('a[href]').each((_, element) => {
+  $('[data-url],[data-src],[data-video], .server-list a[href], .servers a[href], .video-servers a[href], [class*="server"] a[href], [id*="server"] a[href]').each((_, element) => {
     const $element = $(element);
     const href = $element.attr('href') || '';
     if (/\.(?:jpg|jpeg|png|gif|css|js)(?:\?|$)/i.test(href)) return;
-    add(href, $element.text());
+    if (streamingNames.test($element.text()) || $element.attr('data-url') || $element.attr('data-src') || $element.attr('data-video')) {
+      add(href || $element.attr('data-url') || $element.attr('data-src') || $element.attr('data-video'), $element.text());
+    }
   });
   return servers.length ? [{ language: 'Latino', servers }] : [];
 }
