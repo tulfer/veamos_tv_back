@@ -40,6 +40,21 @@ function extractServers($: cheerio.CheerioAPI, pageUrl: string): VideoLanguage[]
     const $element = $(element);
     add($element.attr('data-url') || $element.attr('data-src') || $element.attr('data-video') || $element.attr('data-link') || $element.attr('data-embed') || $element.attr('data-iframe') || $element.attr('src'), $element.text());
   });
+  $('[data-player]').each((_, element) => {
+    const $element = $(element);
+    const raw = ($element.attr('data-player') || '').trim();
+    if (!raw) return;
+    let decoded = raw;
+    if (raw.length > 20 && /^[A-Za-z0-9+/=]+$/.test(raw)) {
+      try {
+        const buffered = Buffer.from(raw, 'base64').toString('utf8');
+        if (/^https?:\/\//.test(buffered)) decoded = buffered;
+      } catch { /* no base64 válido */ }
+    }
+    const label = $element.text().trim();
+    if (/^(descargar|download)/i.test(label) || /mega\.nz|mediafire|gofile|1cloudfile/i.test(decoded)) return;
+    add(decoded, label);
+  });
   $('[onclick], .server-list a[href], .servers a[href], .video-servers a[href], [class*="server"] a[href], [id*="server"] a[href]').each((_, element) => {
     const $element = $(element);
     const href = $element.attr('href') || '';
