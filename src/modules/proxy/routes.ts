@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { httpClient } from '../../utils/http';
 import { logger } from '../../utils/logger';
 import { verifyCookies } from '../../utils/cookie-token';
-import { buildProxyUrl } from '../../utils/proxy-url';
+import { buildProxyUrl, toPublicProxyUrl } from '../../utils/proxy-url';
 import { refreshExpiredChannelUrl } from '../live-tv/controller';
 import { isNetuHost, resolveNetuStream } from '../../services/netu-resolver';
 import { resolveEmbeddedStream } from '../../services/embed-resolver';
@@ -151,6 +151,51 @@ async function fetchUpstream(target: string, referer?: string, cookies?: string)
 }
 
 export async function proxyRoutes(app: FastifyInstance) {
+  app.get('/proxy/test', async (_request, reply) => {
+    reply.type('text/html; charset=utf-8').send(`<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Prueba de proxy</title><style>
+body{font-family:Arial,sans-serif;background:#100d25;color:#eee;max-width:900px;margin:40px auto;padding:0 20px}h1{font-size:24px}p{color:#b7b3ce}.row{display:flex;gap:10px}.url{flex:1;padding:12px;border:1px solid #555;border-radius:8px;background:#191532;color:#fff;font-size:15px}button{padding:12px 18px;border:0;border-radius:8px;background:#f4b400;color:#171225;font-weight:700;cursor:pointer}.box{margin-top:18px;padding:14px;border-radius:8px;background:#191532;word-break:break-all}.ok{color:#76e39b}.error{color:#ff8080}video{width:100%;margin-top:18px;background:#000;border-radius:8px;max-height:520px}a{color:#8fc7ff}
+</style></head><body><h1>Prueba de servidores de video</h1><p>Pega una URL embed o directa. El backend intentará encontrar el stream y generará una URL proxy.</p>
+<div class="row"><input id="url" class="url" placeholder="https://vidsonic.net/e/..." autofocus><button id="go">Probar</button></div>
+<div id="result" class="box">Esperando una URL.</div><video id="video" controls playsinline></video>
+<script>
+const input=document.getElementById('url'),go=document.getElementById('go'),result=document.getElementById('result'),video=document.getElementById('video');
+go.onclick=async()=>{const url=input.value.trim();if(!url){result.textContent='Introduce una URL.';return}go.disabled=true;video.removeAttribute('src');video.load();result.textContent='Resolviendo embed...';result.className='box';try{const r=await fetch('/proxy/test/resolve?url='+encodeURIComponent(url));const d=await r.json();if(!r.ok)throw new Error(d.error||('HTTP '+r.status));result.className='box ok';result.innerHTML='<b>Proxy generado:</b><br><a target="_blank" href="'+d.proxyUrl+'">'+d.proxyUrl+'</a><br><small>El reproductor intentará cargarlo debajo.</small>';video.src=d.proxyUrl;video.load();}catch(e){result.className='box error';result.textContent='No reproducible: '+e.message}finally{go.disabled=false}};
+input.addEventListener('keydown',e=>{if(e.key==='Enter')go.click()});
+</script></body></html>`);
+  });
+
+  app.get('/proxy/test/resolve', async (request, reply) => {
+    const { url } = request.query as { url?: string };
+    if (!url) return reply.status(400).send({ error: 'url param is required' });
+    let parsed: URL;
+    try { parsed = new URL(url); } catch { return reply.status(400).send({ error: 'Invalid url' }); }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return reply.status(400).send({ error: 'Only http(s) URLs are allowed' });
+    }
+    try {
+      const upstream = await fetchUpstream(url);
+      const contentType = upstream.contentType.toLowerCase();
+      let target = url;
+      let referer: string | undefined;
+      let cookies: string | undefined;
+      if (contentType.includes('text/html')) {
+        upstream.res.data.resume();
+        const resolved = await resolveEmbeddedStream(url);
+        if (!resolved?.url) return reply.status(422).send({ error: 'El embed no expuso un stream reproducible' });
+        target = resolved.url;
+        referer = resolved.referer;
+        cookies = resolved.cookies;
+      } else {
+        upstream.res.data.resume();
+      }
+      return reply.send({ ok: true, proxyUrl: toPublicProxyUrl(buildProxyUrl(target, referer, cookies)), targetType: contentType || 'unknown' });
+    } catch (error) {
+      return reply.status(502).send({ error: (error as Error).message || 'No se pudo consultar el servidor' });
+    }
+  });
+
   app.get('/proxy/stream', async (request, reply) => {
     const { url, referer, cookies } = request.query as Record<string, string>;
 
