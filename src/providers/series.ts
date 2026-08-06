@@ -1,6 +1,7 @@
 import * as cheerio from 'cheerio';
 import { fetchHTML } from '../utils/http';
 import { logger } from '../utils/logger';
+import { isUnsupportedVideoHost } from '../utils/unsupported-video-hosts';
 import { memoryCache } from '../cache/memory';
 import { MediaItem, ContentDetail, Season, Episode, VideoLanguage, VideoServer } from '../types';
 import { resolveVideoUrl } from '../services/video-resolver';
@@ -320,7 +321,7 @@ async function resolveVideos(videos: VideoLanguage[]): Promise<VideoLanguage[]> 
   const resolved: VideoLanguage[] = [];
   for (const lang of videos) {
     const resolvedServers = await Promise.all(
-      lang.servers.map(async (server) => {
+      lang.servers.filter((server) => !isUnsupportedVideoHost(server.url)).map(async (server) => {
         const resolvedUrl = await resolveVideoUrl(server.url);
         return { ...server, url: resolvedUrl };
       }),

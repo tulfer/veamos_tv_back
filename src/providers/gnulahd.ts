@@ -3,6 +3,7 @@ import type { AnyNode } from 'domhandler';
 import { fetchHTML } from '../utils/http';
 import { httpClient } from '../utils/http';
 import { logger } from '../utils/logger';
+import { isUnsupportedVideoHost } from '../utils/unsupported-video-hosts';
 import { memoryCache } from '../cache/memory';
 import { BannerItem, ContentDetail, DownloadLink, Episode, MediaItem, Season, Section, VideoLanguage } from '../types';
 import { storeKeys, getRow, setRow } from '../services/store';
@@ -202,7 +203,7 @@ function toVideoLanguages(data: GnrdPlayerData): VideoLanguage[] {
     .map((l) => ({
       language: l.label,
       servers: l.servers
-        .filter((s) => s && s.src)
+        .filter((s) => s && s.src && !isUnsupportedVideoHost(s.src))
         .map((s) => ({ name: s.title || 'Servidor', url: s.src })),
     }))
     .filter((l) => l.servers.length > 0);

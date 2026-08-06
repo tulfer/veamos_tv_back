@@ -6,6 +6,7 @@ import { logger } from '../utils/logger';
 import { memoryCache } from '../cache/memory';
 import { isNetuHost } from './netu-resolver';
 import { buildProxyUrl, toPublicProxyUrl } from '../utils/proxy-url';
+import { isUnsupportedVideoHost } from '../utils/unsupported-video-hosts';
 
 /**
  * Detalles de contenido con "enriquecimiento en lectura":
@@ -55,12 +56,9 @@ function unwrapVideoServers(videos?: ContentDetail['videos']): void {
         if (isNetu) {
           logger.info({ url: server.url.substring(0, 120) }, 'Netu server omitido (no reproducible por la app)');
         }
-        return !isNetu;
+        return !isNetu && !isUnsupportedVideoHost(server.url);
       })
-      .map((server) => ({
-        ...server,
-        url: requiresEmbedProxy(server.url) ? toPublicProxyUrl(buildProxyUrl(server.url)) : server.url,
-      }));
+      ;
   });
 }
 
