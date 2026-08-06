@@ -8,6 +8,7 @@ export interface MediaItem {
   year?: number;
   type: 'movie' | 'series' | 'anime' | 'live';
   genres?: string[];
+  content?: ContentDetail;
 }
 
 export interface BannerItem extends MediaItem {
