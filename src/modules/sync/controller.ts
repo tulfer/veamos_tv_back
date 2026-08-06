@@ -593,10 +593,11 @@ async function syncGnulahdList(
   let processed = 0;
 
   await processBatch(allItems, async (item) => {
+    const slug = item.id.replace(/^g(?:mov|ser|ani)_/, '');
     try {
       const detail = await scrapeGnulahdDetail(item.id);
       processed++;
-      updateSyncProgress(type, processed, `Procesando detalles (${processed}/${allItems.length})...`, allItems.length);
+      updateSyncProgress(type, processed, `Procesando detalles (${processed}/${allItems.length}) - ${slug}...`, allItems.length);
       if (detail) {
         if (isSeries) {
           const result: SyncSeries = {
@@ -643,7 +644,7 @@ async function syncGnulahdList(
       logger.warn({ id: item.id }, 'Detalle GNULA no disponible; item omitido y el sync continuarÃ¡');
     } catch (error) {
       processed++;
-      updateSyncProgress(type, processed, `Detalle fallido (${processed}/${allItems.length}); continuando...`, allItems.length);
+      updateSyncProgress(type, processed, `Detalle fallido (${processed}/${allItems.length}) - ${slug}; continuando...`, allItems.length);
       logger.warn({ error, id: item.id }, 'Error obteniendo detalle GNULA; item omitido y el sync continuarÃ¡');
     }
   });

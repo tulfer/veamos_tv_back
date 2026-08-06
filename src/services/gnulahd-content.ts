@@ -23,6 +23,10 @@ function serverCount(videos?: VideoLanguage[]): number {
   return videos?.reduce((total, language) => total + (language.servers?.length || 0), 0) || 0;
 }
 
+function hasFewerThanTwoServersPerLanguage(videos?: VideoLanguage[]): boolean {
+  return !videos?.length || videos.some((language) => (language.servers?.length || 0) < 2);
+}
+
 function mergeVideoLanguages(primary: VideoLanguage[] | undefined, extra: VideoLanguage[] | undefined): VideoLanguage[] | undefined {
   if (!extra?.length) return primary;
   const result = (primary || []).map((language) => ({ ...language, servers: [...language.servers] }));
@@ -44,7 +48,7 @@ function mergeVideoLanguages(primary: VideoLanguage[] | undefined, extra: VideoL
 }
 
 function mergeEpisodeVideos(primary: Episode, extra: Episode): void {
-  if (serverCount(primary.videos) >= 2) return;
+  if (!hasFewerThanTwoServersPerLanguage(primary.videos)) return;
   const merged = mergeVideoLanguages(primary.videos, extra.videos);
   if (merged?.length) primary.videos = merged;
 }
@@ -55,14 +59,14 @@ async function enrichWithPelisplus(detail: ContentDetail, logType: GnulahdLogTyp
   const slug = detail.id.replace(/^g(?:mov|ser|ani)_/, '');
   if (!slug) return detail;
 
-  if (detail.type === 'movie' && serverCount(detail.videos) < 2) {
+  if (detail.type === 'movie' && hasFewerThanTwoServersPerLanguage(detail.videos)) {
     const extra = await scrapeMovieDetail(`mov_${slug}`);
     if (extra && serverCount(extra.videos) > 0) {
       detail.videos = mergeVideoLanguages(detail.videos, extra.videos);
     }
   }
 
-  const needsSeriesEnrichment = detail.seasons?.some((season) => season.episodes.some((episode) => serverCount(episode.videos) < 2));
+  const needsSeriesEnrichment = detail.seasons?.some((season) => season.episodes.some((episode) => hasFewerThanTwoServersPerLanguage(episode.videos)));
   if (detail.type === 'series' && needsSeriesEnrichment && detail.seasons?.length) {
     const extra = await scrapeSeriesDetail(`ser_${slug}`);
     if (extra?.seasons?.length) {
@@ -76,7 +80,7 @@ async function enrichWithPelisplus(detail: ContentDetail, logType: GnulahdLogTyp
       }
     }
   }
-  const needsAnimeEnrichment = detail.seasons?.some((season) => season.episodes.some((episode) => serverCount(episode.videos) < 2));
+  const needsAnimeEnrichment = detail.seasons?.some((season) => season.episodes.some((episode) => hasFewerThanTwoServersPerLanguage(episode.videos)));
   if (detail.type === 'anime' && needsAnimeEnrichment && detail.seasons?.length) {
     pushLog(logType, `Consultando Latanime para ${slug}...`);
     const extra = await scrapeLatanimeDetail(slug);
