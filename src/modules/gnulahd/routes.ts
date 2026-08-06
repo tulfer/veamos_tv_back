@@ -28,7 +28,7 @@ async function homeWithLiveChannels() {
     seeAllRoute: section.type === 'live'
       ? '/v2/live/channels'
       : section.type === 'anime'
-        ? '/v2/anime'
+        ? '/anime'
         : `/${section.type}`,
     items: section.items.map(item => {
       const { backdrop, ...rest } = item;
