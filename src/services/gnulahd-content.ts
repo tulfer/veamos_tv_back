@@ -29,6 +29,10 @@ function hasFewerThanTwoServersPerLanguage(videos?: VideoLanguage[]): boolean {
   return !videos?.length || videos.some((language) => (language.servers?.length || 0) < 2);
 }
 
+function hasFewerThanThreeServersPerLanguage(videos?: VideoLanguage[]): boolean {
+  return !videos?.length || videos.some((language) => (language.servers?.length || 0) < 3);
+}
+
 function mergeVideoLanguages(primary: VideoLanguage[] | undefined, extra: VideoLanguage[] | undefined): VideoLanguage[] | undefined {
   if (!extra?.length) return primary;
   const result = (primary || []).map((language) => ({ ...language, servers: [...language.servers] }));
@@ -49,8 +53,8 @@ function mergeVideoLanguages(primary: VideoLanguage[] | undefined, extra: VideoL
   return result;
 }
 
-function mergeEpisodeVideos(primary: Episode, extra: Episode): void {
-  if (!hasFewerThanTwoServersPerLanguage(primary.videos)) return;
+function mergeEpisodeVideos(primary: Episode, extra: Episode, force = false): void {
+  if (!force && !hasFewerThanTwoServersPerLanguage(primary.videos)) return;
   const merged = mergeVideoLanguages(primary.videos, extra.videos);
   if (merged?.length) primary.videos = merged;
 }
@@ -109,7 +113,7 @@ export async function enrichGnulahdDetail(detail: ContentDetail, logType: Gnulah
       }
     }
   }
-  const needsAnimeEnrichment = detail.seasons?.some((season) => season.episodes.some((episode) => hasFewerThanTwoServersPerLanguage(episode.videos)));
+  const needsAnimeEnrichment = detail.seasons?.some((season) => season.episodes.some((episode) => hasFewerThanThreeServersPerLanguage(episode.videos)));
   if (detail.type === 'anime' && needsAnimeEnrichment && detail.seasons?.length) {
     pushLog(logType, `Consultando AnimeJara para ${slug}...`);
     const extra = await scrapeAnimejaraDetail(slug, (message) => pushLog(logType, message));
@@ -121,7 +125,7 @@ export async function enrichGnulahdDetail(detail: ContentDetail, logType: Gnulah
         const extraSeason = extra.seasons.find((item) => item.season_number === season.season_number) || extra.seasons[0];
         for (const episode of season.episodes) {
           const extraEpisode = extraSeason.episodes.find((item) => item.episode_number === episode.episode_number);
-          if (extraEpisode) mergeEpisodeVideos(episode, extraEpisode);
+          if (extraEpisode) mergeEpisodeVideos(episode, extraEpisode, true);
         }
       }
     } else {
@@ -132,12 +136,13 @@ export async function enrichGnulahdDetail(detail: ContentDetail, logType: Gnulah
     if (jkanime?.seasons?.length) {
       const jEpisodes = jkanime.seasons.reduce((total, season) => total + season.episodes.length, 0);
       const jServers = jkanime.seasons.reduce((total, season) => total + season.episodes.reduce((count, episode) => count + serverCount(episode.videos), 0), 0);
-      pushLog(logType, `JKAnime devolviÃ³ ${jEpisodes} episodios y ${jServers} servidores para ${slug}`);
+      const jkanimeLog = `JKAnime devolviÃ³ ${jEpisodes} episodios y ${jServers} servidores para ${slug}`;
+      pushLog(logType, jkanimeLog);
       for (const season of detail.seasons) {
         const extraSeason = jkanime.seasons.find((item) => item.season_number === season.season_number) || jkanime.seasons[0];
         for (const episode of season.episodes) {
           const extraEpisode = extraSeason.episodes.find((item) => item.episode_number === episode.episode_number);
-          if (extraEpisode) mergeEpisodeVideos(episode, extraEpisode);
+          if (extraEpisode) mergeEpisodeVideos(episode, extraEpisode, true);
         }
       }
     } else {

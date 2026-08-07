@@ -71,14 +71,15 @@ async function fetchJkanimeEpisodeNumbers(detailHtml: string, detailUrl: string,
 function extractServers($: cheerio.CheerioAPI, pageUrl: string, rawHtml?: string): VideoLanguage[] {
   const servers: VideoServer[] = [];
   const seen = new Set<string>();
-  const add = (raw: string | undefined, name?: string) => {
+  const add = (raw: string | undefined, name?: string, allowAnyHost = false) => {
     const url = raw ? absoluteUrl(raw.trim().replace(/&amp;/g, '&'), pageUrl) : null;
     if (!url || seen.has(url) || isUnsupportedVideoHost(url)) return;
     try {
       const host = new URL(url).hostname;
+      if (!allowAnyHost && host !== 'jkanime.net' && !/\/jkplayer\//i.test(url)) return;
       if (host === 'jkanime.net' && !/\/jkplayer\//i.test(url)) return;
     } catch { return; }
-    if (/google|doubleclick|propeller|adsrv|popads|adsterra/i.test(url)) return;
+    if (/google|doubleclick|propeller|adsby|popads|adsterra/i.test(url)) return;
     if (/jkplayer\/c1\?u=$/.test(url)) return;
     seen.add(url);
     servers.push({ name: name?.trim() || `Servidor ${servers.length + 1}`, url });
@@ -97,6 +98,25 @@ function extractServers($: cheerio.CheerioAPI, pageUrl: string, rawHtml?: string
     let m: RegExpExecArray | null;
     while ((m = iframeRe.exec(rawHtml)) !== null) {
       add(m[1], 'Servidor');
+    }
+    // jkanime también declara todos sus espejos en el array JS `var servers = [...]`
+    // con el `remote` en base64. Es la lista real de reproductores (Desu, Mega,
+    // Streamwish, Vidhide, Doodstream, etc.) que la UI carga dinámicamente.
+    const serversRe = /var\s+servers\s*=\s*(\[[^\]]*\])\s*;?/;
+    const serversJson = serversRe.exec(rawHtml)?.[1];
+    if (serversJson) {
+      try {
+        const list = JSON.parse(serversJson) as Array<{ remote?: string; server?: string }>;
+        for (const item of list) {
+          if (!item.remote || !item.server) continue;
+          try {
+            const decoded = Buffer.from(item.remote, 'base64').toString('utf-8');
+            if (!/^https?:\/\//i.test(decoded)) continue;
+            if (/mediafire\.com|mediafire\.io/i.test(decoded)) continue;
+            add(decoded, item.server, true);
+          } catch { /* URL no válida */ }
+        }
+      } catch { /* array no parseado */ }
     }
   }
   return servers.length ? [{ language: 'Subtitulado', servers }] : [];
