@@ -1,10 +1,9 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { loadSyncData, loadChannels } from '../../services/data-store';
+import { loadChannels, loadSyncData } from '../../services/data-store';
 import { loadGnulahdHomeData, normalizeGnulahdItemId, scrapeGnulahdList, searchGnulahd } from '../../providers/gnulahd';
 import { getGnulahdDetailContent } from '../../services/gnulahd-content';
 import { unwrapDetailProxy } from '../../services/content-detail';
 import { getChannelsHandler } from '../live-tv/controller';
-import { ContentDetail } from '../../types';
 
 const PAGE_SIZE = 20;
 
@@ -16,19 +15,6 @@ function paginate<T>(items: T[], page: number, limit: number) {
 async function homeWithLiveChannels() {
   const data = await loadGnulahdHomeData();
   if (!data) return null;
-  const synced = await loadSyncData();
-  const detailById = new Map<string, ContentDetail>();
-  for (const item of [
-    ...(synced?.gnulahdMovies || []),
-    ...(synced?.gnulahdSeries || []),
-    ...(synced?.gnulahdAnime || []),
-  ]) {
-    if (item.content) detailById.set(item.id, unwrapDetailProxy(item.content));
-  }
-  const addContent = <T extends { id: string }>(item: T): T & { content?: ContentDetail } => {
-    const content = detailById.get(item.id);
-    return content ? { ...item, content } : item;
-  };
   const channels = await loadChannels();
   const liveSection = {
     title: 'TV en Vivo',
@@ -46,12 +32,12 @@ async function homeWithLiveChannels() {
         : `/${section.type}`,
     items: section.items.map(item => {
       const { backdrop, ...rest } = item;
-      return addContent({ ...rest, poster: backdrop || item.poster, title2: backdrop });
+      return { ...rest, poster: backdrop || item.poster, title2: backdrop };
     }),
   }));
   const banners = data.banners.map(banner => {
     const { backdrop, ...rest } = banner;
-    return addContent({ ...rest, poster: backdrop || banner.poster, title2: backdrop });
+    return { ...rest, poster: backdrop || banner.poster, title2: backdrop };
   });
   return { ...data, banners, sections };
 }
