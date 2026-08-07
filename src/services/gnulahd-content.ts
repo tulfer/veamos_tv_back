@@ -120,14 +120,14 @@ export async function enrichGnulahdDetail(detail: ContentDetail, logType: Gnulah
 }
 
 function collectionForDetail(detail: ContentDetail): GnulahdCollection {
-  if (detail.id.startsWith('gmov_')) return 'gnulahd-movies';
+  if (detail.id.startsWith('gmov_') || detail.id.startsWith('mov_')) return 'gnulahd-movies';
   if (detail.id.startsWith('gani_')) return 'gnulahd-anime';
   return 'gnulahd-series';
 }
 
 function collectionFor(id: string): GnulahdCollection | null {
-  if (id.startsWith('gmov_')) return 'gnulahd-movies';
-  if (id.startsWith('gser_')) return 'gnulahd-series';
+  if (id.startsWith('gmov_') || id.startsWith('mov_')) return 'gnulahd-movies';
+  if (id.startsWith('gser_') || id.startsWith('ser_')) return 'gnulahd-series';
   if (id.startsWith('gani_')) return 'gnulahd-anime';
   return null;
 }
@@ -281,5 +281,21 @@ export async function getGnulahdDetailContent(id: string): Promise<ContentDetail
     }
     return scraped;
   }
+
+  // Título que GNULA no tiene pero sí existe en PelisPlus HD: se scrapea con el
+  // mismo slug, se guarda en la colección v2 y se devuelve.
+  if (collection !== 'gnulahd-anime') {
+    const slug = id.replace(/^g(?:mov|ser|ani)_/, '');
+    const pelisDetail = isSeriesCol ? await scrapeSeriesDetail(`ser_${slug}`) : await scrapeMovieDetail(`mov_${slug}`);
+    if (pelisDetail) {
+      const pelisComplete = isSeriesCol ? !!pelisDetail.seasons?.length : !!pelisDetail.videos?.length;
+      if (pelisComplete) {
+        const normalized: ContentDetail = { ...pelisDetail, id };
+        await healGnulahd(collection, normalized);
+        return normalized;
+      }
+    }
+  }
+
   return item ? (isSeriesCol ? mapGnulahdSeries(item as SyncSeries) : mapGnulahdMovie(item as SyncMovie)) : null;
 }
