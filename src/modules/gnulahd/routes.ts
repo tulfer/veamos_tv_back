@@ -33,14 +33,14 @@ async function homeWithLiveChannels() {
   const liveSection = {
     title: 'TV en Vivo',
     type: 'live' as const,
-    items: channels.map(channel => ({ id: channel.id, title: channel.title, poster: channel.logo, type: 'live' as const })),
-    seeAllRoute: '/v2/live/channels',
+    items: channels.slice(0, 20).map(channel => ({ id: channel.id, title: channel.title, poster: channel.logo, type: 'live' as const })),
+    seeAllRoute: '/live/channels',
     totalItems: channels.length,
   };
   const sections = [...data.sections.filter(section => section.type !== 'live'), liveSection].map(section => ({
     ...section,
     seeAllRoute: section.type === 'live'
-      ? '/v2/live/channels'
+      ? '/live/channels'
       : section.type === 'anime'
         ? '/anime'
         : `/${section.type}`,
