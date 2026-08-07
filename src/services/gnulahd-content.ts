@@ -3,6 +3,7 @@ import { loadSyncData, upsertItemByCol, upsertItemsByCol } from './data-store';
 import { scrapeGnulahdDetail } from '../providers/gnulahd';
 import { scrapeMovieDetail } from '../providers/movies';
 import { scrapeSeriesDetail } from '../providers/series';
+import { scrapePelisPediaMovieDetail, scrapePelisPediaSeriesDetail } from '../providers/pelispedia';
 import { scrapeAnimejaraDetail } from '../providers/animejara';
 import { scrapeJkanimeDetail } from '../providers/jkanime';
 import { unwrapDetailProxy } from './content-detail';
@@ -65,6 +66,16 @@ export async function enrichGnulahdDetail(detail: ContentDetail, logType: Gnulah
     if (extra && serverCount(extra.videos) > 0) {
       detail.videos = mergeVideoLanguages(detail.videos, extra.videos);
     }
+    if (hasFewerThanTwoServersPerLanguage(detail.videos)) {
+      pushLog(logType, `PelisPlus sin videos suficientes, consultando PelisPedia para ${slug}...`);
+      const pelispedia = await scrapePelisPediaMovieDetail(`mov_${slug}`);
+      if (pelispedia && serverCount(pelispedia.videos) > 0) {
+        detail.videos = mergeVideoLanguages(detail.videos, pelispedia.videos);
+        pushLog(logType, `PelisPedia agregó servidores de ${slug}`);
+      } else {
+        pushLog(logType, `PelisPedia no devolvió servidores para ${slug}`);
+      }
+    }
   }
 
   const needsSeriesEnrichment = detail.seasons?.some((season) => season.episodes.some((episode) => hasFewerThanTwoServersPerLanguage(episode.videos)));
@@ -78,6 +89,23 @@ export async function enrichGnulahdDetail(detail: ContentDetail, logType: Gnulah
           const extraEpisode = extraSeason.episodes.find((item) => item.episode_number === episode.episode_number);
           if (extraEpisode) mergeEpisodeVideos(episode, extraEpisode);
         }
+      }
+    }
+    const stillNeedsSeries = detail.seasons?.some((season) => season.episodes.some((episode) => hasFewerThanTwoServersPerLanguage(episode.videos)));
+    if (stillNeedsSeries) {
+      pushLog(logType, `PelisPlus sin videos suficientes, consultando PelisPedia para ${slug}...`);
+      const pelispedia = await scrapePelisPediaSeriesDetail(`ser_${slug}`);
+      if (pelispedia?.seasons?.length) {
+        for (const season of detail.seasons) {
+          const extraSeason = pelispedia.seasons.find((item) => item.season_number === season.season_number) || pelispedia.seasons[0];
+          for (const episode of season.episodes) {
+            const extraEpisode = extraSeason.episodes.find((item) => item.episode_number === episode.episode_number);
+            if (extraEpisode) mergeEpisodeVideos(episode, extraEpisode);
+          }
+        }
+        pushLog(logType, `PelisPedia agregó servidores a ${slug}`);
+      } else {
+        pushLog(logType, `PelisPedia no devolvió temporadas para ${slug}`);
       }
     }
   }
@@ -286,14 +314,20 @@ export async function getGnulahdDetailContent(id: string): Promise<ContentDetail
   // mismo slug, se guarda en la colección v2 y se devuelve.
   if (collection !== 'gnulahd-anime') {
     const slug = id.replace(/^g(?:mov|ser|ani)_/, '');
-    const pelisDetail = isSeriesCol ? await scrapeSeriesDetail(`ser_${slug}`) : await scrapeMovieDetail(`mov_${slug}`);
-    if (pelisDetail) {
-      const pelisComplete = isSeriesCol ? !!pelisDetail.seasons?.length : !!pelisDetail.videos?.length;
-      if (pelisComplete) {
-        const normalized: ContentDetail = { ...pelisDetail, id };
-        await healGnulahd(collection, normalized);
-        return normalized;
-      }
+    let pelisDetail = isSeriesCol ? await scrapeSeriesDetail(`ser_${slug}`) : await scrapeMovieDetail(`mov_${slug}`);
+    const pelisComplete = isSeriesCol ? !!pelisDetail?.seasons?.length : !!pelisDetail?.videos?.length;
+    if (pelisDetail && pelisComplete) {
+      const normalized: ContentDetail = { ...pelisDetail, id };
+      await healGnulahd(collection, normalized);
+      return normalized;
+    }
+    // PelisPedia comparte el mismo slug y es el último respaldo.
+    pelisDetail = isSeriesCol ? await scrapePelisPediaSeriesDetail(`ser_${slug}`) : await scrapePelisPediaMovieDetail(`mov_${slug}`);
+    const pelisPediaComplete = isSeriesCol ? !!pelisDetail?.seasons?.length : !!pelisDetail?.videos?.length;
+    if (pelisDetail && pelisPediaComplete) {
+      const normalized: ContentDetail = { ...pelisDetail, id };
+      await healGnulahd(collection, normalized);
+      return normalized;
     }
   }
 
