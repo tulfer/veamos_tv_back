@@ -605,10 +605,10 @@ async function syncGnulahdList(
       updateSyncProgress(type, processed, `Procesando detalles (${processed}/${allItems.length}) - ${slug}...`, allItems.length);
       if (detail) {
         if (isSeries) {
-          const result: SyncSeries = {
+const result: SyncSeries = {
             id: detail.id,
             title: detail.title,
-            type: kind === 'anime' ? 'anime' : undefined,
+            type: kind === 'anime' ? 'anime' : 'series',
             poster: detail.poster || item.poster,
             backdrop: detail.backdrop || item.poster,
             rating: detail.rating,

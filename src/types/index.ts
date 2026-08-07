@@ -196,7 +196,7 @@ export interface SyncSeries {
   seasons?: Season[];
   videos?: VideoLanguage[];
   downloads?: DownloadLink[];
-  type?: 'anime';
+type?: 'series' | 'anime';
   /** Detalle completo cacheado por los sync de GNULA HD. */
   content?: ContentDetail;
 }

@@ -102,15 +102,20 @@ function typeFromBadge($el: cheerio.Cheerio<AnyNode>, fallback: GnulahdMediaType
   return 'movie';
 }
 
-/** Corrige registros antiguos cuyo prefijo no coincide con el tipo real. */
-export function normalizeGnulahdItemId<T extends { id: string; type: 'movie' | 'series' | 'anime' | 'live' }>(item: T): T {
+/** Corrige registros antiguos cuyo prefijo no coincide con el tipo real.
+ *  Si el item no trae `type` (caso de las cards sincronizadas v2, que solo
+ *  marcan `anime`), se conserva el prefijo que ya trae el id. */
+export function normalizeGnulahdItemId<T extends { id: string; type?: 'movie' | 'series' | 'anime' | 'live' }>(item: T): T {
   if (item.type === 'live') return item;
   const slug = item.id.replace(/^(?:gmov_|gser_|gani_)/, '');
+  const existing = item.id.match(/^(gmov_|gser_|gani_)/)?.[1] || '';
   const prefix = item.type === 'anime'
     ? 'gani_'
     : item.type === 'series'
     ? (item.id.startsWith('gani_') ? 'gani_' : 'gser_')
-    : 'gmov_';
+    : item.type === 'movie'
+    ? 'gmov_'
+    : existing;
   const id = `${prefix}${slug}`;
   return id === item.id ? item : { ...item, id };
 }
