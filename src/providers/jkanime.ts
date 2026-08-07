@@ -102,39 +102,56 @@ function extractServers($: cheerio.CheerioAPI, pageUrl: string, rawHtml?: string
   return servers.length ? [{ language: 'Subtitulado', servers }] : [];
 }
 
-export async function scrapeJkanimeDetail(slug: string, onLog?: (message: string) => void): Promise<{ seasons: Season[] } | null> {
+function pickJkanimeDetail(search: cheerio.CheerioAPI, searchUrl: string): string | null {
+  let detailUrl: string | null = null;
+  // Resultados de animes suelen estar en contenedores .anime__item
+  search('.anime__item a[href]').each((_, element) => {
+    if (detailUrl) return;
+    const href = absoluteUrl(search(element).attr('href') || '', searchUrl);
+    if (href && new URL(href).hostname === 'jkanime.net' && /^https?:\/\/jkanime\.net\/[a-z0-9]+(?:-[a-z0-9]+)*\/?$/.test(href)) detailUrl = href;
+  });
+  if (!detailUrl) {
+    const NAV_PATHS = /\/\b(?:buscar|usuario|dash|notificaciones|guardado|historial|directorio|horario|comunidad|aplicacion|estrenos|top|salida|lista)\b/i;
+    search('a[href]').each((_, element) => {
+      if (detailUrl) return;
+      const href = absoluteUrl(search(element).attr('href') || '', searchUrl);
+      if (!href) return;
+      try {
+        const { hostname, pathname } = new URL(href);
+        if (hostname !== 'jkanime.net' || NAV_PATHS.test(pathname)) return;
+        if (/\.(?:css|js|png|jpg|jpeg|gif|webp|svg)$/i.test(pathname)) return;
+        if (/^\/[a-z0-9]+(?:-[a-z0-9]+)*\/?$/i.test(pathname)) detailUrl = href;
+      } catch { /* ignorar */ }
+    });
+  }
+  return detailUrl;
+}
+
+/** Resuelve el slug de anime en jkanime a partir del slug en inglés del catálogo. */
+export async function searchJkanimeSlug(slug: string, onLog?: (message: string) => void): Promise<string | null> {
   try {
     const query = slug.replace(/-/g, ' ');
     const searchUrl = `${BASE_URL}/buscar/${encodeURIComponent(query)}`;
     onLog?.(`JKAnime: consultando búsqueda ${searchUrl}`);
     const searchHtml = await fetchHTML(searchUrl);
-    const search = cheerio.load(searchHtml);
-    let detailUrl: string | null = null;
-    // Resultados de animes suelen estar en contenedores .anime__item
-    search('.anime__item a[href]').each((_, element) => {
-      if (detailUrl) return;
-      const href = absoluteUrl(search(element).attr('href') || '', searchUrl);
-      if (href && new URL(href).hostname === 'jkanime.net' && /^https?:\/\/jkanime\.net\/[a-z0-9]+(?:-[a-z0-9]+)*\/?$/.test(href)) detailUrl = href;
-    });
-    if (!detailUrl) {
-      const NAV_PATHS = /\/\b(?:buscar|usuario|dash|notificaciones|guardado|historial|directorio|horario|comunidad|aplicacion|estrenos|top|salida|lista)\b/i;
-      search('a[href]').each((_, element) => {
-        if (detailUrl) return;
-        const href = absoluteUrl(search(element).attr('href') || '', searchUrl);
-        if (!href) return;
-        try {
-          const { hostname, pathname } = new URL(href);
-          if (hostname !== 'jkanime.net' || NAV_PATHS.test(pathname)) return;
-          if (/\.(?:css|js|png|jpg|jpeg|gif|webp|svg)$/i.test(pathname)) return;
-          if (/^\/[a-z0-9]+(?:-[a-z0-9]+)*\/?$/i.test(pathname)) detailUrl = href;
-        } catch { /* ignorar */ }
-      });
-    }
+    const detailUrl = pickJkanimeDetail(cheerio.load(searchHtml), searchUrl);
     if (!detailUrl) {
       onLog?.('JKAnime: no se encontró resultado en la búsqueda');
       return null;
     }
     onLog?.(`JKAnime: resultado encontrado ${detailUrl}`);
+    return new URL(detailUrl).pathname.replace(/^\/+|\/+$/g, '');
+  } catch (error) {
+    onLog?.(`JKAnime: error ${(error as Error).message}`);
+    return null;
+  }
+}
+
+export async function scrapeJkanimeDetail(slug: string, onLog?: (message: string) => void): Promise<{ seasons: Season[] } | null> {
+  try {
+    const slugPath = await searchJkanimeSlug(slug, onLog);
+    if (!slugPath) return null;
+    const detailUrl = `${BASE_URL}/${slugPath}`;
     const session = await fetchPageWithSession(detailUrl);
     if (!session) return null;
     const $ = cheerio.load(session.html);

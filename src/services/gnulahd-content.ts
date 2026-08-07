@@ -3,7 +3,7 @@ import { loadSyncData, upsertItemByCol, upsertItemsByCol } from './data-store';
 import { scrapeGnulahdDetail } from '../providers/gnulahd';
 import { scrapeMovieDetail } from '../providers/movies';
 import { scrapeSeriesDetail } from '../providers/series';
-import { scrapeLatanimeDetail } from '../providers/latanime';
+import { scrapeAnimejaraDetail } from '../providers/animejara';
 import { scrapeJkanimeDetail } from '../providers/jkanime';
 import { unwrapDetailProxy } from './content-detail';
 import { logger } from '../utils/logger';
@@ -83,12 +83,12 @@ export async function enrichGnulahdDetail(detail: ContentDetail, logType: Gnulah
   }
   const needsAnimeEnrichment = detail.seasons?.some((season) => season.episodes.some((episode) => hasFewerThanTwoServersPerLanguage(episode.videos)));
   if (detail.type === 'anime' && needsAnimeEnrichment && detail.seasons?.length) {
-    pushLog(logType, `Consultando Latanime para ${slug}...`);
-    const extra = await scrapeLatanimeDetail(slug, (message) => pushLog(logType, message));
+    pushLog(logType, `Consultando AnimeJara para ${slug}...`);
+    const extra = await scrapeAnimejaraDetail(slug, (message) => pushLog(logType, message));
     if (extra?.seasons?.length) {
       const extraEpisodes = extra.seasons.reduce((total, season) => total + season.episodes.length, 0);
       const extraServers = extra.seasons.reduce((total, season) => total + season.episodes.reduce((count, episode) => count + serverCount(episode.videos), 0), 0);
-      pushLog(logType, `Latanime devolviÃ³ ${extraEpisodes} episodios y ${extraServers} servidores para ${slug}`);
+      pushLog(logType, `AnimeJara devolviÃ³ ${extraEpisodes} episodios y ${extraServers} servidores para ${slug}`);
       for (const season of detail.seasons) {
         const extraSeason = extra.seasons.find((item) => item.season_number === season.season_number) || extra.seasons[0];
         for (const episode of season.episodes) {
@@ -97,7 +97,7 @@ export async function enrichGnulahdDetail(detail: ContentDetail, logType: Gnulah
         }
       }
     } else {
-      pushLog(logType, `Latanime no devolviÃ³ servidores para ${slug}`);
+      pushLog(logType, `AnimeJara no devolviÃ³ servidores para ${slug}`);
     }
     pushLog(logType, `Consultando JKAnime para ${slug}...`);
     const jkanime = await scrapeJkanimeDetail(slug, (message) => pushLog(logType, message));
