@@ -5,7 +5,7 @@ import { getGnulahdDetailContent } from '../../services/gnulahd-content';
 import { unwrapDetailProxy } from '../../services/content-detail';
 import { getChannelsHandler } from '../live-tv/controller';
 
-const PAGE_SIZE = 20;
+const PAGE_SIZE = 32;
 
 function paginate<T>(items: T[], page: number, limit: number) {
   const total = items.length;
