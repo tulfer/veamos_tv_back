@@ -197,6 +197,19 @@ export async function loadChannels(): Promise<LiveChannel[]> {
 
 export async function saveSyncData(data: SyncData): Promise<void> {
   try {
+    // Los syncs de canales/películas/series NO modifican las colecciones GNULA:
+    // se re-leen live desde la BD para evitar que un snapshot cacheado
+    // (loadSyncData, TTL 6h) pise colecciones recién sincronizadas
+    // (bug "50 items de anime procesados pero solo 4 en BD": el refresh de
+    // canales sobrescribía gnulahd-anime con el valor viejo del caché).
+    const [liveGnuMovies, liveGnuSeries, liveGnuAnime] = await Promise.all([
+      getRow<SyncMovie[]>(storeKeys.collection('gnulahd-movies')),
+      getRow<SyncSeries[]>(storeKeys.collection('gnulahd-series')),
+      getRow<SyncSeries[]>(storeKeys.collection('gnulahd-anime')),
+    ]);
+    const gnulahdMovies = liveGnuMovies ?? [];
+    const gnulahdSeries = liveGnuSeries ?? [];
+    const gnulahdAnime = liveGnuAnime ?? [];
     await Promise.all([
       saveCollection('movies', data.movies),
       saveCollection('series', data.series),
@@ -205,9 +218,9 @@ export async function saveSyncData(data: SyncData): Promise<void> {
       saveCollection('popular-series', data.popularSeries),
       saveCollection('estreno-movies', data.estrenoMovies),
       saveCollection('estreno-series', data.estrenoSeries),
-      saveCollection('gnulahd-movies', data.gnulahdMovies || []),
-      saveCollection('gnulahd-series', data.gnulahdSeries || []),
-      saveCollection('gnulahd-anime', data.gnulahdAnime || []),
+      saveCollection('gnulahd-movies', gnulahdMovies),
+      saveCollection('gnulahd-series', gnulahdSeries),
+      saveCollection('gnulahd-anime', gnulahdAnime),
       setRow(storeKeys.syncMeta, { updatedAt: data.updatedAt }),
     ]);
     memoryCache.del(SYNC_DATA_CACHE_KEY);
@@ -217,7 +230,14 @@ export async function saveSyncData(data: SyncData): Promise<void> {
       memoryCache.del(COUNTS_PER_KEY_PREFIX + key);
     }
     logger.info(
-      { movies: data.movies.length, series: data.series.length, channels: data.channels.length },
+      {
+        movies: data.movies.length,
+        series: data.series.length,
+        channels: data.channels.length,
+        gnulahdMovies: gnulahdMovies.length,
+        gnulahdSeries: gnulahdSeries.length,
+        gnulahdAnime: gnulahdAnime.length,
+      },
       'Sync data saved to database',
     );
   } catch (error) {
