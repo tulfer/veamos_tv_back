@@ -19,7 +19,7 @@ async function homeWithLiveChannels() {
   const liveSection = {
     title: 'TV en Vivo',
     type: 'live' as const,
-    items: channels.slice(0, 20).map(channel => ({ id: channel.id, title: channel.title, poster: channel.logo, type: 'live' as const })),
+    items: channels.slice(0, 20).map(channel => ({ id: channel.id, title: channel.title, poster: channel.logo, url: channel.url, type: 'live' as const })),
     seeAllRoute: '/live/channels',
     totalItems: channels.length,
   };
