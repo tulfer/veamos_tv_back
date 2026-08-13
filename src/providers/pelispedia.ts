@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import * as crypto from 'node:crypto';
 import { httpClient } from '../utils/http';
 import { ContentDetail, Episode, Season, VideoLanguage, VideoServer } from '../types';
 import { isUnsupportedVideoHost } from '../utils/unsupported-video-hosts';
@@ -9,10 +10,12 @@ import { logger } from '../utils/logger';
  * Proveedor de respaldo para películas y series: PelisPedia.
  *
  * Mismo slug que GNULA/PelisPlus (.mov/pelicula/<slug> y /serie/<slug>).
- * Cada página de película/capítulo expone un iframe hacia el "selector" de
- * servidores (xupalace.org), cuyos espejos reales viven en <li onclick>
- * dentro de `.OD_1`. Aquí se extraen esos espejos y se filtran los hosts no
- * soportados (isUnsupportedVideoHost) sin resolverlos a m3u8.
+ * Cada página de película/capítulo expone un iframe con el reproductor
+ * (xupalace u EMBED69): en el primero los espejos reales viven en
+ * <li onclick> dentro de `.OD_1`; en el segundo viajan cifrados en
+ * `dataLink` y se resuelven con PoW + AES-CBC. Aquí se extraen los espejos
+ * y se filtran los hosts no soportados (isUnsupportedVideoHost) sin
+ * resolverlos a m3u8.
  */
 
 const BASE_URL = 'https://pelispedia.mov';
@@ -103,11 +106,14 @@ function langNameFromImage(imgSrc: string | undefined): string {
   return LANG_NAMES[code] || code;
 }
 
-/** Expande el "selector" de servidores de PelisPedia (embed xupalace): cada
- * <li> guarda un espejo real en su onclick go_to_playerVast('URL'). */
+/** Expande el "selector" de servidores de PelisPedia. Soporta dos formatos:
+ * 1) el embed clásico (xupalace): cada <li> guarda un espejo real en su
+ * onclick go_to_playerVast('URL'); 2) el reproductor EMBED69: los enlaces
+ * viajan cifrados en `dataLink` y se resuelven con PoW + AES-CBC. */
 async function expandPlayerEmbed(embedUrl: string): Promise<Map<string, VideoServer[]>> {
   const result = new Map<string, VideoServer[]>();
-  const embedHtml = await fetchText(embedUrl);
+  const absoluteUrl = /^https?:\/\//i.test(embedUrl) ? embedUrl : `${BASE_URL}${embedUrl}`;
+  const embedHtml = await fetchText(absoluteUrl);
   if (!embedHtml) return result;
 
   const langLabels: Record<string, string> = {};
@@ -131,6 +137,74 @@ async function expandPlayerEmbed(embedUrl: string): Promise<Map<string, VideoSer
     const spanName = match[3].match(/<span[^>]*>([^<]+)<\/span>/i)?.[1]?.trim();
     servers.push({ name: spanName || `Servidor ${servers.length + 1}`, url });
     result.set(languageName, servers);
+  }
+
+  if (result.size > 0) return result;
+
+  const embed69 = await extractEmbed69Servers(embedHtml);
+  for (const [language, servers] of embed69) {
+    result.set(language, servers);
+  }
+
+  return result;
+}
+
+/** Resuelve el PoW del reproductor EMBED69: encuentra el nonce tal que
+ * sha256(challenge + nonce) empiece con '0' x dificultad y deriva la clave
+ * AES (primeros 32 bytes de sha256(challenge + nonce + salt)). */
+function solveEmbed69Pow(challenge: string, difficulty: number, salt: string): Buffer {
+  const prefix = '0'.repeat(difficulty);
+  let nonce = 0;
+  for (;;) {
+    const hash = crypto.createHash('sha256').update(challenge + nonce).digest('hex');
+    if (hash.startsWith(prefix)) {
+      return crypto.createHash('sha256').update(challenge + nonce + salt).digest().subarray(0, 32);
+    }
+    nonce++;
+  }
+}
+
+/** Descifra un link de EMBED69: base64 -> iv (16 bytes) + ciphertext, AES-CBC. */
+function decryptEmbed69Link(encryptedBase64: string, aesKey: Buffer): string | null {
+  try {
+    const raw = Buffer.from(encryptedBase64, 'base64');
+    const decipher = crypto.createDecipheriv('aes-256-cbc', aesKey, raw.subarray(0, 16));
+    return Buffer.concat([decipher.update(raw.subarray(16)), decipher.final()]).toString('utf8');
+  } catch {
+    return null;
+  }
+}
+
+/** Extrae los servidores del reproductor EMBED69 de PelisPedia. */
+async function extractEmbed69Servers(html: string): Promise<Map<string, VideoServer[]>> {
+  const result = new Map<string, VideoServer[]>();
+  const dataLinkMatch = html.match(/let\s+dataLink\s*=\s*(\[[\s\S]*?\]);/);
+  if (!dataLinkMatch) return result;
+
+  let entries: { video_language?: string; sortedEmbeds?: { servername?: string; link?: string }[] }[];
+  try {
+    entries = JSON.parse(dataLinkMatch[1]);
+  } catch {
+    return result;
+  }
+
+  const challenge = html.match(/POW_CHALLENGE\s*=\s*'([^']+)'/)?.[1];
+  const difficulty = parseInt(html.match(/POW_DIFFICULTY\s*=\s*(\d+)/)?.[1] || '3', 10);
+  const salt = html.match(/POW_SALT\s*=\s*'([^']+)'/)?.[1];
+  if (!challenge || !salt) return result;
+
+  let aesKey: Buffer | undefined;
+  for (const entry of entries) {
+    const languageName = langNameFromImage(`x.${entry.video_language || 'LAT'}`);
+    const servers: VideoServer[] = [];
+    for (const embed of entry.sortedEmbeds || []) {
+      if (!embed.link || !embed.servername) continue;
+      if (!aesKey) aesKey = solveEmbed69Pow(challenge, difficulty, salt);
+      const plain = decryptEmbed69Link(embed.link, aesKey);
+      if (!plain || !/^https?:\/\//i.test(plain) || isUnsupportedVideoHost(plain)) continue;
+      servers.push({ name: embed.servername, url: plain });
+    }
+    if (servers.length > 0) result.set(languageName, servers);
   }
 
   return result;
