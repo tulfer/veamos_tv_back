@@ -27,6 +27,8 @@ import {
   firestoreToSupabaseStatusHandler,
   getAutoRefreshHandler,
   setAutoRefreshHandler,
+  getGnulahdAutoSyncHandler,
+  setGnulahdAutoSyncHandler,
 } from './controller';
 
 export async function syncRoutes(app: FastifyInstance) {
@@ -76,4 +78,6 @@ export async function syncRoutes(app: FastifyInstance) {
   app.get('/sync/firestore-to-supabase-status', firestoreToSupabaseStatusHandler);
   app.get('/sync/auto-refresh', getAutoRefreshHandler);
   app.post('/sync/auto-refresh', setAutoRefreshHandler);
+  app.get('/sync/gnulahd/auto', getGnulahdAutoSyncHandler);
+  app.post('/sync/gnulahd/auto', setGnulahdAutoSyncHandler);
 }

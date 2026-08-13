@@ -22,6 +22,7 @@ import { dbExplorerRoutes } from './modules/db-explorer/routes';
 import { proxyRoutes } from './modules/proxy/routes';
 import { playerRoutes } from './modules/player/routes';
 import { startAutoRefreshScheduler } from './services/auto-refresh';
+import { startGnulahdAutoSyncScheduler } from './services/auto-sync-gnulahd';
 import { hydrateSyncState } from './services/sync-status';
 import { migrateProviderChannelIds } from './services/data-store';
 
@@ -267,6 +268,14 @@ async function start() {
       const msg = error instanceof Error ? error.message : String(error);
       process.stderr.write(`WARN: No se pudo iniciar el programador de auto-refresh - ${msg}\n`);
       logger.error({ error }, 'Failed to start auto-refresh scheduler');
+    }
+
+    try {
+      startGnulahdAutoSyncScheduler();
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      process.stderr.write(`WARN: No se pudo iniciar el programador de auto-sync GNULA - ${msg}\n`);
+      logger.error({ error }, 'Failed to start gnulahd auto-sync scheduler');
     }
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);

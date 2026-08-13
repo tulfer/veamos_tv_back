@@ -330,6 +330,95 @@ export async function setAutoRefreshProviderLastRun(provider: string, timestamp:
   });
 }
 
+// ---- Autosync GNULA (home / movies / series / anime) ----
+
+export const GNULAHD_AUTO_TASKS = ['home', 'movies', 'series', 'anime'] as const;
+export type GnulahdAutoTask = (typeof GNULAHD_AUTO_TASKS)[number];
+
+export interface GnulahdAutoTaskConfig {
+  enabled: boolean;
+  /** Intervalo en horas entre ejecuciones automáticas. */
+  intervalHours: number;
+  /** Páginas a sincronizar (solo kind: movies/series/anime). */
+  pages?: string;
+  lastRunAt?: number;
+}
+
+export interface GnulahdAutoSyncConfig {
+  /** tasks: { home?, movies?, series?, anime? } según se hayan configurado. */
+  tasks: Partial<Record<GnulahdAutoTask, GnulahdAutoTaskConfig>>;
+  updatedAt?: number;
+}
+
+const DEFAULT_GNULAHD_TASK: GnulahdAutoTaskConfig = { enabled: false, intervalHours: 12, pages: '1-10' };
+
+function normalizeGnulahdTaskConfig(value: unknown): GnulahdAutoTaskConfig | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const raw = value as Record<string, unknown>;
+  const hours = Number(raw.intervalHours);
+  const pages = typeof raw.pages === 'string' && raw.pages.trim() ? raw.pages.trim() : undefined;
+  const lastRunAt = typeof raw.lastRunAt === 'number' && raw.lastRunAt > 0 ? Math.floor(raw.lastRunAt) : undefined;
+  return {
+    enabled: raw.enabled === true,
+    intervalHours: Number.isFinite(hours) && hours >= 0.1 ? hours : DEFAULT_GNULAHD_TASK.intervalHours,
+    ...(pages ? { pages } : {}),
+    ...(lastRunAt ? { lastRunAt } : {}),
+  };
+}
+
+export async function getGnulahdAutoSyncConfig(): Promise<GnulahdAutoSyncConfig> {
+  try {
+    const data = await getRow<Partial<GnulahdAutoSyncConfig>>(storeKeys.gnulahdAutoSync);
+    const tasks: GnulahdAutoSyncConfig['tasks'] = {};
+    if (data?.tasks && typeof data.tasks === 'object') {
+      for (const [task, cfg] of Object.entries(data.tasks)) {
+        if (!GNULAHD_AUTO_TASKS.includes(task as GnulahdAutoTask)) continue;
+        const normalized = normalizeGnulahdTaskConfig(cfg);
+        if (normalized) tasks[task as GnulahdAutoTask] = normalized;
+      }
+    }
+    return {
+      tasks,
+      updatedAt: typeof data?.updatedAt === 'number' ? data.updatedAt : undefined,
+    };
+  } catch (error) {
+    logger.error({ error }, 'Failed to read gnulahd auto-sync config');
+    return { tasks: {} };
+  }
+}
+
+export async function setGnulahdAutoSyncConfig(config: { tasks?: Partial<Record<GnulahdAutoTask, Partial<GnulahdAutoTaskConfig>>> }): Promise<GnulahdAutoSyncConfig> {
+  const current = await getGnulahdAutoSyncConfig();
+  const next: GnulahdAutoSyncConfig = { tasks: { ...current.tasks } };
+  if (config.tasks) {
+    for (const [task, patch] of Object.entries(config.tasks)) {
+      if (!GNULAHD_AUTO_TASKS.includes(task as GnulahdAutoTask)) continue;
+      const currentTask = current.tasks[task as GnulahdAutoTask] ?? { ...DEFAULT_GNULAHD_TASK };
+      const hours = patch.intervalHours !== undefined ? patch.intervalHours : currentTask.intervalHours;
+      next.tasks[task as GnulahdAutoTask] = {
+        enabled: patch.enabled !== undefined ? Boolean(patch.enabled) : currentTask.enabled,
+        intervalHours: Number.isFinite(Number(hours)) && Number(hours) >= 0.1 ? Number(hours) : currentTask.intervalHours,
+        ...(patch.pages !== undefined ? { pages: patch.pages.trim() ? patch.pages.trim() : '1-10' } : currentTask.pages ? { pages: currentTask.pages } : {}),
+        ...(currentTask.lastRunAt ? { lastRunAt: currentTask.lastRunAt } : {}),
+      };
+    }
+  }
+  await setRow(storeKeys.gnulahdAutoSync, { ...next, updatedAt: Date.now() });
+  return next;
+}
+
+export async function setGnulahdAutoSyncLastRun(task: GnulahdAutoTask, timestamp: number): Promise<void> {
+  const current = await getGnulahdAutoSyncConfig();
+  const currentTask = current.tasks[task] ?? { ...DEFAULT_GNULAHD_TASK };
+  current.tasks[task] = {
+    enabled: currentTask.enabled,
+    intervalHours: currentTask.intervalHours,
+    ...(currentTask.pages ? { pages: currentTask.pages } : {}),
+    lastRunAt: timestamp,
+  };
+  await setRow(storeKeys.gnulahdAutoSync, { ...current, updatedAt: Date.now() });
+}
+
 export async function getSyncStats(): Promise<{
   movies: number;
   series: number;

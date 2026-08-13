@@ -3,7 +3,7 @@ import path from 'path';
 import { FastifyRequest, FastifyReply } from 'fastify';
 import { scrapeMovies, scrapeMovieDetail, scrapePopularMovies } from '../../providers/movies';
 import { scrapeSeries, scrapeSeriesDetail, scrapePopularSeries } from '../../providers/series';
-import { saveSyncData, loadSyncData, saveHomeData, loadHomeData, getCollectionCounts, getCollectionCount, getAutoRefreshConfig, setAutoRefreshConfig, upsertItemByCol, replaceCollection } from '../../services/data-store';
+import { saveSyncData, loadSyncData, saveHomeData, loadHomeData, getCollectionCounts, getCollectionCount, getAutoRefreshConfig, setAutoRefreshConfig, upsertItemByCol, replaceCollection, getGnulahdAutoSyncConfig, setGnulahdAutoSyncConfig, GNULAHD_AUTO_TASKS } from '../../services/data-store';
 import { fetchItemDetails } from '../../providers/cineby';
 import { closeBrowser } from '../../services/video-resolver';
 import { fetchLiveChannels, parseM3U, validateBatch } from '../../providers/live-tv';
@@ -14,7 +14,7 @@ import { SyncMovie, SyncSeries, SyncData, LiveChannel } from '../../types';
 import { startSync, completeSync, failSync, updateSyncProgress, getLogs, clearLogs, pushLog, SyncType, getSyncStatus } from '../../services/sync-status';
 import { firestoreMigrationStatus, getFirestoreMigrationStatus, runFirestoreToSupabase, FirestoreMigrationStatus } from '../../services/firestore-migrate';
 import { REFRESH_PROVIDERS, getProviderRefreshQueueStatus } from '../live-tv/controller';
-import { AutoRefreshConfig } from '../../services/data-store';
+import { AutoRefreshConfig, GnulahdAutoTask, GnulahdAutoTaskConfig, GnulahdAutoSyncConfig } from '../../services/data-store';
 
 interface MigrationStatus {
   running: boolean;
@@ -665,52 +665,50 @@ const result: SyncSeries = {
   return results;
 }
 
-export async function syncGnulahdHomeHandler(_request: FastifyRequest, reply: FastifyReply) {
-  if (!startSync('gnulahdHome')) {
-    return reply.send({ ok: true, message: 'Gnulahd home sync already in progress' });
+/** Ejecuta el sync del home GNULA en segundo plano (usado por el handler y el autosync).
+ *  Devuelve true si la sincronización arrancó (false si ya había una en curso). */
+export async function runGnulahdHomeSync(): Promise<boolean> {
+  const type = 'gnulahdHome';
+  if (!startSync(type)) {
+    pushLog(type, '⏳ Ya hay una sincronización del home GNULA en curso, omitiendo...');
+    return false;
   }
-
-  reply.send({ ok: true, message: 'Gnulahd home sync started' });
-
-  runBackgroundSync('gnulahdHome', async () => {
-    updateSyncProgress('gnulahdHome', 0, 'Scrapeando home de gnulahd.nu...');
+  runBackgroundSync(type, async () => {
+    updateSyncProgress(type, 0, 'Scrapeando home de gnulahd.nu...');
     const { scrapeGnulahdHome, saveGnulahdHomeData } = await import('../../providers/gnulahd');
     const { prefetchGnulahdDetails } = await import('../../services/gnulahd-content');
     const data = await scrapeGnulahdHome();
     const ids = [...data.banners, ...data.sections.flatMap((section) => section.items)].map((item) => item.id);
     await saveGnulahdHomeData(data);
-    updateSyncProgress('gnulahdHome', 0, `${ids.length} ítems encontrados, obteniendo contenidos...`);
+    updateSyncProgress(type, 0, `${ids.length} ítems encontrados, obteniendo contenidos...`);
     const cached = await prefetchGnulahdDetails(ids, (completed, total, saved) => {
-      updateSyncProgress('gnulahdHome', completed, `Obteniendo contenidos (${completed}/${total}), ${saved} guardados...`, total);
-    }, 'gnulahdHome');
-    updateSyncProgress('gnulahdHome', ids.length, `${cached}/${ids.length} contenidos guardados, guardando home...`, ids.length);
+      updateSyncProgress(type, completed, `Obteniendo contenidos (${completed}/${total}), ${saved} guardados...`, total);
+    }, type);
+    updateSyncProgress(type, ids.length, `${cached}/${ids.length} contenidos guardados, guardando home...`, ids.length);
     await saveGnulahdHomeData(data);
     const count = data.banners.length + data.sections.length;
-    updateSyncProgress('gnulahdHome', count, `${count} banners/secciones guardadas`);
+    updateSyncProgress(type, count, `${count} banners/secciones guardadas`);
     return count;
   });
+  return true;
 }
 
-async function syncGnulahdByKindHandler(
-  request: FastifyRequest,
-  reply: FastifyReply,
-  kind: 'peliculas' | 'series' | 'anime',
-  type: SyncType,
-  field: 'gnulahdMovies' | 'gnulahdSeries' | 'gnulahdAnime',
-) {
-  const body = request.body as { pages?: string; replace?: boolean } | undefined;
-  const pages = parsePages(body?.pages);
-  if (pages.length === 0) {
-    return reply.status(400).send({ error: 'Provide pages in body, e.g. { "pages": "1-20" }' });
-  }
-  if (!startSync(type)) {
-    return reply.send({ ok: true, message: `${type} sync already in progress` });
-  }
+export async function syncGnulahdHomeHandler(_request: FastifyRequest, reply: FastifyReply) {
+  const started = await runGnulahdHomeSync();
+  if (!started) return reply.send({ ok: true, message: 'Gnulahd home sync already in progress' });
+  return reply.send({ ok: true, message: 'Gnulahd home sync started' });
+}
 
-  reply.send({ ok: true, message: `${type} sync started` });
-
+/** Ejecuta el sync de un listado GNULA en segundo plano (usado por handlers y autosync).
+ *  Devuelve true si la sincronización arrancó (false si ya había una en curso). */
+export async function runGnulahdKindSync(kind: 'peliculas' | 'series' | 'anime', pages: number[], shouldReplace = false): Promise<boolean> {
+  const type: SyncType = kind === 'peliculas' ? 'gnulahdMovies' : kind === 'series' ? 'gnulahdSeries' : 'gnulahdAnime';
+  const field: 'gnulahdMovies' | 'gnulahdSeries' | 'gnulahdAnime' = type;
+  if (pages.length === 0 || !startSync(type)) {
+    pushLog(type, `⏳ Ya hay una sincronización de ${kind} en curso o sin páginas, omitiendo...`);
+    return false;
+  }
   runBackgroundSync(type, async () => {
-    const shouldReplace = body?.replace === true;
     const collection = field === 'gnulahdMovies' ? 'gnulahd-movies' : field === 'gnulahdSeries' ? 'gnulahd-series' : 'gnulahd-anime';
     if (shouldReplace) {
       await replaceCollection(collection, []);
@@ -725,6 +723,24 @@ async function syncGnulahdByKindHandler(
     await persistQueue;
     return items.length;
   });
+  return true;
+}
+
+async function syncGnulahdByKindHandler(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  kind: 'peliculas' | 'series' | 'anime',
+  type: SyncType,
+  field: 'gnulahdMovies' | 'gnulahdSeries' | 'gnulahdAnime',
+) {
+  const body = request.body as { pages?: string; replace?: boolean } | undefined;
+  const pages = parsePages(body?.pages);
+  if (pages.length === 0) {
+    return reply.status(400).send({ error: 'Provide pages in body, e.g. { "pages": "1-20" }' });
+  }
+  const started = await runGnulahdKindSync(kind, pages, body?.replace === true);
+  if (!started) return reply.send({ ok: true, message: `${type} sync already in progress` });
+  return reply.send({ ok: true, message: `${type} sync started` });
 }
 
 export async function syncGnulahdMoviesHandler(request: FastifyRequest, reply: FastifyReply) {
@@ -934,8 +950,9 @@ export async function syncStatusHandler(request: FastifyRequest, reply: FastifyR
   ];
 
   const autoCfg = await getAutoRefreshConfig();
+  const gnulahdAutoCfg = await getGnulahdAutoSyncConfig();
 
-  return reply.type('text/html').send(generateSyncDashboard(status, syncDefs, migrationStatus, firestoreMigrationStatus, autoCfg));
+  return reply.type('text/html').send(generateSyncDashboard(status, syncDefs, migrationStatus, firestoreMigrationStatus, autoCfg, gnulahdAutoCfg));
 }
 
 export async function syncCountsHandler(_request: FastifyRequest, reply: FastifyReply) {
@@ -975,6 +992,30 @@ export async function setAutoRefreshHandler(request: FastifyRequest, reply: Fast
     intervalMinutes: typeof body.intervalMinutes === 'number' ? body.intervalMinutes : undefined,
     providers,
   });
+  return reply.send({ ok: true, ...config });
+}
+
+export async function getGnulahdAutoSyncHandler(_request: FastifyRequest, reply: FastifyReply) {
+  const config = await getGnulahdAutoSyncConfig();
+  return reply.send(config);
+}
+
+export async function setGnulahdAutoSyncHandler(request: FastifyRequest, reply: FastifyReply) {
+  const body = (request.body || {}) as { tasks?: unknown };
+  if (!body.tasks || typeof body.tasks !== 'object') {
+    return reply.status(400).send({ error: 'Provide tasks in body, e.g. { "tasks": { "home": { "enabled": true, "intervalHours": 6 } } }' });
+  }
+  const tasks: Partial<Record<GnulahdAutoTask, Partial<GnulahdAutoTaskConfig>>> = {};
+  for (const [task, patch] of Object.entries(body.tasks as Record<string, unknown>)) {
+    if (!GNULAHD_AUTO_TASKS.includes(task as GnulahdAutoTask)) continue;
+    const raw = (patch || {}) as Record<string, unknown>;
+    tasks[task as GnulahdAutoTask] = {
+      enabled: typeof raw.enabled === 'boolean' ? raw.enabled : undefined,
+      intervalHours: typeof raw.intervalHours === 'number' ? raw.intervalHours : undefined,
+      pages: typeof raw.pages === 'string' ? raw.pages : undefined,
+    };
+  }
+  const config = await setGnulahdAutoSyncConfig({ tasks: tasks as never });
   return reply.send({ ok: true, ...config });
 }
 
@@ -1208,6 +1249,7 @@ function generateSyncDashboard(
   migStatus: MigrationStatus,
   fsMigStatus: FirestoreMigrationStatus,
   autoCfg: AutoRefreshConfig,
+  gnulahdAutoCfg: GnulahdAutoSyncConfig,
 ): string {
   const statusBadge = (s: string) => {
     const map: Record<string, string> = { idle: '⚪', running: '🟡', completed: '🟢', failed: '🔴' };
@@ -1458,6 +1500,39 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
       <div style="display:flex;align-items:center;gap:.8rem;margin-top:.8rem">
         <button class="btn btn-secondary btn-sm" onclick="refreshAutoRefreshState(true)">🔄 Consultar estado</button>
         <span id="arHint" style="font-size:.8rem;color:#888">—</span>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<div class="card-wrap large-card-wrap" id="wrap-gnulahdAuto">
+<div class="migration-section">
+  <h2 style="margin-bottom:1rem;font-size:1.2rem;color:#a0a0c0">🤖 Auto-sync GNULA</h2>
+  <div class="migration-card">
+    <div class="section-toolbar"><span class="drag-handle" draggable="true" title="Arrastrar para reordenar">↕</span><span class="section-title">Auto-sync GNULA (home / movies / series / anime)</span><button class="card-hide-btn" id="hidebtn-gnulahdAuto" onclick="toggleCardHide('gnulahdAuto')" title="Ocultar tarjeta">🚫</button></div>
+    <div class="card-body">
+      <div id="gaRows" class="provider-rows">
+        ${GNULAHD_AUTO_TASKS.map((task) => {
+          const taskCfg = gnulahdAutoCfg.tasks[task];
+          const enabled = taskCfg?.enabled === true;
+          const hours = taskCfg?.intervalHours ?? 12;
+          const pages = taskCfg?.pages ?? '1-10';
+          const lastText = taskCfg?.lastRunAt
+            ? `último: ${new Date(taskCfg.lastRunAt).toLocaleString('es-CO', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`
+            : 'sin ejecutar';
+          return `<div class="provider-row" id="gaRow-${task}">
+            <input type="checkbox" id="gaE-${task}" ${enabled ? 'checked' : ''} onchange="saveGnulahdAuto()" style="width:18px;height:18px;accent-color:#667eea">
+            <label class="provider-name" for="gaE-${task}">${task}</label>
+            <input class="provider-input" type="number" id="gaH-${task}" min="0.1" step="0.5" value="${hours}" placeholder="horas" onchange="saveGnulahdAuto()" style="width:90px">
+            <span class="provider-last" style="font-size:.7rem">h · ${lastText}</span>
+            <input class="provider-input" type="text" id="gaP-${task}" value="${pages}" placeholder="páginas" onchange="saveGnulahdAuto()" style="width:90px" title="Páginas a sincronizar (p.ej. 1-10)">
+          </div>`;
+        }).join('\n')}
+      </div>
+      <div style="display:flex;align-items:center;gap:.8rem;margin-top:.8rem">
+        <button class="btn btn-secondary btn-sm" onclick="refreshGnulahdAutoState()">🔄 Consultar estado</button>
+        <span id="gaHint" style="font-size:.8rem;color:#888">—</span>
       </div>
     </div>
   </div>
@@ -2449,6 +2524,61 @@ async function saveAutoRefresh() {
     await res.json();
   } catch {}
   refreshAutoRefreshState(false);
+}
+
+// ── Auto-sync GNULA (home / movies / series / anime) ──
+const GA_TASKS = ['home', 'movies', 'series', 'anime'];
+async function refreshGnulahdAutoState() {
+  try {
+    const res = await fetch('/sync/gnulahd/auto');
+    const data = await res.json();
+    const tasks = data.tasks || {};
+    const hint = document.getElementById('gaHint');
+    if (hint) {
+      const active = GA_TASKS.filter(function (t) { return tasks[t] && tasks[t].enabled; });
+      hint.textContent = active.length
+        ? active.length + ' tarea(s) activa(s): ' + active.join(', ')
+        : 'Ninguna tarea configurada (marca una y pon las horas)';
+    }
+    const typing = document.activeElement;
+    const typingId = typing && typing.id ? typing.id : '';
+    if (typingId.indexOf('gaE-') === 0 || typingId.indexOf('gaH-') === 0 || typingId.indexOf('gaP-') === 0) return;
+    GA_TASKS.forEach(function (t) {
+      const cfg = tasks[t];
+      if (!cfg) return;
+      const cb = document.getElementById('gaE-' + t);
+      const hours = document.getElementById('gaH-' + t);
+      const pages = document.getElementById('gaP-' + t);
+      if (cb) cb.checked = cfg.enabled === true;
+      if (hours) hours.value = cfg.intervalHours || '';
+      if (pages) pages.value = cfg.pages || '1-10';
+    });
+  } catch {}
+}
+async function saveGnulahdAuto() {
+  const tasks = {};
+  GA_TASKS.forEach(function (t) {
+    const cb = document.getElementById('gaE-' + t);
+    const hoursEl = document.getElementById('gaH-' + t);
+    const pagesEl = document.getElementById('gaP-' + t);
+    if (!cb) return;
+    const hours = parseFloat(hoursEl ? hoursEl.value : '');
+    const pages = pagesEl ? pagesEl.value.trim() : '';
+    tasks[t] = {
+      enabled: cb.checked,
+      intervalHours: Number.isFinite(hours) && hours > 0 ? hours : 12,
+      pages: pages || '1-10',
+    };
+  });
+  try {
+    const res = await fetch('/sync/gnulahd/auto', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tasks }),
+    });
+    await res.json();
+  } catch {}
+  refreshGnulahdAutoState();
 }
 
 // ── Tarjetas: ordenar / ocultar (persistido en localStorage) ──
