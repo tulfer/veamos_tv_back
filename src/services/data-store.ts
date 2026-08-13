@@ -1,7 +1,7 @@
 import { logger } from '../utils/logger';
 import { memoryCache } from '../cache/memory';
 import { SyncData, SyncMovie, SyncSeries, LiveChannel, MediaItem } from '../types';
-import { storeKeys, getRow, setRow } from './store';
+import { storeKeys, getRow, getRowStrict, setRow } from './store';
 import { toPublicProxyUrl } from '../utils/proxy-url';
 
 const SYNC_DATA_CACHE_KEY = 'sync:data';
@@ -142,6 +142,14 @@ async function loadCollection<T>(name: string): Promise<T[]> {
   return Array.isArray(data) ? data : [];
 }
 
+/** Igual que loadCollection pero Lanza ante errores de red/BD: ante un fallo
+ *  de lectura es preferible abortar la escritura que reescribir la colección
+ *  completa con datos parciales (eso borraría items existentes). */
+async function loadCollectionStrict<T>(name: string): Promise<T[]> {
+  const data = await getRowStrict<T[]>(storeKeys.collection(name));
+  return Array.isArray(data) ? data : [];
+}
+
 async function saveCollection<T>(name: string, items: T[]): Promise<void> {
   await setRow(storeKeys.collection(name), stripUndefined(items));
 }
@@ -197,20 +205,26 @@ export async function loadChannels(): Promise<LiveChannel[]> {
 
 export async function saveSyncData(data: SyncData): Promise<void> {
   try {
-    // Los syncs de canales/películas/series NO modifican las colecciones GNULA:
-    // se re-leen live desde la BD para evitar que un snapshot cacheado
-    // (loadSyncData, TTL 6h) pise colecciones recién sincronizadas
-    // (bug "50 items de anime procesados pero solo 4 en BD": el refresh de
-    // canales sobrescribía gnulahd-anime con el valor viejo del caché).
-    const [liveGnuMovies, liveGnuSeries, liveGnuAnime] = await Promise.all([
-      getRow<SyncMovie[]>(storeKeys.collection('gnulahd-movies')),
-      getRow<SyncSeries[]>(storeKeys.collection('gnulahd-series')),
-      getRow<SyncSeries[]>(storeKeys.collection('gnulahd-anime')),
-    ]);
-    const gnulahdMovies = liveGnuMovies ?? [];
-    const gnulahdSeries = liveGnuSeries ?? [];
-    const gnulahdAnime = liveGnuAnime ?? [];
-    await Promise.all([
+    // Las colecciones GNULA se re-leen live desde la BD ANTES de escribir:
+    // así un sync v1 (canales/películas) nunca pisa datos recién sincronizados.
+    // Si la lectura falla (red/BD), se omite el guardado de GNULA (no se tocan)
+    // en vez de reescribirlas vacías/parciales y borrar items. (bug "se borran los animes")
+    let gnulahdMovies: SyncMovie[] | null = null;
+    let gnulahdSeries: SyncSeries[] | null = null;
+    let gnulahdAnime: SyncSeries[] | null = null;
+    try {
+      const [liveGnuMovies, liveGnuSeries, liveGnuAnime] = await Promise.all([
+        getRowStrict<SyncMovie[]>(storeKeys.collection('gnulahd-movies')),
+        getRowStrict<SyncSeries[]>(storeKeys.collection('gnulahd-series')),
+        getRowStrict<SyncSeries[]>(storeKeys.collection('gnulahd-anime')),
+      ]);
+      gnulahdMovies = liveGnuMovies ?? [];
+      gnulahdSeries = liveGnuSeries ?? [];
+      gnulahdAnime = liveGnuAnime ?? [];
+    } catch (error) {
+      logger.warn({ error: (error as Error).message }, 'No se pudo leer colecciones GNULA; se omiten estas colecciones en el guardado');
+    }
+    const writes = [
       saveCollection('movies', data.movies),
       saveCollection('series', data.series),
       saveCollection('channels', data.channels),
@@ -218,11 +232,12 @@ export async function saveSyncData(data: SyncData): Promise<void> {
       saveCollection('popular-series', data.popularSeries),
       saveCollection('estreno-movies', data.estrenoMovies),
       saveCollection('estreno-series', data.estrenoSeries),
-      saveCollection('gnulahd-movies', gnulahdMovies),
-      saveCollection('gnulahd-series', gnulahdSeries),
-      saveCollection('gnulahd-anime', gnulahdAnime),
       setRow(storeKeys.syncMeta, { updatedAt: data.updatedAt }),
-    ]);
+    ];
+    if (gnulahdMovies !== null) writes.push(saveCollection('gnulahd-movies', gnulahdMovies));
+    if (gnulahdSeries !== null) writes.push(saveCollection('gnulahd-series', gnulahdSeries));
+    if (gnulahdAnime !== null) writes.push(saveCollection('gnulahd-anime', gnulahdAnime));
+    await Promise.all(writes);
     memoryCache.del(SYNC_DATA_CACHE_KEY);
     memoryCache.del(CHANNELS_CACHE_KEY);
     memoryCache.del(COUNTS_CACHE_KEY);
@@ -503,9 +518,11 @@ export async function getCollectionCount(key: string): Promise<number | null> {
 
 // ---- Documento individual (self-healing del detalle) ----
 
-/** Actualiza (o crea) un item dentro de una colección por su id. */
+/** Actualiza (o crea) un item dentro de una colección por su id.
+ *  Si la lectura previa falla (red/BD), Lanza para no reescribir la
+ *  colección entera con datos parciales (podría borrar items existentes). */
 export async function upsertItemByCol<T extends { id: string }>(collection: string, item: T): Promise<void> {
-  const items = await loadCollection<T>(collection);
+  const items = await loadCollectionStrict<T>(collection);
   const byId = new Map(items.map((existing) => [existing.id, existing]));
   const { id, ...data } = item;
   byId.set(id, { id, ...stripUndefined(data) } as unknown as T);
@@ -515,7 +532,7 @@ export async function upsertItemByCol<T extends { id: string }>(collection: stri
 /** Actualiza varios documentos en una sola lectura/escritura de la colección. */
 export async function upsertItemsByCol<T extends { id: string }>(collection: string, newItems: T[]): Promise<void> {
   if (newItems.length === 0) return;
-  const items = await loadCollection<T>(collection);
+  const items = await loadCollectionStrict<T>(collection);
   const byId = new Map(items.map((item) => [item.id, item]));
   for (const item of newItems) {
     const { id, ...data } = item;

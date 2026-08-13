@@ -74,6 +74,17 @@ export async function getRow<T>(key: string): Promise<T | null> {
   }
 }
 
+/** Igual que getRow pero Lanza ante errores de red/BD (no devuelve null),
+ *  para que los escritores detecten fallos de lectura y NO reescriban
+ *  colecciones completas con datos parciales (evita borrados masivos). */
+export async function getRowStrict<T>(key: string): Promise<T | null> {
+  const p = getPool();
+  if (!p) return null;
+  const { rows } = await p.query('SELECT value FROM store WHERE key = $1', [key]);
+  if (rows.length === 0) return null;
+  return rows[0].value as T;
+}
+
 export async function setRow<T>(key: string, value: T): Promise<void> {
   const p = getPool();
   if (!p) return;
