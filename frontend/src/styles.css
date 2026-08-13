@@ -14,6 +14,7 @@
 .provider-row .run-button{width:38px;height:34px;border:1px solid #8e6df0;border-radius:9px;background:linear-gradient(135deg,#6040d3,#8152e8);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:16px;cursor:pointer;box-shadow:0 6px 14px #5e40d833}
 .provider-row .run-button:hover{filter:brightness(1.12);transform:translateY(-1px)}
 .provider-row .run-button:disabled{opacity:.5;cursor:not-allowed;transform:none}
+.ga-row{display:flex;align-items:center;gap:8px}.ga-row .ga-label{color:#8d95b7;font-size:12px;white-space:nowrap}.ga-row .interval{width:70px;background:#090c1e;border:1px solid #ffffff1c;border-radius:8px;color:#e8eaf8;padding:6px 8px;outline:none}.ga-row .interval:focus{border-color:#8b68f4;box-shadow:0 0 0 3px #7a58e522}
 .dot:not(.active){background:#ff596b;box-shadow:0 0 10px #ff596b}
 @media(max-width:700px){.process-actions small{white-space:normal}.provider-row{grid-template-columns:9px minmax(80px,1fr) 28px 64px 38px}.provider-row .interval{padding-inline:6px}}
 .thread-tabs button.failed{border-color:#ff596b;background:#4a202c;color:#ff9ba4}
