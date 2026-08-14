@@ -1114,6 +1114,7 @@ export async function syncStatusHandler(request: FastifyRequest, reply: FastifyR
     { key: 'gnulahdMovies', label: 'Gnulahd Películas', route: '/sync/gnulahd/movies', method: 'POST', needsPages: true },
     { key: 'gnulahdSeries', label: 'Gnulahd Series', route: '/sync/gnulahd/series', method: 'POST', needsPages: true },
     { key: 'gnulahdAnime', label: 'Gnulahd Anime', route: '/sync/gnulahd/anime', method: 'POST', needsPages: true },
+    { key: 'gnulahdItem', label: 'Sync ítem GNULA', route: '/sync/gnulahd/item', method: 'POST' },
     { key: 'fetchDetails', label: 'Fetch Details (cineby)', route: '/sync/fetch-details', method: 'POST' },
     { key: 'importM3U', label: 'Importar M3U', route: '/sync/live/import', method: 'POST', needsUrl: true },
     { key: 'refreshAll', label: 'Refresh All Canales', route: '/live/channels/refresh-all', method: 'POST' },
@@ -1431,6 +1432,36 @@ function generateSyncDashboard(
   };
 
   const rows = syncDefs.map(def => {
+    if (def.key === 'gnulahdItem') {
+      return `
+    <div class="card-wrap" id="wrap-gnulahdItem">
+    <div class="card" id="card-gnulahdItem">
+      <div class="card-header">
+        <span class="drag-handle" draggable="true" title="Arrastrar para reordenar">⠿</span>
+        <span class="badge" id="giBadge">⚪</span>
+        <span class="card-title">Sync ítem GNULA</span>
+        <span class="status-text idle" id="giStatus">idle</span>
+        <button class="card-hide-btn" id="hidebtn-gnulahdItem" onclick="toggleCardHide('gnulahdItem')" title="Ocultar tarjeta">🚫</button>
+      </div>
+      <div class="card-body">
+        <div style="display:flex;gap:.5rem;margin-bottom:.6rem;align-items:center">
+          <select id="giKind" onchange="loadGnulahdItems()" style="flex:0 0 130px;padding:.5rem;border-radius:6px;border:1px solid rgba(255,255,255,.15);background:rgba(0,0,0,.15);color:#fff;font-size:.85rem">
+            <option value="movies">Películas</option>
+            <option value="series">Series</option>
+            <option value="anime">Anime</option>
+          </select>
+          <select id="giItem" style="flex:1;padding:.5rem;border-radius:6px;border:1px solid rgba(255,255,255,.15);background:rgba(0,0,0,.15);color:#fff;font-size:.85rem"><option value="">Cargando slugs...</option></select>
+          <button class="btn btn-primary btn-sm" onclick="runGnulahdItem(false)" title="Sincronizar el ítem seleccionado">▶ Sincronizar</button>
+        </div>
+        <div style="display:flex;gap:.5rem;margin-bottom:.6rem;align-items:center">
+          <input id="giSlug" type="text" placeholder="Slug nuevo (ej: silo) — no necesita estar en BD" style="flex:1;padding:.5rem;border-radius:6px;border:1px solid rgba(255,255,255,.15);background:rgba(0,0,0,.15);color:#fff;font-size:.85rem">
+          <button class="btn btn-primary btn-sm" onclick="runGnulahdItem(true)" title="Scrapear, enriquecer y guardar el slug nuevo">＋ Agregar y sincronizar</button>
+        </div>
+        <div class="card-log" id="giLog" style="max-height:240px"><div class="card-log-empty">Sin ejecución reciente</div></div>
+      </div>
+    </div>
+    </div>`;
+    }
     const s = status[def.key];
     const isRunning = s?.status === 'running';
     const badge = statusBadge(s?.status || 'idle');
@@ -2886,6 +2917,69 @@ document.addEventListener('drop', function (e) {
 });
 loadCardLayout();
 applyCardLayout();
+</script>
+<script>
+let giItems = [];
+async function loadGnulahdItems() {
+  const kind = document.getElementById('giKind').value;
+  const sel = document.getElementById('giItem');
+  sel.innerHTML = '<option value="">Cargando slugs...</option>';
+  try {
+    const data = await (await fetch('/sync/gnulahd/items?kind=' + kind)).json();
+    giItems = data.items || [];
+    sel.innerHTML = '<option value="">— Selecciona un ítem (' + giItems.length + ') —</option>' + giItems.map(function (i) { return '<option value="' + i.id + '">' + (i.title || i.id) + ' · ' + i.id + '</option>'; }).join('');
+  } catch (e) {
+    sel.innerHTML = '<option value="">Error cargando slugs</option>';
+  }
+}
+async function runGnulahdItem(newSlug) {
+  const kind = document.getElementById('giKind').value;
+  let body;
+  if (newSlug) {
+    const slug = document.getElementById('giSlug').value.trim();
+    if (!slug) { alert('Escribe un slug'); return; }
+    body = { kind: kind, slug: slug };
+  } else {
+    const id = document.getElementById('giItem').value;
+    if (!id) { alert('Selecciona un ítem'); return; }
+    body = { id: id };
+  }
+  document.getElementById('giLog').innerHTML = '<div class="card-log-empty">Solicitando sincronización...</div>';
+  try {
+    await fetch('/sync/gnulahd/item', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  } catch (e) { document.getElementById('giLog').innerHTML = '<div class="card-log-line">Error de red al solicitar la sincronización</div>'; }
+  giPrevLen = 0;
+  refreshGiLog(true);
+}
+let giPrevLen = 0;
+async function refreshGiLog(force) {
+  try {
+    const lines = await (await fetch('/sync/detail/gnulahdItem')).json();
+    if (!Array.isArray(lines)) return;
+    const hasNew = lines.length !== giPrevLen;
+    giPrevLen = lines.length;
+    if (!hasNew && !force) return;
+    const el = document.getElementById('giLog');
+    if (!el) return;
+    el.innerHTML = lines.map(function (l) { return '<div class="card-log-line">' + String(l).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</div>'; }).join('') || '<div class="card-log-empty">Sin ejecución reciente</div>';
+    el.scrollTop = el.scrollHeight;
+  } catch (e) {}
+}
+async function refreshGiStatus() {
+  try {
+    const st = (await (await fetch('/sync/status')).json()).gnulahdItem;
+    const badge = document.getElementById('giBadge');
+    const statusText = document.getElementById('giStatus');
+    if (!st || !badge || !statusText) return;
+    badge.textContent = st.status === 'running' ? '🟡' : st.status === 'completed' ? '🟢' : st.status === 'failed' ? '🔴' : '⚪';
+    statusText.textContent = st.status || 'idle';
+    statusText.className = 'status-text ' + (st.status || 'idle');
+  } catch (e) {}
+}
+loadGnulahdItems();
+refreshGiLog(true);
+setInterval(refreshGiLog, 2000);
+setInterval(refreshGiStatus, 3000);
 </script>
 </main>
 </div>
