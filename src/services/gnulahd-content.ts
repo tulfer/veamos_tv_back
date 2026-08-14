@@ -19,7 +19,7 @@ import { pushLog } from './sync-status';
  */
 
 type GnulahdCollection = 'gnulahd-movies' | 'gnulahd-series' | 'gnulahd-anime';
-type GnulahdLogType = 'gnulahdHome' | 'gnulahdMovies' | 'gnulahdSeries' | 'gnulahdAnime';
+type GnulahdLogType = 'gnulahdHome' | 'gnulahdMovies' | 'gnulahdSeries' | 'gnulahdAnime' | 'gnulahdItem';
 
 function serverCount(videos?: VideoLanguage[]): number {
   return videos?.reduce((total, language) => total + (language.servers?.length || 0), 0) || 0;

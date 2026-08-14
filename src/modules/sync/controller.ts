@@ -3,14 +3,14 @@ import path from 'path';
 import { FastifyRequest, FastifyReply } from 'fastify';
 import { scrapeMovies, scrapeMovieDetail, scrapePopularMovies } from '../../providers/movies';
 import { scrapeSeries, scrapeSeriesDetail, scrapePopularSeries } from '../../providers/series';
-import { saveSyncData, loadSyncData, saveHomeData, loadHomeData, getCollectionCounts, getCollectionCount, getAutoRefreshConfig, setAutoRefreshConfig, upsertItemByCol, replaceCollection, getGnulahdAutoSyncConfig, setGnulahdAutoSyncConfig, GNULAHD_AUTO_TASKS } from '../../services/data-store';
+import { saveSyncData, loadSyncData, saveHomeData, loadHomeData, getCollectionCounts, getCollectionCount, getAutoRefreshConfig, setAutoRefreshConfig, upsertItemByCol, replaceCollection, getGnulahdAutoSyncConfig, setGnulahdAutoSyncConfig, GNULAHD_AUTO_TASKS, listCollection } from '../../services/data-store';
 import { fetchItemDetails } from '../../providers/cineby';
 import { closeBrowser } from '../../services/video-resolver';
 import { fetchLiveChannels, parseM3U, validateBatch } from '../../providers/live-tv';
 import { fetchHTML } from '../../utils/http';
 import { logger } from '../../utils/logger';
 import { memoryCache } from '../../cache/memory';
-import { SyncMovie, SyncSeries, SyncData, LiveChannel } from '../../types';
+import { SyncMovie, SyncSeries, SyncData, LiveChannel, VideoLanguage, Season } from '../../types';
 import { startSync, completeSync, failSync, updateSyncProgress, getLogs, clearLogs, pushLog, SyncType, getSyncStatus } from '../../services/sync-status';
 import { firestoreMigrationStatus, getFirestoreMigrationStatus, runFirestoreToSupabase, FirestoreMigrationStatus } from '../../services/firestore-migrate';
 import { REFRESH_PROVIDERS, getProviderRefreshQueueStatus } from '../live-tv/controller';
@@ -753,6 +753,180 @@ export async function syncGnulahdSeriesHandler(request: FastifyRequest, reply: F
 
 export async function syncGnulahdAnimeHandler(request: FastifyRequest, reply: FastifyReply) {
   return syncGnulahdByKindHandler(request, reply, 'anime', 'gnulahdAnime', 'gnulahdAnime');
+}
+
+// ---- Sync de ítem puntual GNULA (por slug) ----
+
+const GNULAHD_ITEM_KINDS = ['movies', 'series', 'anime'] as const;
+type GnulahdItemKind = (typeof GNULAHD_ITEM_KINDS)[number];
+
+const GNULAHD_ITEM_PREFIX: Record<GnulahdItemKind, string> = { movies: 'gmov_', series: 'gser_', anime: 'gani_' };
+const GNULAHD_ITEM_COLLECTION: Record<GnulahdItemKind, string> = { movies: 'gnulahd-movies', series: 'gnulahd-series', anime: 'gnulahd-anime' };
+
+function gnulahdItemKindOf(kind?: string): GnulahdItemKind {
+  return (GNULAHD_ITEM_KINDS as readonly string[]).includes(kind || '') ? (kind as GnulahdItemKind) : 'movies';
+}
+
+function gnulahdItemCollectionForId(id: string): string | null {
+  if (id.startsWith('gmov_')) return 'gnulahd-movies';
+  if (id.startsWith('gser_')) return 'gnulahd-series';
+  if (id.startsWith('gani_')) return 'gnulahd-anime';
+  return null;
+}
+
+function gnulahdVideosSummary(videos?: VideoLanguage[]): string {
+  if (!videos?.length) return 'sin servidores';
+  return videos
+    .map((lang) => `${lang.language}: ${lang.servers.length} (${lang.servers.map((s) => s.name).join(', ')})`)
+    .join(' | ');
+}
+
+function gnulahdSeasonSummary(season: Season): string {
+  const byLang = new Map<string, { servers: Set<string>; episodes: Set<string> }>();
+  for (const episode of season.episodes) {
+    for (const lang of episode.videos || []) {
+      const entry = byLang.get(lang.language) || { servers: new Set<string>(), episodes: new Set<string>() };
+      entry.episodes.add(episode.id);
+      for (const server of lang.servers) entry.servers.add(server.name);
+      byLang.set(lang.language, entry);
+    }
+  }
+  if (byLang.size === 0) return `${season.episodes.length} episodios sin servidores`;
+  const langs = [...byLang.entries()].map(([lang, entry]) => `${lang}: ${[...entry.servers].join(', ')} (${entry.episodes.size} eps)`);
+  return `${season.episodes.length} episodios | ${langs.join(' | ')}`;
+}
+
+/** Lista los slugs de una colección GNULA para el selector del panel. */
+export async function listGnulahdItemsHandler(request: FastifyRequest, reply: FastifyReply) {
+  const { kind } = request.query as { kind?: string };
+  const k = gnulahdItemKindOf(kind);
+  try {
+    const items = await listCollection<{ id: string; title?: string; poster?: string; year?: number }>(GNULAHD_ITEM_COLLECTION[k]);
+    const list = items
+      .map((item) => ({
+        id: item.id,
+        title: item.title || item.id,
+        poster: item.poster,
+        year: item.year,
+        type: k === 'movies' ? 'movie' : k === 'anime' ? 'anime' : 'series',
+      }))
+      .sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+    return reply.send({ kind: k, count: list.length, items: list });
+  } catch (error) {
+    logger.error({ error, kind: k }, 'No se pudo listar items GNULA');
+    return reply.status(500).send({ error: 'No se pudo listar los items' });
+  }
+}
+
+/** Sincroniza UN ítem GNULA por id (gmov_/gser_/gani_ + slug) o slug + kind:
+ *  scrapea el detalle, lo enriquece con los proveedores de respaldo y guarda
+ *  en su colección. Cada paso (y los servidores tomados) queda en el log
+ *  'gnulahdItem'. */
+export async function syncGnulahdItemHandler(request: FastifyRequest, reply: FastifyReply) {
+  const body = (request.body || {}) as { id?: string; kind?: string; slug?: string };
+  let id = String(body.id || '').trim();
+  if (!id && body.slug) {
+    id = `${GNULAHD_ITEM_PREFIX[gnulahdItemKindOf(String(body.kind))]}${String(body.slug).trim()}`;
+  }
+  id = id.replace(/^https?:\/\/[^/]+\/(?:ver\/)?/, '');
+  if (!/^(gmov_|gser_|gani_)/.test(id)) {
+    return reply.status(400).send({ error: 'Provide an item id (gmov_<slug>, gser_<slug>, gani_<slug>) or slug + kind' });
+  }
+  if (!startSync('gnulahdItem')) {
+    return reply.send({ ok: true, message: 'Ya hay una sincronización de ítem en curso' });
+  }
+
+  reply.send({ ok: true, message: 'Sincronización de ítem iniciada' });
+
+  runBackgroundSync('gnulahdItem', async () => {
+    const slug = id.replace(/^g(?:mov|ser|ani)_/, '');
+    const isSeries = id.startsWith('gser_');
+    const isAnime = id.startsWith('gani_');
+    pushLog('gnulahdItem', `▶ Sincronizando ${id} (${slug})...`);
+
+    const { scrapeGnulahdDetail } = await import('../../providers/gnulahd');
+    const { enrichGnulahdDetail } = await import('../../services/gnulahd-content');
+
+    let detail = await scrapeGnulahdDetail(id);
+    if (detail) {
+      pushLog('gnulahdItem', `Detalle GNULA: ${gnulahdVideosSummary(detail.videos)}${detail.seasons ? `; ${detail.seasons.length} temporadas` : ''}`);
+    } else {
+      pushLog('gnulahdItem', `GNULA no devolvió detalle para ${slug}; probando proveedores de respaldo...`);
+      if (isAnime) {
+        const { scrapeAnimejaraDetail } = await import('../../providers/animejara');
+        const { scrapeJkanimeDetail } = await import('../../providers/jkanime');
+        const animeExtra = await scrapeAnimejaraDetail(slug, (message) => pushLog('gnulahdItem', message));
+        if (animeExtra?.seasons?.length) {
+          pushLog('gnulahdItem', `AnimeJara devolvió el ítem (${animeExtra.seasons.length} temporadas)`);
+          detail = { id, title: slug, description: `${slug} disponible en Veamos TV.`, rating: 8.0, year: 2024, genres: ['Acción'], cast: [{ name: 'Reparto Principal' }], type: 'anime', seasons: animeExtra.seasons };
+        } else {
+          const jkanime = await scrapeJkanimeDetail(slug, (message) => pushLog('gnulahdItem', message));
+          if (jkanime?.seasons?.length) {
+            pushLog('gnulahdItem', `JKAnime devolvió el ítem (${jkanime.seasons.length} temporadas)`);
+            detail = { id, title: slug, description: `${slug} disponible en Veamos TV.`, rating: 8.0, year: 2024, genres: ['Acción'], cast: [{ name: 'Reparto Principal' }], type: 'anime', seasons: jkanime.seasons };
+          }
+        }
+      } else {
+        const { scrapeMovieDetail } = await import('../../providers/movies');
+        const { scrapeSeriesDetail } = await import('../../providers/series');
+        const { scrapePelisPediaMovieDetail, scrapePelisPediaSeriesDetail } = await import('../../providers/pelispedia');
+        let extra = isSeries ? await scrapeSeriesDetail(`ser_${slug}`) : await scrapeMovieDetail(`mov_${slug}`);
+        const extraComplete = isSeries ? !!extra?.seasons?.length : !!extra?.videos?.length;
+        if (extra && extraComplete) {
+          pushLog('gnulahdItem', `PelisPlus devolvió el ítem (${gnulahdVideosSummary(extra.videos)})`);
+          detail = { ...extra, id, type: isSeries ? 'series' : 'movie' };
+        } else {
+          const pelispedia = isSeries ? await scrapePelisPediaSeriesDetail(`ser_${slug}`) : await scrapePelisPediaMovieDetail(`mov_${slug}`);
+          const ppComplete = isSeries ? !!pelispedia?.seasons?.length : !!pelispedia?.videos?.length;
+          if (pelispedia && ppComplete) {
+            pushLog('gnulahdItem', `PelisPedia devolvió el ítem (${gnulahdVideosSummary(pelispedia.videos)})`);
+            detail = { ...pelispedia, id, type: isSeries ? 'series' : 'movie' };
+          }
+        }
+      }
+    }
+
+    if (!detail) {
+      pushLog('gnulahdItem', `❌ Ningún proveedor devolvió detalle para ${slug}`);
+      throw new Error(`No se pudo obtener detalle para ${slug}`);
+    }
+
+    updateSyncProgress('gnulahdItem', 1, `Enriqueciendo ${slug} con proveedores de respaldo...`);
+    detail = await enrichGnulahdDetail(detail, 'gnulahdItem');
+
+    if (detail.seasons?.length) {
+      for (const season of detail.seasons) {
+        pushLog('gnulahdItem', `T${season.season_number}: ${gnulahdSeasonSummary(season)}`);
+      }
+    }
+    pushLog('gnulahdItem', `Resumen final: ${gnulahdVideosSummary(detail.videos)}`);
+    updateSyncProgress('gnulahdItem', 2, `Guardando ${slug} en la colección...`);
+
+    const collection = gnulahdItemCollectionForId(detail.id);
+    if (!collection) {
+      throw new Error(`ID desconocido: ${detail.id}`);
+    }
+    const item = {
+      id: detail.id,
+      title: detail.title,
+      type: isAnime ? 'anime' : isSeries ? 'series' : 'movie',
+      poster: detail.poster,
+      backdrop: detail.backdrop,
+      rating: detail.rating,
+      year: detail.year,
+      description: detail.description,
+      genres: detail.genres,
+      cast: detail.cast,
+      country: detail.country,
+      seasons: detail.seasons,
+      videos: detail.videos,
+      downloads: detail.downloads,
+      content: detail,
+    };
+    await upsertItemByCol(collection, item);
+    pushLog('gnulahdItem', `✅ ${slug} sincronizado y guardado en ${collection}`);
+    return 1;
+  });
 }
 
 function collectItems(obj: any, acc: { id: number; mediaType: string; slug: string; title: string }[]) {

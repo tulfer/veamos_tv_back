@@ -29,6 +29,8 @@ import {
   setAutoRefreshHandler,
   getGnulahdAutoSyncHandler,
   setGnulahdAutoSyncHandler,
+  listGnulahdItemsHandler,
+  syncGnulahdItemHandler,
 } from './controller';
 
 export async function syncRoutes(app: FastifyInstance) {
@@ -80,4 +82,6 @@ export async function syncRoutes(app: FastifyInstance) {
   app.post('/sync/auto-refresh', setAutoRefreshHandler);
   app.get('/sync/gnulahd/auto', getGnulahdAutoSyncHandler);
   app.post('/sync/gnulahd/auto', setGnulahdAutoSyncHandler);
+  app.get('/sync/gnulahd/items', listGnulahdItemsHandler);
+  app.post('/sync/gnulahd/item', syncGnulahdItemHandler);
 }

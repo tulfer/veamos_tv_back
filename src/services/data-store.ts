@@ -150,6 +150,11 @@ async function loadCollectionStrict<T>(name: string): Promise<T[]> {
   return Array.isArray(data) ? data : [];
 }
 
+/** Lee una colección completa desde la BD sin caché (para listar items). */
+export async function listCollection<T>(name: string): Promise<T[]> {
+  return loadCollection<T>(name);
+}
+
 async function saveCollection<T>(name: string, items: T[]): Promise<void> {
   await setRow(storeKeys.collection(name), stripUndefined(items));
 }
