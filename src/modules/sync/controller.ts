@@ -1114,7 +1114,6 @@ export async function syncStatusHandler(request: FastifyRequest, reply: FastifyR
     { key: 'gnulahdMovies', label: 'Gnulahd Películas', route: '/sync/gnulahd/movies', method: 'POST', needsPages: true },
     { key: 'gnulahdSeries', label: 'Gnulahd Series', route: '/sync/gnulahd/series', method: 'POST', needsPages: true },
     { key: 'gnulahdAnime', label: 'Gnulahd Anime', route: '/sync/gnulahd/anime', method: 'POST', needsPages: true },
-    { key: 'gnulahdItem', label: 'Sync ítem GNULA', route: '/sync/gnulahd/item', method: 'POST' },
     { key: 'fetchDetails', label: 'Fetch Details (cineby)', route: '/sync/fetch-details', method: 'POST' },
     { key: 'importM3U', label: 'Importar M3U', route: '/sync/live/import', method: 'POST', needsUrl: true },
     { key: 'refreshAll', label: 'Refresh All Canales', route: '/live/channels/refresh-all', method: 'POST' },
@@ -1122,6 +1121,7 @@ export async function syncStatusHandler(request: FastifyRequest, reply: FastifyR
     { key: 'refreshProvider', label: 'Refresh por Proveedor', route: '/live/channels/refresh-provider/{provider}', method: 'POST', needsProvider: true },
     { key: 'refreshOne', label: 'Refresh Canal (por ID)', route: '/live/channels/refresh', method: 'POST', needsId: true },
     { key: 'updateChannel', label: 'Actualizar Canal (PATCH)', route: '/live/channels/{id}', method: 'PATCH', needsId: true, needsJson: true },
+    { key: 'gnulahdItem', label: 'Sync ítem GNULA', route: '/sync/gnulahd/item', method: 'POST' },
   ];
 
   const autoCfg = await getAutoRefreshConfig();
@@ -1444,6 +1444,9 @@ function generateSyncDashboard(
         <button class="card-hide-btn" id="hidebtn-gnulahdItem" onclick="toggleCardHide('gnulahdItem')" title="Ocultar tarjeta">🚫</button>
       </div>
       <div class="card-body">
+        <div style="display:flex;gap:.5rem;margin-bottom:.6rem;align-items:center">
+          <input id="giFilter" type="text" placeholder="Buscar por título o slug..." oninput="renderGiItems()" style="flex:1;padding:.5rem;border-radius:6px;border:1px solid rgba(255,255,255,.15);background:rgba(0,0,0,.15);color:#fff;font-size:.85rem">
+        </div>
         <div style="display:flex;gap:.5rem;margin-bottom:.6rem;align-items:center">
           <select id="giKind" onchange="loadGnulahdItems()" style="flex:0 0 130px;padding:.5rem;border-radius:6px;border:1px solid rgba(255,255,255,.15);background:rgba(0,0,0,.15);color:#fff;font-size:.85rem">
             <option value="movies">Películas</option>
@@ -2920,6 +2923,13 @@ applyCardLayout();
 </script>
 <script>
 let giItems = [];
+function renderGiItems() {
+  const sel = document.getElementById('giItem');
+  if (!sel) return;
+  const q = (document.getElementById('giFilter').value || '').toLowerCase();
+  const list = giItems.filter(function (i) { return !q || (i.title + ' ' + i.id).toLowerCase().indexOf(q) !== -1; });
+  sel.innerHTML = '<option value="">— Selecciona un ítem (' + list.length + '/' + giItems.length + ') —</option>' + list.map(function (i) { return '<option value="' + i.id + '">' + (i.title || i.id) + ' · ' + i.id + '</option>'; }).join('');
+}
 async function loadGnulahdItems() {
   const kind = document.getElementById('giKind').value;
   const sel = document.getElementById('giItem');
@@ -2927,7 +2937,7 @@ async function loadGnulahdItems() {
   try {
     const data = await (await fetch('/sync/gnulahd/items?kind=' + kind)).json();
     giItems = data.items || [];
-    sel.innerHTML = '<option value="">— Selecciona un ítem (' + giItems.length + ') —</option>' + giItems.map(function (i) { return '<option value="' + i.id + '">' + (i.title || i.id) + ' · ' + i.id + '</option>'; }).join('');
+    renderGiItems();
   } catch (e) {
     sel.innerHTML = '<option value="">Error cargando slugs</option>';
   }
