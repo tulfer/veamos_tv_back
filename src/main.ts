@@ -16,6 +16,7 @@ import { liveTVRoutes } from './modules/live-tv/routes';
 import { searchRoutes } from './modules/search/routes';
 import { homeRoutes } from './modules/home/routes';
 import { contentRoutes } from './modules/content/routes';
+import { deviceRoutes } from './modules/devices/routes';
 import { gnulahdRoutes } from './modules/gnulahd/routes';
 import { syncRoutes } from './modules/sync/routes';
 import { dbExplorerRoutes } from './modules/db-explorer/routes';
@@ -69,6 +70,7 @@ async function buildServer() {
     prefix: '/dashboard-assets/',
   });
   app.get('/sync/app', async (_request, reply) => reply.sendFile('index.html'));
+  app.get('/mipanel', async (_request, reply) => reply.sendFile('mipanel.html'));
 
   process.stderr.write('buildServer: registering authRoutes...\n');
   await app.register(authRoutes);
@@ -96,6 +98,9 @@ async function buildServer() {
 
   process.stderr.write('buildServer: registering gnulahdRoutes...\n');
   await app.register(gnulahdRoutes);
+
+  process.stderr.write('buildServer: registering deviceRoutes...\n');
+  await app.register(deviceRoutes);
 
   process.stderr.write('buildServer: registering syncRoutes...\n');
   await app.register(syncRoutes);

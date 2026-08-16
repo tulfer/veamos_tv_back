@@ -4,6 +4,7 @@ import { loadGnulahdHomeData, normalizeGnulahdItemId, scrapeGnulahdList, searchG
 import { getGnulahdDetailContent } from '../../services/gnulahd-content';
 import { unwrapDetailProxy } from '../../services/content-detail';
 import { getChannelsHandler } from '../live-tv/controller';
+import { verifyDeviceCode } from '../../services/device-codes';
 
 const PAGE_SIZE = 32;
 
@@ -42,7 +43,7 @@ async function homeWithLiveChannels() {
   return { ...data, banners, sections };
 }
 
-function registerGnulahdPrefix(app: FastifyInstance, prefix: '/v2' | '/gnulahd') {
+function registerGnulahdPrefix(app: FastifyInstance, prefix: '/v2' | '/gnulahd' | '/v2/:code') {
   app.get(`${prefix}/home`, async (_request: FastifyRequest, reply: FastifyReply) => {
     const data = await homeWithLiveChannels();
     if (!data) return reply.status(404).send({ error: 'Home de GNULA aún no sincronizado', hint: 'Ejecuta POST /sync/gnulahd/home primero' });
@@ -92,4 +93,20 @@ export async function gnulahdRoutes(app: FastifyInstance) {
   registerGnulahdPrefix(app, '/v2');
   // Compatibilidad para clientes que todavía usan el prefijo anterior.
   registerGnulahdPrefix(app, '/gnulahd');
+
+  // Variante protegida por código de dispositivo: /v2/<codigo>/...
+  // El código debe existir, estar habilitado y vinculado a un dispositivo.
+  // Si el cliente envía su deviceId (header x-device-id o query deviceId)
+  // además se verifica que sea el dispositivo dueño del código.
+  app.register(async (scope) => {
+    scope.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {
+      const { code } = request.params as { code?: string };
+      const deviceId = (request.headers['x-device-id'] as string) || ((request.query as { deviceId?: string })?.deviceId || '');
+      const result = await verifyDeviceCode(code, deviceId || undefined);
+      if (!result.ok) {
+        return reply.status(result.status || 403).send({ error: result.reason });
+      }
+    });
+    registerGnulahdPrefix(scope, '/v2/:code');
+  });
 }

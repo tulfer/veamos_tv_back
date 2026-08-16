@@ -8,5 +8,11 @@ export default defineConfig({
   build: {
     outDir: '../public/dashboard',
     emptyOutDir: true,
+    rollupOptions: {
+      input: {
+        main: 'index.html',
+        mipanel: 'mipanel.html',
+      },
+    },
   },
 });
