@@ -6,8 +6,8 @@ import { scrapeSeries, scrapeSeriesDetail, scrapePopularSeries } from '../../pro
 import { saveSyncData, loadSyncData, saveHomeData, loadHomeData, getCollectionCounts, getCollectionCount, getAutoRefreshConfig, setAutoRefreshConfig, upsertItemByCol, replaceCollection, getGnulahdAutoSyncConfig, setGnulahdAutoSyncConfig, GNULAHD_AUTO_TASKS, listCollection } from '../../services/data-store';
 import { fetchItemDetails } from '../../providers/cineby';
 import { closeBrowser } from '../../services/video-resolver';
-import { fetchLiveChannels, parseM3U, validateBatch } from '../../providers/live-tv';
-import { fetchHTML } from '../../utils/http';
+import { fetchLiveChannels, parseM3U, validateBatch, M3UParsedChannel } from '../../providers/live-tv';
+import { fetchHTML, httpClient } from '../../utils/http';
 import { logger } from '../../utils/logger';
 import { memoryCache } from '../../cache/memory';
 import { SyncMovie, SyncSeries, SyncData, LiveChannel, VideoLanguage, Season } from '../../types';
@@ -1052,10 +1052,46 @@ export async function fetchDetailsHandler(
   }
 }
 
-export async function importM3UHandler(request: FastifyRequest, reply: FastifyReply) {
-  const body = request.body as { url?: string; content?: string; country?: string; skipValidation?: boolean } | undefined;
+export async function previewM3UHandler(request: FastifyRequest, reply: FastifyReply) {
+  const body = request.body as { url?: string; content?: string; country?: string } | undefined;
   if (!body?.url && !body?.content) {
-    return reply.status(400).send({ error: 'Provide "url" or "content" with .m3u data' });
+    return reply.status(400).send({ error: 'Indica "url" o "content" con la lista M3U' });
+  }
+  try {
+    let rawContent: string;
+    if (body.url) {
+      rawContent = await httpClient.get(body.url, { timeout: 120_000 }).then((r) => r.data);
+    } else {
+      rawContent = body.content!;
+    }
+    const parsed = parseM3U(rawContent, body.country);
+    if (parsed.length === 0) {
+      return reply.status(400).send({ error: 'La lista no contiene canales' });
+    }
+    const token = `m3u_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    memoryCache.set(`m3u:preview:${token}`, parsed, 15 * 60_000);
+    return reply.send({
+      preview: true,
+      token,
+      count: parsed.length,
+      channels: parsed.map((c, idx) => ({
+        idx,
+        title: c.title,
+        group: c.group || 'General',
+        logo: c.logo || '',
+        country: c.country || '',
+        url: c.url,
+      })),
+    });
+  } catch (e: any) {
+    return reply.status(400).send({ error: e?.message || 'Error al leer la lista' });
+  }
+}
+
+export async function importM3UHandler(request: FastifyRequest, reply: FastifyReply) {
+  const body = request.body as { url?: string; content?: string; token?: string; selected?: number[]; country?: string; skipValidation?: boolean } | undefined;
+  if (!body?.url && !body?.content && !body?.token) {
+    return reply.status(400).send({ error: 'Provide "url", "content" or "token" with .m3u data' });
   }
   if (!startSync('importM3U')) {
     return reply.send({ ok: true, message: 'Import already in progress' });
@@ -1064,18 +1100,29 @@ export async function importM3UHandler(request: FastifyRequest, reply: FastifyRe
   reply.send({ ok: true, message: 'M3U import started' });
 
   runBackgroundSync('importM3U', async () => {
-    let rawContent: string;
+    let parsed: M3UParsedChannel[];
     const sourceCountry: string | undefined = body.country;
 
     updateSyncProgress('importM3U', 0, 'Descargando lista M3U...');
-    if (body.url) {
-      rawContent = await fetchHTML(body.url);
+    if (body.token) {
+      const cached = memoryCache.get<M3UParsedChannel[]>('m3u:preview:' + body.token);
+      if (!cached) {
+        logger.warn('M3U preview expired or not found');
+        return 0;
+      }
+      const selected = Array.from(new Set(body.selected || []));
+      parsed = selected.map((i) => cached[i]).filter((c): c is M3UParsedChannel => Boolean(c));
+      if (parsed.length === 0) {
+        logger.warn('No selected channels in M3U preview');
+        return 0;
+      }
+    } else if (body.url) {
+      parsed = parseM3U(await fetchHTML(body.url), sourceCountry);
     } else {
-      rawContent = body.content!;
+      parsed = parseM3U(body.content!, sourceCountry);
     }
 
     updateSyncProgress('importM3U', 0, 'Parseando canales...');
-    const parsed = parseM3U(rawContent, sourceCountry);
     if (parsed.length === 0) {
       logger.warn('No channels found in M3U data');
       return 0;
