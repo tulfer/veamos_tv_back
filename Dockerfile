@@ -28,6 +28,8 @@ RUN npx playwright install --with-deps chromium
 COPY tsconfig.json ./
 COPY src ./src
 COPY frontend ./frontend
+# Backup JSON local (data/sync-data.json) para la migración/restauración de canales
+COPY data ./data
 RUN npm run build
 
 # Limpieza: quitar fuentes TS, devDependencies (typescript, eslint, tsx...) y caché de npm

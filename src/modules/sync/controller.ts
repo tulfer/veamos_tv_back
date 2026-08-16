@@ -1749,12 +1749,12 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
 
 <div class="card-wrap large-card-wrap" id="wrap-migrationFirestore">
 <div class="migration-section">
-  <h2 style="margin-bottom:1rem;font-size:1.2rem;color:#a0a0c0">🚀 Migración a Firestore</h2>
+  <h2 style="margin-bottom:1rem;font-size:1.2rem;color:#a0a0c0">🚀 Migración de Canales</h2>
   <div class="migration-card">
-    <div class="section-toolbar"><span class="drag-handle" draggable="true" title="Arrastrar para reordenar">↕</span><span class="section-title">Migración a Firestore</span><button class="card-hide-btn" id="hidebtn-migrationFirestore" onclick="toggleCardHide('migrationFirestore')" title="Ocultar tarjeta">🚫</button></div>
+    <div class="section-toolbar"><span class="drag-handle" draggable="true" title="Arrastrar para reordenar">↕</span><span class="section-title">Restaurar Canales desde sync-data.json</span><button class="card-hide-btn" id="hidebtn-migrationFirestore" onclick="toggleCardHide('migrationFirestore')" title="Ocultar tarjeta">🚫</button></div>
     <div class="card-header">
       <span class="badge">${migBadge}</span>
-      <span class="card-title">Migración desde sync-data.json</span>
+      <span class="card-title">Migración de canales desde sync-data.json</span>
       <span class="status-text ${migStatus.progress === 'completed' ? 'completed' : migStatus.progress === 'error' ? 'failed' : migRunning ? 'running' : 'idle'}">${migMsg}</span>
     </div>
     <div class="card-body">
@@ -1766,7 +1766,7 @@ h1{font-size:1.8rem;margin-bottom:2rem;background:linear-gradient(135deg,#667eea
     </div>
     <div class="card-actions">
       <button class="btn btn-danger" onclick="runMigration()" ${migRunning ? 'disabled' : ''}>
-        ${migRunning ? 'Migrando...' : '▶ Ejecutar Migración'}
+        ${migRunning ? 'Migrando...' : '▶ Restaurar Canales'}
       </button>
       <a href="/sync/migration-status" class="btn btn-secondary" style="text-decoration:none">📊 Detalle</a>
     </div>
@@ -3046,18 +3046,12 @@ h1{font-size:1.5rem;margin-bottom:1.5rem;background:linear-gradient(135deg,#667e
 </head>
 <body>
 <div class="container">
-<h1>🚀 Migración a Firestore</h1>
+<h1>🚀 Migración de Canales</h1>
 
 <div class="status-row"><span class="label">Estado</span>
   <span class="value ${status.progress}">${progressMap[status.progress] || status.progress}</span></div>
 <div class="status-row"><span class="label">Mensaje</span><span class="value">${status.message || '—'}</span></div>
-<div class="status-row"><span class="label">Películas</span><span class="value">${status.stats.movies}</span></div>
-<div class="status-row"><span class="label">Series</span><span class="value">${status.stats.series}</span></div>
 <div class="status-row"><span class="label">Canales</span><span class="value">${status.stats.channels}</span></div>
-<div class="status-row"><span class="label">Populares (M)</span><span class="value">${status.stats.popularMovies}</span></div>
-<div class="status-row"><span class="label">Populares (S)</span><span class="value">${status.stats.popularSeries}</span></div>
-<div class="status-row"><span class="label">Estrenos (M)</span><span class="value">${status.stats.estrenoMovies}</span></div>
-<div class="status-row"><span class="label">Estrenos (S)</span><span class="value">${status.stats.estrenoSeries}</span></div>
 
 <div class="bar">
   <div class="bar-fill ${status.progress === 'completed' ? 'completed' : ''} ${status.progress === 'error' ? 'error' : ''}"
@@ -3069,7 +3063,7 @@ ${status.message ? `<div class="msg ${status.progress === 'error' ? 'error' : st
 <div style="display:flex;gap:1rem;margin-top:1.5rem">
   <form action="/sync/migrate-to-firestore" method="POST">
     <button class="btn btn-primary" type="submit" ${isRunning ? 'disabled' : ''}>
-      ${isRunning ? 'Migrando...' : 'Iniciar Migración'}
+      ${isRunning ? 'Migrando...' : 'Restaurar Canales'}
     </button>
   </form>
   <a href="/sync/migration-status" class="btn btn-primary" style="text-align:center">↻ Recargar</a>
@@ -3082,18 +3076,12 @@ async function poll() {
     const res = await fetch('/sync/migration-status');
     if (res.headers.get('content-type')?.includes('application/json')) {
       const data = await res.json();
-      const progressMap = { idle: '⏳ Inactivo', reading: '📖 Leyendo archivo...', writing: '💾 Escribiendo en Firestore...', completed: '✅ Completado', error: '❌ Error' };
+      const progressMap = { idle: '⏳ Inactivo', reading: '📖 Leyendo archivo...', writing: '💾 Escribiendo en la BD...', completed: '✅ Completado', error: '❌ Error' };
       document.querySelectorAll('.status-row .value')[0].textContent = progressMap[data.progress] || data.progress;
       document.querySelectorAll('.status-row .value')[1].textContent = data.message || '—';
-      document.querySelectorAll('.status-row .value')[2].textContent = data.stats.movies;
-      document.querySelectorAll('.status-row .value')[3].textContent = data.stats.series;
-      document.querySelectorAll('.status-row .value')[4].textContent = data.stats.channels;
-      document.querySelectorAll('.status-row .value')[5].textContent = data.stats.popularMovies;
-      document.querySelectorAll('.status-row .value')[6].textContent = data.stats.popularSeries;
-      document.querySelectorAll('.status-row .value')[7].textContent = data.stats.estrenoMovies;
-      document.querySelectorAll('.status-row .value')[8].textContent = data.stats.estrenoSeries;
+      document.querySelectorAll('.status-row .value')[2].textContent = data.stats.channels;
       document.querySelector('.btn-primary').disabled = data.running;
-      document.querySelector('.btn-primary').textContent = data.running ? 'Migrando...' : 'Iniciar Migración';
+      document.querySelector('.btn-primary').textContent = data.running ? 'Migrando...' : 'Restaurar Canales';
     }
     if (!res.ok) return;
   } catch {}
@@ -3140,38 +3128,24 @@ async function runMigration(): Promise<void> {
 
   const raw = fs.readFileSync(filePath, 'utf-8');
   const data = JSON.parse(raw);
+  const channels: LiveChannel[] = Array.isArray(data.channels) ? data.channels : [];
 
-  const stats = {
-    movies: data.movies?.length || 0,
-    series: data.series?.length || 0,
-    channels: data.channels?.length || 0,
-    popularMovies: data.popularMovies?.length || 0,
-    popularSeries: data.popularSeries?.length || 0,
-    estrenoMovies: data.estrenoMovies?.length || 0,
-    estrenoSeries: data.estrenoSeries?.length || 0,
-  };
+  if (channels.length === 0) {
+    throw new Error('El archivo no contiene canales (data.channels vacío)');
+  }
 
-  migrationStatus.stats = stats;
+  migrationStatus.stats = { movies: 0, series: 0, channels: channels.length, popularMovies: 0, popularSeries: 0, estrenoMovies: 0, estrenoSeries: 0 };
   migrationStatus.progress = 'writing';
-  migrationStatus.message = `Subiendo ${stats.movies} películas, ${stats.series} series, ${stats.channels} canales a Firestore...`;
+  migrationStatus.message = `Subiendo ${channels.length} canales a la BD...`;
   migrationStatus.updatedAt = Date.now();
 
-  await saveSyncData({
-    movies: data.movies || [],
-    series: data.series || [],
-    channels: data.channels || [],
-    popularMovies: data.popularMovies || [],
-    popularSeries: data.popularSeries || [],
-    estrenoMovies: data.estrenoMovies || [],
-    estrenoSeries: data.estrenoSeries || [],
-    updatedAt: Date.now(),
-  });
+  await replaceCollection('channels', channels);
 
   migrationStatus.running = false;
   migrationStatus.progress = 'completed';
-  migrationStatus.message = 'Migración completada exitosamente';
+  migrationStatus.message = `Migración completada: ${channels.length} canales restaurados`;
   migrationStatus.updatedAt = Date.now();
-  logger.info({ stats }, 'Migration to Firestore completed');
+  logger.info({ channels: channels.length }, 'Channels migration to database completed');
 }
 
 export async function migrationStatusHandler(request: FastifyRequest, reply: FastifyReply) {

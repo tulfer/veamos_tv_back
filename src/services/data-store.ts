@@ -208,8 +208,43 @@ export async function loadChannels(): Promise<LiveChannel[]> {
   return normalized;
 }
 
+/** Colecciones no-GNULA: saveSyncData las re-lee estrictamente antes de escribir. */
+const SYNC_COLLECTION_FIELDS: [string, keyof SyncData][] = [
+  ['movies', 'movies'],
+  ['series', 'series'],
+  ['channels', 'channels'],
+  ['popular-movies', 'popularMovies'],
+  ['popular-series', 'popularSeries'],
+  ['estreno-movies', 'estrenoMovies'],
+  ['estreno-series', 'estrenoSeries'],
+];
+
 export async function saveSyncData(data: SyncData): Promise<void> {
   try {
+    const writes: Promise<void>[] = [];
+
+    // Todas las colecciones se re-leen live desde la BD ANTES de escribir:
+    // si la lectura falla (red/BD) se omite el guardado de esa colección
+    // (no se toca), y jamás se reemplaza una colección no vacía por una
+    // vacía. Esto evita borrados masivos cuando un handler leyó "vacío"
+    // por un fallo transitorio de lectura y reescribió todo con [].
+    for (const [collection, field] of SYNC_COLLECTION_FIELDS) {
+      let live: unknown[] | null = null;
+      try {
+        const value = await getRowStrict<unknown[]>(storeKeys.collection(collection));
+        live = Array.isArray(value) ? value : null;
+      } catch (error) {
+        logger.warn({ error: (error as Error).message, collection }, 'saveSyncData: no se pudo re-leer colección; se omite su escritura');
+        continue;
+      }
+      const incoming = (data[field] as unknown[]) ?? [];
+      if (incoming.length === 0 && Array.isArray(live) && live.length > 0) {
+        logger.warn({ collection, live: live.length }, 'saveSyncData: valor entrante vacío con datos existentes; se conserva lo existente');
+        continue;
+      }
+      writes.push(saveCollection(collection, incoming));
+    }
+
     // Las colecciones GNULA se re-leen live desde la BD ANTES de escribir:
     // así un sync v1 (canales/películas) nunca pisa datos recién sincronizados.
     // Si la lectura falla (red/BD), se omite el guardado de GNULA (no se tocan)
@@ -229,19 +264,11 @@ export async function saveSyncData(data: SyncData): Promise<void> {
     } catch (error) {
       logger.warn({ error: (error as Error).message }, 'No se pudo leer colecciones GNULA; se omiten estas colecciones en el guardado');
     }
-    const writes = [
-      saveCollection('movies', data.movies),
-      saveCollection('series', data.series),
-      saveCollection('channels', data.channels),
-      saveCollection('popular-movies', data.popularMovies),
-      saveCollection('popular-series', data.popularSeries),
-      saveCollection('estreno-movies', data.estrenoMovies),
-      saveCollection('estreno-series', data.estrenoSeries),
-      setRow(storeKeys.syncMeta, { updatedAt: data.updatedAt }),
-    ];
     if (gnulahdMovies !== null) writes.push(saveCollection('gnulahd-movies', gnulahdMovies));
     if (gnulahdSeries !== null) writes.push(saveCollection('gnulahd-series', gnulahdSeries));
     if (gnulahdAnime !== null) writes.push(saveCollection('gnulahd-anime', gnulahdAnime));
+    writes.push(setRow(storeKeys.syncMeta, { updatedAt: data.updatedAt }));
+
     await Promise.all(writes);
     memoryCache.del(SYNC_DATA_CACHE_KEY);
     memoryCache.del(CHANNELS_CACHE_KEY);
@@ -254,9 +281,9 @@ export async function saveSyncData(data: SyncData): Promise<void> {
         movies: data.movies.length,
         series: data.series.length,
         channels: data.channels.length,
-        gnulahdMovies: gnulahdMovies.length,
-        gnulahdSeries: gnulahdSeries.length,
-        gnulahdAnime: gnulahdAnime.length,
+        gnulahdMovies: gnulahdMovies?.length,
+        gnulahdSeries: gnulahdSeries?.length,
+        gnulahdAnime: gnulahdAnime?.length,
       },
       'Sync data saved to database',
     );

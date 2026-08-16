@@ -6,7 +6,6 @@ dist
 *.log
 server.err
 server.log
-data
 dataconnect
 functions
 test-import.mjs
