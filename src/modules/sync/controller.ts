@@ -15,6 +15,7 @@ import { startSync, completeSync, failSync, updateSyncProgress, getLogs, clearLo
 import { firestoreMigrationStatus, getFirestoreMigrationStatus, runFirestoreToSupabase, FirestoreMigrationStatus } from '../../services/firestore-migrate';
 import { REFRESH_PROVIDERS, getProviderRefreshQueueStatus } from '../live-tv/controller';
 import { AutoRefreshConfig, GnulahdAutoTask, GnulahdAutoTaskConfig, GnulahdAutoSyncConfig } from '../../services/data-store';
+import { listBackups, getBackup, createBackup, restoreBackup, BackupDump } from '../../services/backups';
 
 interface MigrationStatus {
   running: boolean;
@@ -927,6 +928,58 @@ export async function syncGnulahdItemHandler(request: FastifyRequest, reply: Fas
     pushLog('gnulahdItem', `✅ ${slug} sincronizado y guardado en ${collection}`);
     return 1;
   });
+}
+
+/* ───── Backups de la base de datos ───── */
+
+export async function listBackupsHandler(_request: FastifyRequest, reply: FastifyReply) {
+  const items = await listBackups();
+  return reply.send({ items });
+}
+
+export async function createBackupHandler(_request: FastifyRequest, reply: FastifyReply) {
+  try {
+    const meta = await createBackup();
+    return reply.send({ ok: true, ...meta });
+  } catch (error) {
+    logger.error({ error: (error as Error).message }, 'createBackup failed');
+    return reply.status(500).send({ error: (error as Error).message });
+  }
+}
+
+export async function downloadBackupHandler(request: FastifyRequest, reply: FastifyReply) {
+  const { id } = request.query as { id?: string };
+  let dump: BackupDump | null = null;
+  if (id) dump = await getBackup(String(id));
+  if (!dump) {
+    const items = await listBackups();
+    if (items.length > 0) dump = await getBackup(items[0].id);
+  }
+  if (!dump) {
+    return reply.status(404).send({ error: 'No hay backups disponibles' });
+  }
+  const name = `backup-${dump.createdAt}.json`;
+  return reply
+    .header('Content-Disposition', `attachment; filename="${name}"`)
+    .type('application/json')
+    .send(dump);
+}
+
+export async function restoreBackupHandler(request: FastifyRequest, reply: FastifyReply) {
+  const body = (request.body || {}) as { id?: string; file?: BackupDump; collections?: string[] };
+  try {
+    let dump: BackupDump | null = null;
+    if (body.file && typeof body.file === 'object') dump = body.file;
+    else if (body.id) dump = await getBackup(String(body.id));
+    if (!dump) {
+      return reply.status(400).send({ error: 'Indica un backup existente (id) o sube un archivo (file)' });
+    }
+    const result = await restoreBackup(dump, body.collections);
+    return reply.send({ ok: true, ...result });
+  } catch (error) {
+    logger.error({ error: (error as Error).message }, 'restoreBackup failed');
+    return reply.status(400).send({ error: (error as Error).message });
+  }
 }
 
 function collectItems(obj: any, acc: { id: number; mediaType: string; slug: string; title: string }[]) {

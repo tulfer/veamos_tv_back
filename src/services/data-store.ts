@@ -577,6 +577,7 @@ export async function upsertItemsByCol<T extends { id: string }>(collection: str
 export async function replaceCollection<T>(collection: string, items: T[]): Promise<void> {
   await setRow(storeKeys.collection(collection), stripUndefined(items));
   memoryCache.del(SYNC_DATA_CACHE_KEY);
+  memoryCache.del(CHANNELS_CACHE_KEY);
   memoryCache.del(COUNTS_CACHE_KEY);
   for (const key of Object.keys(TYPE_TO_COLLECTION_KEY)) {
     memoryCache.del(COUNTS_PER_KEY_PREFIX + key);
