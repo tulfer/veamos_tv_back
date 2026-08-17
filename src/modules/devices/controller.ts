@@ -2,8 +2,8 @@ import { FastifyRequest, FastifyReply } from 'fastify';
 import { createDeviceCode, deleteDeviceCode, listDeviceCodes, registerDevice, unlinkDeviceCode } from '../../services/device-codes';
 
 export async function registerDeviceHandler(request: FastifyRequest, reply: FastifyReply) {
-  const body = request.body as { code?: string; deviceId?: string } | undefined;
-  const code = (body?.code || '').trim();
+  const { code } = request.params as { code?: string };
+  const body = request.body as { deviceId?: string } | undefined;
   const deviceId = (body?.deviceId || '').trim() || (request.headers['x-device-id'] as string)?.trim() || '';
   if (!/^\d{6}$/.test(code)) {
     return reply.status(400).send({ error: 'code_invalid', message: 'El código debe tener 6 dígitos' });
