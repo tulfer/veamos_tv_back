@@ -1,7 +1,7 @@
 import * as cheerio from 'cheerio';
 import * as crypto from 'node:crypto';
 import { httpClient } from '../utils/http';
-import { ContentDetail, Episode, Season, VideoLanguage, VideoServer } from '../types';
+import { ContentDetail, Episode, Season, VideoLanguage, VideoServer, MediaItem } from '../types';
 import { isUnsupportedVideoHost } from '../utils/unsupported-video-hosts';
 import { memoryCache } from '../cache/memory';
 import { logger } from '../utils/logger';
@@ -207,6 +207,49 @@ async function extractEmbed69Servers(html: string): Promise<Map<string, VideoSer
     if (servers.length > 0) result.set(languageName, servers);
   }
 
+  return result;
+}
+
+/** Busca en PelisPedia (/search?s=) y devuelve películas y series con el
+ *  mismo formato de id que PelisPlus (mov_/ser_ + slug), para que el search
+ *  service los convierta a ids de catálogo v2 con toV2Id. */
+export async function scrapePelisPediaSearch(query: string): Promise<{ movies: MediaItem[]; series: MediaItem[] }> {
+  const cacheKey = `pelispedia:search:${query.toLowerCase().trim()}`;
+  const cached = memoryCache.get<{ movies: MediaItem[]; series: MediaItem[] }>(cacheKey);
+  if (cached) return cached;
+
+  const url = `${BASE_URL}/search?s=${encodeURIComponent(query.trim().replace(/\s+/g, '+')).replace(/%2B/gi, '+')}`;
+  const html = await fetchText(url);
+  if (!html) return { movies: [], series: [] };
+
+  const $ = cheerio.load(html);
+  if (isErrorPage($)) return { movies: [], series: [] };
+
+  const movies: MediaItem[] = [];
+  const series: MediaItem[] = [];
+  $('.nova-grid .movie-card > a[href]').each((_, el) => {
+    const href = $(el).attr('href') || '';
+    const title = $(el).find('h4').first().text().trim();
+    if (!title || !href) return;
+    const slug = href.replace(/\/+$/, '').split('/').pop() || '';
+    if (!slug) return;
+    const poster = $(el).find('img').first().attr('src') || undefined;
+    const yearText = $(el).find('.nova-badge.year').first().text().trim();
+    const year = parseInt(yearText) || undefined;
+    const isSeries = /\/serie\/|\/anime\//i.test(href);
+    const item: MediaItem = {
+      id: `${isSeries ? 'ser' : 'mov'}_${slug.replace(/-/g, '_')}`,
+      title,
+      poster,
+      year,
+      type: isSeries ? 'series' : 'movie',
+    };
+    if (isSeries) series.push(item);
+    else movies.push(item);
+  });
+
+  const result = { movies, series };
+  memoryCache.set(cacheKey, result, 600_000);
   return result;
 }
 

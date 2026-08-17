@@ -1,6 +1,7 @@
 import { MediaItem, SearchResult, SyncMovie, SyncSeries } from '../../types';
 import { fetchLiveChannels } from '../../providers/live-tv';
 import { scrapeSearch } from '../../providers/search';
+import { scrapePelisPediaSearch } from '../../providers/pelispedia';
 import { searchGnulahd } from '../../providers/gnulahd';
 import { upsertItemsByCol, loadSyncData } from '../../services/data-store';
 import { memoryCache } from '../../cache/memory';
@@ -75,6 +76,12 @@ function byTitle(items: MediaItem[]): (item: MediaItem) => boolean {
   return (item) => !titles.has(item.title.toLowerCase().trim());
 }
 
+/** Dedupe por id tras toV2Id: pelisplus/pelispedia/gnula comparten slugs y el
+ *  mismo contenido puede llegar con títulos ligeramente distintos. */
+function dedupeById<T extends MediaItem>(items: T[]): T[] {
+  return [...new Map(items.map((item) => [item.id, item])).values()];
+}
+
 export async function searchAll(query: string, page = 1): Promise<SearchResult> {
   const q = query.toLowerCase().trim();
   const cacheKey = `search:all:${q}`;
@@ -91,11 +98,22 @@ export async function searchAll(query: string, page = 1): Promise<SearchResult> 
   const pelis = await scrapeSearch(query);
   let externalMovies = pelis.movies.filter((em) => !synced.movies.some((sm) => sm.title.toLowerCase() === em.title.toLowerCase()));
   let externalSeries = pelis.series.filter((es) => !synced.series.some((ss) => ss.title.toLowerCase() === es.title.toLowerCase()));
-  externalMovies = externalMovies.map(toV2Id);
-  externalSeries = externalSeries.map(toV2Id);
 
-  // 2) Si PelisPlus devuelve menos de 4 resultados, completar con GNULA.
+  // 2) Si PelisPlus devuelve menos de 4 resultados, buscar en PelisPedia.
   if (pelis.movies.length + pelis.series.length < PELIS_FALLBACK_THRESHOLD) {
+    const pelispedia = await scrapePelisPediaSearch(query);
+    const ppMovies = pelispedia.movies
+      .filter(byTitle(externalMovies))
+      .filter((em) => !synced.movies.some((sm) => sm.title.toLowerCase() === em.title.toLowerCase()));
+    const ppSeries = pelispedia.series
+      .filter(byTitle(externalSeries))
+      .filter((es) => !synced.series.some((ss) => ss.title.toLowerCase() === es.title.toLowerCase()));
+    externalMovies = [...externalMovies, ...ppMovies];
+    externalSeries = [...externalSeries, ...ppSeries];
+  }
+
+  // 3) Si aún hay menos de 4 resultados, completar con GNULA.
+  if (externalMovies.length + externalSeries.length < PELIS_FALLBACK_THRESHOLD) {
     const gnula = await searchGnulahd(query);
     const gnulaMovies = gnula.items.filter((item) => item.type === 'movie');
     const gnulaSeries = gnula.items.filter((item) => item.type === 'series' || item.type === 'anime');
@@ -103,8 +121,11 @@ export async function searchAll(query: string, page = 1): Promise<SearchResult> 
     externalSeries = [...externalSeries, ...gnulaSeries.filter(byTitle(externalSeries)).filter((item) => !synced.series.some((ss) => ss.title.toLowerCase() === item.title.toLowerCase()))];
   }
 
-  // 3) Guardar en v2 los resultados de PelisPlus (los de GNULA ya vienen del catálogo).
-  if (pelis.movies.length > 0 || pelis.series.length > 0) {
+  // 4) Convertir a ids de catálogo v2 y guardarlos para que el content service los encuentre.
+  externalMovies = dedupeById(externalMovies.map(toV2Id));
+  externalSeries = dedupeById(externalSeries.map(toV2Id));
+
+  if (externalMovies.length > 0 || externalSeries.length > 0) {
     await persistExternalToV2({ movies: externalMovies, series: externalSeries });
   }
 
@@ -141,11 +162,20 @@ export async function searchByType(
   // 1) PelisPlus HD primero.
   const external = await scrapeSearch(query);
   let filtered = (type === 'movie' ? external.movies : external.series)
-    .filter((em) => !items.some((sm) => sm.title.toLowerCase() === em.title.toLowerCase()))
-    .map(toV2Id);
+    .filter((em) => !items.some((sm) => sm.title.toLowerCase() === em.title.toLowerCase()));
 
-  // 2) Si hay menos de 4 resultados en PelisPlus, completar con GNULA.
-  const sourceTotal = type === 'movie' ? external.movies.length : external.series.length;
+  // 2) Si hay menos de 4 resultados en PelisPlus, buscar en PelisPedia.
+  let sourceTotal = type === 'movie' ? external.movies.length : external.series.length;
+  if (sourceTotal < PELIS_FALLBACK_THRESHOLD) {
+    const pelispedia = await scrapePelisPediaSearch(query);
+    const ppItems = (type === 'movie' ? pelispedia.movies : pelispedia.series)
+      .filter(byTitle(filtered))
+      .filter((em) => !items.some((sm) => sm.title.toLowerCase() === em.title.toLowerCase()));
+    filtered = [...filtered, ...ppItems];
+    sourceTotal += type === 'movie' ? pelispedia.movies.length : pelispedia.series.length;
+  }
+
+  // 3) Si aún hay menos de 4 resultados, completar con GNULA.
   if (sourceTotal < PELIS_FALLBACK_THRESHOLD) {
     const gnula = await searchGnulahd(query);
     const gnulaItems = type === 'movie'
@@ -153,6 +183,8 @@ export async function searchByType(
       : gnula.items.filter((item) => item.type === 'series' || item.type === 'anime');
     filtered = [...filtered, ...gnulaItems.filter(byTitle(filtered)).filter((item) => !items.some((sm) => sm.title.toLowerCase() === item.title.toLowerCase()))];
   }
+
+  filtered = dedupeById(filtered.map(toV2Id));
 
   if (filtered.length > 0) {
     if (type === 'movie') await persistExternalToV2({ movies: filtered, series: [] });
