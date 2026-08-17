@@ -1,7 +1,9 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import path from 'node:path';
+import { Section } from '../../types';
 import { loadChannels, loadSyncData } from '../../services/data-store';
 import { loadGnulahdHomeData, normalizeGnulahdItemId, scrapeGnulahdList } from '../../providers/gnulahd';
+import { loadAnimeJaraHomeData } from '../../providers/animejara';
 import { getGnulahdDetailContent } from '../../services/gnulahd-content';
 import { unwrapDetailProxy } from '../../services/content-detail';
 import { getChannelsHandler } from '../live-tv/controller';
@@ -52,7 +54,7 @@ function registerGnulahdPrefix(app: FastifyInstance, prefix: '/v2' | '/gnulahd' 
     return reply.send(data);
   });
 
-  for (const [kind, collection] of [['movies', 'gnulahdMovies'], ['series', 'gnulahdSeries'], ['anime', 'gnulahdAnime']] as const) {
+  for (const [kind, collection] of [['movies', 'gnulahdMovies'], ['series', 'gnulahdSeries']] as const) {
     app.get(`${prefix}/${kind}`, async (request: FastifyRequest, reply: FastifyReply) => {
       const synced = await loadSyncData();
       const query = request.query as { page?: string; limit?: string };
@@ -66,6 +68,29 @@ function registerGnulahdPrefix(app: FastifyInstance, prefix: '/v2' | '/gnulahd' 
       return reply.send(paginate(items, page, limit));
     });
   }
+
+  // Sección Anime: banner + últimos episodios (animejara) + Top Anime (jkanime)
+  // + catálogo completo (Todos). La primera página devuelve la estructura con
+  // secciones; páginas siguientes devuelven solo la lista paginada de Todos.
+  app.get(`${prefix}/anime`, async (request: FastifyRequest, reply: FastifyReply) => {
+    const query = request.query as { page?: string; limit?: string };
+    const page = Math.max(1, parseInt(query.page || '1', 10) || 1);
+    const data = await loadAnimeJaraHomeData();
+    const todos = data?.todos || [];
+    const limit = Math.min(60, Math.max(1, parseInt(query.limit || '20', 10) || 20));
+    if (page > 1) {
+      return reply.send({ page, limit, total: todos.length, totalPages: Math.max(1, Math.ceil(todos.length / limit)), items: todos.slice((page - 1) * limit, page * limit) });
+    }
+    if (!data) {
+      return reply.status(404).send({ error: 'Sección anime aún no sincronizada', hint: 'Ejecuta el sync de anime primero' });
+    }
+    const sections: Section[] = [
+      { title: 'Ultimos episodios', type: 'anime', items: data.ultimosEpisodios, seeAllRoute: '/anime', totalItems: data.ultimosEpisodios.length },
+      { title: 'Top Anime', type: 'anime', items: data.topAnime, seeAllRoute: '/anime', totalItems: data.topAnime.length },
+      { title: 'Todos', type: 'anime', items: todos.slice(0, 20), seeAllRoute: '/anime', totalItems: todos.length },
+    ];
+    return reply.send({ banners: data.banners, sections, updatedAt: data.updatedAt });
+  });
 
   app.get(`${prefix}/live/channels`, getChannelsHandler);
 

@@ -702,16 +702,18 @@ export async function syncGnulahdHomeHandler(_request: FastifyRequest, reply: Fa
 }
 
 /** Ejecuta el sync de un listado GNULA en segundo plano (usado por handlers y autosync).
- *  Devuelve true si la sincronización arrancó (false si ya había una en curso). */
+ *  Devuelve true si la sincronización arrancó (false si ya había una en curso).
+ *  El anime usa fuentes propias (animejara + jkanime), ver runAnimeSync. */
 export async function runGnulahdKindSync(kind: 'peliculas' | 'series' | 'anime', pages: number[], shouldReplace = false): Promise<boolean> {
-  const type: SyncType = kind === 'peliculas' ? 'gnulahdMovies' : kind === 'series' ? 'gnulahdSeries' : 'gnulahdAnime';
-  const field: 'gnulahdMovies' | 'gnulahdSeries' | 'gnulahdAnime' = type;
+  if (kind === 'anime') return runAnimeSync(pages, shouldReplace);
+  const type: SyncType = kind === 'peliculas' ? 'gnulahdMovies' : 'gnulahdSeries';
+  const field: 'gnulahdMovies' | 'gnulahdSeries' = type;
   if (pages.length === 0 || !startSync(type)) {
     pushLog(type, `⏳ Ya hay una sincronización de ${kind} en curso o sin páginas, omitiendo...`);
     return false;
   }
   runBackgroundSync(type, async () => {
-    const collection = field === 'gnulahdMovies' ? 'gnulahd-movies' : field === 'gnulahdSeries' ? 'gnulahd-series' : 'gnulahd-anime';
+    const collection = field === 'gnulahdMovies' ? 'gnulahd-movies' : 'gnulahd-series';
     if (shouldReplace) {
       await replaceCollection(collection, []);
       updateSyncProgress(type, 0, 'Colección vaciada; guardando items individualmente...');
@@ -724,6 +726,89 @@ export async function runGnulahdKindSync(kind: 'peliculas' | 'series' | 'anime',
     });
     await persistQueue;
     return items.length;
+  });
+  return true;
+}
+
+/** Sync de la sección Anime: banner y últimos episodios de animejara.com/inicio,
+ *  Top Anime (10) de jkanime.net y todo el catálogo de
+ *  animejara.com/catalogo/?paged={n}. Los ítems del catálogo se guardan en la
+ *  colección gnulahd-anime; el contenido se resuelve on-demand (animejara →
+ *  jkanime) en getGnulahdDetailContent. */
+export async function runAnimeSync(pages: number[], shouldReplace = false): Promise<boolean> {
+  const type = 'gnulahdAnime';
+  if (!startSync(type)) {
+    pushLog(type, '⏳ Ya hay una sincronización de anime en curso, omitiendo...');
+    return false;
+  }
+  runBackgroundSync(type, async () => {
+    const { scrapeAnimejaraHome, scrapeAnimejaraCatalogPage, saveAnimeJaraHomeData } = await import('../../providers/animejara');
+    const { scrapeJkanimeTopAnime } = await import('../../providers/jkanime');
+    const collection = 'gnulahd-anime';
+
+    if (shouldReplace) {
+      await replaceCollection(collection, []);
+      updateSyncProgress(type, 0, 'Colección de animes vaciada; sincronizando de nuevo...');
+    }
+
+    updateSyncProgress(type, 0, 'Scrapeando home de animejara.com/inicio...');
+    const home = await scrapeAnimejaraHome();
+    pushLog(type, `AnimeJara home: ${home.banners.length} banners y ${home.ultimosEpisodios.length} últimos episodios`);
+
+    updateSyncProgress(type, 0, 'Scrapeando Top Anime de jkanime.net...');
+    const topAnime = await scrapeJkanimeTopAnime();
+    pushLog(type, `JKAnime top: ${topAnime.length} animes`);
+
+    const firstPage = await scrapeAnimejaraCatalogPage(1);
+    const totalPages = Math.max(1, Math.ceil((firstPage.total || firstPage.items.length) / Math.max(1, firstPage.items.length)));
+    const pageList = pages.length > 0 ? pages : Array.from({ length: totalPages }, (_, i) => i + 1);
+    pushLog(type, `Catálogo animejara: ${firstPage.total || '?'} animes, ${pageList.length} páginas a escanear`);
+
+    const todos: typeof firstPage.items = [];
+    const seen = new Set<string>();
+    const addItems = (items: typeof firstPage.items) => {
+      const added: typeof firstPage.items = [];
+      for (const item of items) {
+        if (seen.has(item.id)) continue;
+        seen.add(item.id);
+        todos.push(item);
+        added.push(item);
+      }
+      return added;
+    };
+    addItems(firstPage.items);
+
+    let persistQueue = Promise.resolve();
+    for (const page of pageList) {
+      let pageItems = page === 1 ? firstPage.items : [];
+      if (page !== 1) {
+        const pageData = await scrapeAnimejaraCatalogPage(page);
+        pageItems = addItems(pageData.items);
+      }
+      updateSyncProgress(type, todos.length, `Escaneando página ${page}/${pageList.length} del catálogo (${todos.length} animes)...`);
+      for (const item of pageItems) {
+        const write = persistQueue.then(() =>
+          upsertItemByCol(collection, {
+            id: item.id,
+            title: item.title,
+            poster: item.poster,
+            rating: item.rating,
+            year: item.year,
+            description: item.description,
+            genres: item.genres,
+            type: 'anime',
+          } as SyncSeries),
+        );
+        persistQueue = write.catch(() => undefined);
+      }
+      await persistQueue;
+      logger.info({ page, total: todos.length }, 'AnimeJara catalog page synced');
+    }
+
+    await saveAnimeJaraHomeData({ ...home, topAnime, todos, totalTodos: firstPage.total || todos.length, updatedAt: Date.now() });
+    updateSyncProgress(type, todos.length, `${todos.length} animes sincronizados (banner, últimos episodios, top y catálogo)`);
+    pushLog(type, `Sync de anime completado: ${todos.length} animes en el catálogo`);
+    return todos.length;
   });
   return true;
 }

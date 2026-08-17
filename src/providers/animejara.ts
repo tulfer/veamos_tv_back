@@ -1,7 +1,10 @@
 import { httpClient } from '../utils/http';
-import { Episode, Season, VideoServer } from '../types';
+import * as cheerio from 'cheerio';
+import { Episode, Season, VideoServer, MediaItem, BannerItem } from '../types';
 import { isUnsupportedVideoHost } from '../utils/unsupported-video-hosts';
 import { searchJkanimeSlug } from './jkanime';
+import { getRow, setRow, storeKeys } from '../services/store';
+import { logger } from '../utils/logger';
 
 const ANIMEJARA_BASE = 'https://animejara.com';
 
@@ -182,4 +185,167 @@ export async function scrapeAnimejaraDetail(slug: string, onLog?: (message: stri
     onLog?.(`AnimeJara: error ${(error as Error).message}`);
     return null;
   }
+}
+
+// ---- Home y catálogo (sección Anime del panel de sincronización) ----
+
+export interface AnimeJaraHomeData {
+  banners: BannerItem[];
+  ultimosEpisodios: MediaItem[];
+  topAnime: MediaItem[];
+  todos: MediaItem[];
+  totalTodos: number;
+  updatedAt: number;
+}
+
+function animeSlugFromUrl(url: string): string | null {
+  const match = url.replace(/\/+$/, '').match(/\/(?:anime|movie|episode)\/([a-z0-9-]+?)(?:-\d+x\d+)?(?:#|\/|$)/i);
+  return match ? match[1] : null;
+}
+
+function extractJsArray(html: string, varName: string): string | null {
+  const marker = `const ${varName} = `;
+  const idx = html.indexOf(marker);
+  if (idx === -1) return null;
+  let start = idx + marker.length;
+  while (start < html.length && /\s/.test(html[start])) start++;
+  if (html[start] !== '[') return null;
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  let end = start;
+  for (; end < html.length; end++) {
+    const ch = html[end];
+    if (esc) {
+      esc = false;
+      continue;
+    }
+    if (inStr) {
+      if (ch === '\\') esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === '[') depth++;
+    else if (ch === ']') {
+      depth--;
+      if (depth === 0) {
+        end++;
+        break;
+      }
+    }
+  }
+  if (depth !== 0) return null;
+  return html.slice(start, end);
+}
+
+/** Banner y últimos episodios desde https://animejara.com/inicio.
+ *  El hero es un array JS `heroData` (tendencias al azar); la sección
+ *  "Últimos Episodios" son tarjetas a.ep-card dentro de .anime-grid. */
+export async function scrapeAnimejaraHome(): Promise<{ banners: BannerItem[]; ultimosEpisodios: MediaItem[] }> {
+  try {
+    const html = await fetchTextWithRetry(`${ANIMEJARA_BASE}/inicio`);
+    const banners: BannerItem[] = [];
+
+    const raw = extractJsArray(html, 'heroData');
+    if (raw) {
+      try {
+        const heroData = JSON.parse(raw) as Array<{
+          rank?: number;
+          titulo?: string;
+          sinopsis?: string;
+          categorias?: string;
+          imagen?: string;
+          enlace?: string;
+        }>;
+        for (const entry of heroData) {
+          const slug = entry.enlace ? animeSlugFromUrl(entry.enlace) : null;
+          if (!slug || !entry.titulo) continue;
+          const image = entry.imagen || '';
+          banners.push({
+            id: `gani_${slug}`,
+            title: entry.titulo,
+            description: entry.sinopsis,
+            poster: image,
+            backdrop: image,
+            image,
+            genres: (entry.categorias || '').split(',').map((g) => g.trim()).filter(Boolean),
+            type: 'anime',
+          });
+        }
+      } catch (error) {
+        logger.warn({ error: (error as Error).message }, 'AnimeJara: no se pudo parsear heroData');
+      }
+    }
+
+    const ultimosEpisodios: MediaItem[] = [];
+    const seen = new Set<string>();
+    const $ = cheerio.load(html);
+    $('.anime-grid > a.ep-card').each((_, el) => {
+      const $el = $(el);
+      const href = $el.attr('href') || '';
+      const slug = animeSlugFromUrl(href);
+      if (!slug || seen.has(slug)) return;
+      seen.add(slug);
+      const img = $el.find('img').first();
+      const poster = img.attr('data-src') || img.attr('src') || undefined;
+      const title = $el.find('.ep-name').first().text().trim();
+      if (!title) return;
+      ultimosEpisodios.push({ id: `gani_${slug}`, title, poster, type: 'anime' });
+    });
+
+    logger.info({ banners: banners.length, ultimosEpisodios: ultimosEpisodios.length }, 'AnimeJara home scraped');
+    return { banners, ultimosEpisodios };
+  } catch (error) {
+    logger.error({ error: (error as Error).message }, 'AnimeJara: fallo al scrapear el home');
+    return { banners: [], ultimosEpisodios: [] };
+  }
+}
+
+/** Lista el catálogo completo de animejara: https://animejara.com/catalogo/?paged={page}.
+ *  La página devuelve HTTP 404 pero el cuerpo trae los ítems, por eso se acepta
+ *  cualquier status. Cada tarjeta expone su metadata en data-anime (JSON). */
+export async function scrapeAnimejaraCatalogPage(page: number): Promise<{ items: MediaItem[]; total: number }> {
+  try {
+    const html = await fetchTextWithRetry(`${ANIMEJARA_BASE}/catalogo/?paged=${page}`, true);
+    const $ = cheerio.load(html);
+    const items: MediaItem[] = [];
+    $('#anime-results a.anime-card[data-anime]').each((_, el) => {
+      const $el = $(el);
+      const href = $el.attr('href') || '';
+      const slug = animeSlugFromUrl(href);
+      if (!slug) return;
+      let data: { titulo?: string; poster?: string; anio?: string; rating?: number; sinopsis?: string; categorias?: string[] } | null = null;
+      try {
+        data = JSON.parse($el.attr('data-anime') || '') as typeof data;
+      } catch {
+        data = null;
+      }
+      const title = data?.titulo || $el.find('img').first().attr('alt') || '';
+      if (!title) return;
+      items.push({
+        id: `gani_${slug}`,
+        title,
+        poster: data?.poster || $el.find('img').first().attr('src') || undefined,
+        description: data?.sinopsis,
+        year: data?.anio ? parseInt(data.anio, 10) || undefined : undefined,
+        rating: data?.rating ? data.rating : undefined,
+        genres: Array.isArray(data?.categorias) ? data!.categorias : undefined,
+        type: 'anime',
+      });
+    });
+    const totalMatch = html.match(/id="total-animes"[^>]*>\s*(\d+)/i);
+    return { items, total: totalMatch ? parseInt(totalMatch[1], 10) : 0 };
+  } catch (error) {
+    logger.error({ error: (error as Error).message, page }, 'AnimeJara: fallo al scrapear el catálogo');
+    return { items: [], total: 0 };
+  }
+}
+
+export async function saveAnimeJaraHomeData(data: AnimeJaraHomeData): Promise<void> {
+  await setRow(storeKeys.animeHome, { ...data, updatedAt: Date.now() });
+}
+
+export async function loadAnimeJaraHomeData(): Promise<AnimeJaraHomeData | null> {
+  return getRow<AnimeJaraHomeData>(storeKeys.animeHome);
 }

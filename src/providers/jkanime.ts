@@ -1,7 +1,8 @@
 import * as cheerio from 'cheerio';
 import { fetchHTML, httpClient } from '../utils/http';
-import { Episode, Season, VideoLanguage, VideoServer } from '../types';
+import { Episode, Season, VideoLanguage, VideoServer, MediaItem } from '../types';
 import { isUnsupportedVideoHost } from '../utils/unsupported-video-hosts';
+import { logger } from '../utils/logger';
 
 const BASE_URL = 'https://jkanime.net';
 
@@ -212,5 +213,39 @@ export async function scrapeJkanimeDetail(slug: string, onLog?: (message: string
   } catch (error) {
     onLog?.(`JKAnime: error ${(error as Error).message}`);
     return null;
+  }
+}
+
+/** Top Anime desde el home de jkanime: los 10 ítems de las dos filas al final
+ *  (.row.upto con 4 + .row.lower con 6), cada uno con su rank. */
+export async function scrapeJkanimeTopAnime(): Promise<MediaItem[]> {
+  try {
+    const html = await fetchHTML(`${BASE_URL}/`);
+    const $ = cheerio.load(html);
+    const items: MediaItem[] = [];
+    const seen = new Set<string>();
+    $('.row.upto .col.toplist .card a[href], .row.lower .col.toplist .card a[href]').each((_, el) => {
+      const $el = $(el);
+      const href = $el.attr('href') || '';
+      const slug = href.replace(/\/+$/, '').split('/').filter(Boolean).pop() || '';
+      if (!slug || seen.has(slug)) return;
+      seen.add(slug);
+      const title = $el.find('.card-title').first().text().trim();
+      if (!title) return;
+      const poster = $el.find('.card-img img').first().attr('src') || undefined;
+      const rankText = $el.find('[data-rank]').first().attr('data-rank') || '';
+      items.push({
+        id: `gani_${slug}`,
+        title,
+        poster,
+        rating: rankText ? parseInt(rankText, 10) : undefined,
+        type: 'anime',
+      });
+    });
+    logger.info({ topAnime: items.length }, 'JKAnime top anime scraped');
+    return items;
+  } catch (error) {
+    logger.error({ error: (error as Error).message }, 'JKAnime: fallo al scrapear el top anime');
+    return [];
   }
 }

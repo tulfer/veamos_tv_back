@@ -308,10 +308,11 @@ export async function getGnulahdDetailContent(id: string): Promise<ContentDetail
 
   // Los ids nativos de GNULA usan slugs con guiones (gmov_dragon-ball-z-...).
   // Los convertidos desde PelisPlus/PelisPedia llevan guiones bajos
-  // (gser_malcolm_el_de_en_medio): GNULA no los tiene, se va directo al
-  // respaldo sin quemar reintentos en un 404.
+  // (gser_malcolm_el_de_en_medio) y los de anime (gani_...) son convención
+  // propia (animejara/jkanime): en ambos casos se va directo al respaldo sin
+  // quemar reintentos en un 404.
   const nativeSlug = id.slice(id.indexOf('_') + 1);
-  const scraped = nativeSlug.includes('_') ? null : await scrapeGnulahdDetail(id);
+  const scraped = nativeSlug.includes('_') || id.startsWith('gani_') ? null : await scrapeGnulahdDetail(id);
   if (scraped) {
     const scrapedComplete = isSeriesCol ? !!scraped.seasons?.length : !!scraped.videos?.length;
     if (scrapedComplete) {
@@ -339,7 +340,57 @@ export async function getGnulahdDetailContent(id: string): Promise<ContentDetail
       await healGnulahd(collection, normalized);
       return normalized;
     }
+  } else {
+    // Anime: animejara (latino) primero; si algún episodio queda con menos de
+    // 3 servidores por idioma, se busca el nombre en jkanime y se mezcla.
+    const slug = id.replace(/^gani_/, '');
+    const animeDetail = await scrapeAnimeContent(slug, item?.title);
+    if (animeDetail) {
+      await healGnulahd('gnulahd-anime', animeDetail);
+      return animeDetail;
+    }
   }
 
   return item ? (isSeriesCol ? mapGnulahdSeries(item as SyncSeries) : mapGnulahdMovie(item as SyncMovie)) : null;
+}
+
+/** Contenido de anime on-demand: AnimeJara (episodios en latino) y, si quedan
+ *  episodios con menos de 3 servidores por idioma, JKAnime (subtitulado). */
+async function scrapeAnimeContent(slug: string, fallbackTitle?: string): Promise<ContentDetail | null> {
+  const pushAnimeLog = (message: string) => pushLog('gnulahdAnime', message);
+  const base: ContentDetail = {
+    id: `gani_${slug}`,
+    title: fallbackTitle || slug,
+    description: fallbackTitle ? `${fallbackTitle} disponible en Veamos TV.` : '',
+    rating: 8.0,
+    year: 2024,
+    genres: ['Anime'],
+    cast: [{ name: 'Reparto Principal' }],
+    type: 'anime',
+  };
+
+  const animejara = await scrapeAnimejaraDetail(slug, pushAnimeLog);
+  if (!animejara?.seasons?.length) {
+    const jkanime = await scrapeJkanimeDetail(slug, pushAnimeLog);
+    if (!jkanime?.seasons?.length) return null;
+    return { ...base, seasons: jkanime.seasons };
+  }
+
+  const needsJkanime = animejara.seasons.some((season) => season.episodes.some((episode) => hasFewerThanThreeServersPerLanguage(episode.videos)));
+  if (needsJkanime) {
+    pushAnimeLog(`AnimeJara con pocos servidores, consultando JKAnime para ${slug}...`);
+    const jkanime = await scrapeJkanimeDetail(slug, pushAnimeLog);
+    if (jkanime?.seasons?.length) {
+      for (const season of animejara.seasons) {
+        const extraSeason = jkanime.seasons.find((item) => item.season_number === season.season_number) || jkanime.seasons[0];
+        for (const episode of season.episodes) {
+          const extraEpisode = extraSeason?.episodes.find((item) => item.episode_number === episode.episode_number);
+          if (extraEpisode) mergeEpisodeVideos(episode, extraEpisode, true);
+        }
+      }
+      pushAnimeLog(`JKAnime agregó servidores a ${slug}`);
+    }
+  }
+
+  return { ...base, seasons: animejara.seasons };
 }
