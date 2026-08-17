@@ -1,4 +1,5 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import path from 'node:path';
 import { loadChannels, loadSyncData } from '../../services/data-store';
 import { loadGnulahdHomeData, normalizeGnulahdItemId, scrapeGnulahdList, searchGnulahd } from '../../providers/gnulahd';
 import { getGnulahdDetailContent } from '../../services/gnulahd-content';
@@ -108,5 +109,10 @@ export async function gnulahdRoutes(app: FastifyInstance) {
       }
     });
     registerGnulahdPrefix(scope, '/v2/:code');
+    // Landing page de la app, protegida por código: /v2/<codigo>/app
+    scope.get('/v2/:code/app', async (_request: FastifyRequest, reply: FastifyReply) => {
+      reply.header('content-type', 'text/html; charset=utf-8');
+      return reply.sendFile('landing.html', path.join(process.cwd(), 'public'));
+    });
   });
 }
