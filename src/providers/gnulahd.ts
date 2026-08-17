@@ -487,7 +487,15 @@ export async function scrapeGnulahdDetail(id: string): Promise<ContentDetail | n
   const slug = id.slice(prefix.length);
   const url = `${GNULLAHD_BASE_URL}/ver/${slug}/`;
 
-  const html = await fetchGnulahdHTML(url);
+  let html: string;
+  try {
+    html = await fetchGnulahdHTML(url);
+  } catch {
+    // 404/timeout: el ítem no existe en GNULA (p.ej. ids de PelisPlus/
+    // PelisPedia con slug con guiones bajos); el caller debe continuar
+    // con los proveedores de respaldo.
+    return null;
+  }
   const $ = cheerio.load(html);
   if ($('body').text().trim().length < 200) return null;
 

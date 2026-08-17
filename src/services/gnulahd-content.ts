@@ -306,7 +306,12 @@ export async function getGnulahdDetailContent(id: string): Promise<ContentDetail
     return isSeriesCol ? mapGnulahdSeries(item as SyncSeries) : mapGnulahdMovie(item as SyncMovie);
   }
 
-  const scraped = await scrapeGnulahdDetail(id);
+  // Los ids nativos de GNULA usan slugs con guiones (gmov_dragon-ball-z-...).
+  // Los convertidos desde PelisPlus/PelisPedia llevan guiones bajos
+  // (gser_malcolm_el_de_en_medio): GNULA no los tiene, se va directo al
+  // respaldo sin quemar reintentos en un 404.
+  const nativeSlug = id.slice(id.indexOf('_') + 1);
+  const scraped = nativeSlug.includes('_') ? null : await scrapeGnulahdDetail(id);
   if (scraped) {
     const scrapedComplete = isSeriesCol ? !!scraped.seasons?.length : !!scraped.videos?.length;
     if (scrapedComplete) {
