@@ -37,7 +37,7 @@ async function homeWithLiveChannels() {
   return { ...data, banners, sections };
 }
 
-function registerGnulahdPrefix(app: FastifyInstance, prefix: '/v2' | '/gnulahd' | '/v2/:code') {
+function registerGnulahdPrefix(app: FastifyInstance, prefix: '/v2/:code') {
   app.get(`${prefix}/home`, async (_request: FastifyRequest, reply: FastifyReply) => {
     const data = await homeWithLiveChannels();
     if (!data) return reply.status(404).send({ error: 'Home de GNULA aún no sincronizado', hint: 'Ejecuta POST /sync/gnulahd/home primero' });
@@ -111,11 +111,7 @@ function registerGnulahdPrefix(app: FastifyInstance, prefix: '/v2' | '/gnulahd' 
 }
 
 export async function gnulahdRoutes(app: FastifyInstance) {
-  registerGnulahdPrefix(app, '/v2');
-  // Compatibilidad para clientes que todavía usan el prefijo anterior.
-  registerGnulahdPrefix(app, '/gnulahd');
-
-  // Variante protegida por código de dispositivo: /v2/<codigo>/...
+  // Solo se expone la variante protegida por código de dispositivo: /v2/<codigo>/...
   // El código debe existir, estar habilitado y vinculado a un dispositivo.
   // Si el cliente envía su deviceId (header x-device-id o query deviceId)
   // además se verifica que sea el dispositivo dueño del código.
