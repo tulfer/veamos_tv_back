@@ -1,15 +1,32 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
 import { createDeviceCode, deleteDeviceCode, listDeviceCodes, registerDevice, unlinkDeviceCode } from '../../services/device-codes';
+import { addAppVersion, activateAppVersion, getAppVersions, removeAppVersion } from '../../services/app-versions';
 
 export async function registerDeviceHandler(request: FastifyRequest, reply: FastifyReply) {
   const { code } = request.params as { code?: string };
-  const body = request.body as { deviceId?: string } | undefined;
+  const body = request.body as { deviceId?: string; version?: string } | undefined;
   const deviceId = (body?.deviceId || '').trim() || (request.headers['x-device-id'] as string)?.trim() || '';
+  const version = (body?.version || '').trim();
   if (!/^\d{6}$/.test(code)) {
     return reply.status(400).send({ error: 'code_invalid', message: 'El código debe tener 6 dígitos' });
   }
   if (!deviceId) {
     return reply.status(400).send({ error: 'device_id_required', message: 'Falta el identificador único del dispositivo' });
+  }
+  if (!version) {
+    return reply.status(400).send({ error: 'version_required', message: 'Falta la versión de la app (ej: 1.1.5)' });
+  }
+  let appCfg;
+  try {
+    appCfg = await getAppVersions();
+  } catch (e: any) {
+    return reply.status(500).send({ error: 'internal_error', message: e?.message || 'Error al validar la versión' });
+  }
+  if (!appCfg.active) {
+    return reply.status(403).send({ error: 'no_active_version', message: 'No hay una versión activa configurada en el panel' });
+  }
+  if (version !== appCfg.active) {
+    return reply.status(403).send({ error: 'version_invalid', message: `La versión ${version} no está activa (activa: ${appCfg.active})` });
   }
   try {
     const result = await registerDevice(code, deviceId);
@@ -62,5 +79,44 @@ export async function unlinkCodeHandler(request: FastifyRequest, reply: FastifyR
     return reply.send({ ok: true });
   } catch (e: any) {
     return reply.status(500).send({ error: 'internal_error', message: e?.message || 'Error al liberar el código' });
+  }
+}
+
+export async function getVersionsHandler(_request: FastifyRequest, reply: FastifyReply) {
+  try {
+    const cfg = await getAppVersions();
+    return reply.send(cfg);
+  } catch (e: any) {
+    return reply.status(500).send({ error: 'internal_error', message: e?.message || 'Error al listar versiones' });
+  }
+}
+
+export async function addVersionHandler(request: FastifyRequest, reply: FastifyReply) {
+  const body = request.body as { version?: string } | undefined;
+  try {
+    const cfg = await addAppVersion(body?.version || '');
+    return reply.send({ ok: true, ...cfg });
+  } catch (e: any) {
+    return reply.status(400).send({ error: 'add_failed', message: e?.message || 'Error al agregar la versión' });
+  }
+}
+
+export async function activateVersionHandler(request: FastifyRequest, reply: FastifyReply) {
+  const { version } = request.params as { version?: string };
+  try {
+    const cfg = await activateAppVersion(version || '');
+    return reply.send({ ok: true, ...cfg });
+  } catch (e: any) {
+    return reply.status(400).send({ error: 'activate_failed', message: e?.message || 'Error al activar la versión' });
+  }
+}
+
+export async function removeVersionHandler(request: FastifyRequest, reply: FastifyReply) {
+  const { version } = request.params as { version?: string };
+  try {
+    const cfg = await removeAppVersion(version || '');
+    return reply.send({ ok: true, ...cfg });
+  } catch (e: any) {
+    return reply.status(400).send({ error: 'remove_failed', message: e?.message || 'Error al eliminar la versión' });
   }
 }

@@ -20,9 +20,50 @@ function App() {
   const [custom, setCustom] = useState('');
   const [msg, setMsg] = useState('');
   const [busy, setBusy] = useState(false);
+  const [verEnabled, setVerEnabled] = useState<string[]>([]);
+  const [verActive, setVerActive] = useState<string | null>(null);
+  const [verInput, setVerInput] = useState('');
+  const [verMsg, setVerMsg] = useState('');
 
   const load = () => fetch('/devices/codes').then(r => r.json()).then(d => setCodes(d.items || [])).catch(() => {});
-  useEffect(() => { load(); }, []);
+  const loadVersions = () => fetch('/devices/versions').then(r => r.json()).then(d => { setVerEnabled(d.enabled || []); setVerActive(d.active || null); }).catch(() => {});
+  useEffect(() => { load(); loadVersions(); }, []);
+
+  const addVersion = async () => {
+    if (!verInput.trim()) return setVerMsg('Escribe una versión (ej: 1.1.5)');
+    setBusy(true); setVerMsg('');
+    try {
+      const r = await fetch('/devices/versions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ version: verInput.trim() }) });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.message || d.error || 'Error HTTP ' + r.status);
+      setVerMsg('✔ Versión ' + verInput.trim() + ' agregada' + (d.active === verInput.trim() ? ' (activa)' : ''));
+      setVerInput('');
+      loadVersions();
+    } catch (e: any) { setVerMsg('✖ ' + (e.message || 'Error')); } finally { setBusy(false); }
+  };
+
+  const activateVersion = async (v: string) => {
+    setBusy(true); setVerMsg('');
+    try {
+      const r = await fetch('/devices/versions/' + encodeURIComponent(v) + '/activate', { method: 'POST' });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.message || d.error || 'Error HTTP ' + r.status);
+      setVerMsg('✔ Versión ' + v + ' ahora es la activa');
+      loadVersions();
+    } catch (e: any) { setVerMsg('✖ ' + (e.message || 'Error')); } finally { setBusy(false); }
+  };
+
+  const removeVersion = async (v: string) => {
+    if (!window.confirm('¿Eliminar la versión ' + v + '?' + (v === verActive ? ' Quedará sin versión activa.' : ''))) return;
+    setBusy(true); setVerMsg('');
+    try {
+      const r = await fetch('/devices/versions/' + encodeURIComponent(v), { method: 'DELETE' });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.message || d.error || 'Error HTTP ' + r.status);
+      setVerMsg('✔ Versión ' + v + ' eliminada');
+      loadVersions();
+    } catch (e: any) { setVerMsg('✖ ' + (e.message || 'Error')); } finally { setBusy(false); }
+  };
 
   const gen = () => setCustom(String(Math.floor(100000 + Math.random() * 900000)));
 
@@ -114,6 +155,24 @@ function App() {
           {!codes.length && <tr><td colSpan={6} style={{ color: '#8d95b7', textAlign: 'center', padding: 20 }}>Todavía no hay códigos. Registra el primero arriba.</td></tr>}
         </tbody>
       </table>
+    </section>
+    <section className="panel" style={{ marginTop: 18 }}>
+      <Head title="Versiones de la app" subtitle="La versión activa es la única que puede registrar dispositivos. Sin versión activa, ningún dispositivo se registra." />
+      <div className="gitem-row">
+        <Field label="Versión (ej: 1.1.5)"><input value={verInput} onChange={e => setVerInput(e.target.value)} placeholder="1.1.5" onKeyDown={e => { if (e.key === 'Enter') addVersion(); }} /></Field>
+        <button className="primary-button" onClick={addVersion} disabled={busy}>➕ Agregar versión</button>
+      </div>
+      {verMsg && <div className="form-message">{verMsg}</div>}
+      <div className="ver-list">
+        {verEnabled.map(v => (
+          <div className={'ver-chip' + (v === verActive ? ' active' : '')} key={v}>
+            <span className="ver-name">{v}</span>
+            {v === verActive ? <span className="badge-enuso">Activa</span> : <button className="mini-btn" onClick={() => activateVersion(v)} disabled={busy}>Activar</button>}
+            <button className="mini-btn danger" onClick={() => removeVersion(v)} disabled={busy} title="Eliminar versión">✕</button>
+          </div>
+        ))}
+        {!verEnabled.length && <span style={{ color: '#8d95b7' }}>Sin versiones. Agrega la primera (quedará activa).</span>}
+      </div>
     </section>
   </main>;
 }
