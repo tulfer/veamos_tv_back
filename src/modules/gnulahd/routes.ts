@@ -1,11 +1,12 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import path from 'node:path';
 import { loadChannels, loadSyncData } from '../../services/data-store';
-import { loadGnulahdHomeData, normalizeGnulahdItemId, scrapeGnulahdList, searchGnulahd } from '../../providers/gnulahd';
+import { loadGnulahdHomeData, normalizeGnulahdItemId, scrapeGnulahdList } from '../../providers/gnulahd';
 import { getGnulahdDetailContent } from '../../services/gnulahd-content';
 import { unwrapDetailProxy } from '../../services/content-detail';
 import { getChannelsHandler } from '../live-tv/controller';
 import { verifyDeviceCode } from '../../services/device-codes';
+import { searchAll, searchByType } from '../search/service';
 
 const PAGE_SIZE = 32;
 
@@ -77,9 +78,12 @@ function registerGnulahdPrefix(app: FastifyInstance, prefix: '/v2' | '/gnulahd' 
   });
 
   app.get(`${prefix}/search`, async (request: FastifyRequest, reply: FastifyReply) => {
-    const q = ((request.query as { q?: string }).q || '').trim();
-    if (!q) return reply.status(400).send({ error: 'Provide q query param' });
-    return reply.send({ ...(await searchGnulahd(q)), query: q });
+    const { q, type } = request.query as { q?: string; type?: string };
+    if (!q || (q as string).length < 2) return reply.send({ items: [], total: 0, query: q || '' });
+    if (type && ['movie', 'series', 'live'].includes(type)) {
+      return reply.send(await searchByType(q, type as any));
+    }
+    return reply.send(await searchAll(q));
   });
 
   app.get(`${prefix}/list/:kind`, async (request: FastifyRequest, reply: FastifyReply) => {
