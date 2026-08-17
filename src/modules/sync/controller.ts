@@ -765,7 +765,7 @@ export async function runAnimeSync(pages: number[], shouldReplace = false): Prom
 
     updateSyncProgress(type, 0, 'Scrapeando home de animejara.com/inicio...');
     const home = await scrapeAnimejaraHome();
-    pushLog(type, `AnimeJara home: ${home.banners.length} banners`);
+    pushLog(type, `AnimeJara home: ${home.banners.length} banners y ${home.ultimasTemporadas.length} últimas temporadas`);
 
     updateSyncProgress(type, 0, 'Scrapeando programación (últimos episodios) de jkanime.net...');
     const schedule = await scrapeJkanimeSchedule();
@@ -821,7 +821,7 @@ export async function runAnimeSync(pages: number[], shouldReplace = false): Prom
       logger.info({ page, total: todos.length }, 'AnimeJara catalog page synced');
     }
 
-    await saveAnimeJaraHomeData({ banners: home.banners, ultimosEpisodios: schedule, topAnime, todos, totalTodos: firstPage.total || todos.length, updatedAt: Date.now() });
+    await saveAnimeJaraHomeData({ banners: home.banners, ultimosEpisodios: schedule, ultimasTemporadas: home.ultimasTemporadas, topAnime, todos, totalTodos: firstPage.total || todos.length, updatedAt: Date.now() });
     updateSyncProgress(type, todos.length, `${todos.length} animes sincronizados (banner, últimos episodios, top y catálogo)`);
     pushLog(type, `Sync de anime completado: ${todos.length} animes en el catálogo`);
     return todos.length;

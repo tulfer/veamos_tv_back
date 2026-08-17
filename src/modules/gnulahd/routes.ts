@@ -1,7 +1,7 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import path from 'node:path';
 import { Section } from '../../types';
-import { loadChannels, loadSyncData } from '../../services/data-store';
+import { loadSyncData } from '../../services/data-store';
 import { loadGnulahdHomeData, normalizeGnulahdItemId, scrapeGnulahdList } from '../../providers/gnulahd';
 import { loadAnimeJaraHomeData } from '../../providers/animejara';
 import { getGnulahdDetailContent } from '../../services/gnulahd-content';
@@ -20,21 +20,11 @@ function paginate<T>(items: T[], page: number, limit: number) {
 async function homeWithLiveChannels() {
   const data = await loadGnulahdHomeData();
   if (!data) return null;
-  const channels = await loadChannels();
-  const liveSection = {
-    title: 'TV en Vivo',
-    type: 'live' as const,
-    items: channels.slice(0, 20).map(channel => ({ id: channel.id, title: channel.title, poster: channel.logo, url: channel.url, type: 'live' as const, drm: channel.drm, proveedor: channel.proveedor })),
-    seeAllRoute: '/live/channels',
-    totalItems: channels.length,
-  };
-  const sections = [...data.sections.filter(section => section.type !== 'live'), liveSection].map(section => ({
+  // El home se limita a películas y series: se descartan las secciones de
+  // anime y de TV en vivo (los canales viven en /live/channels).
+  const sections = data.sections.filter(section => section.type !== 'live' && section.type !== 'anime').map(section => ({
     ...section,
-    seeAllRoute: section.type === 'live'
-      ? '/live/channels'
-      : section.type === 'anime'
-        ? '/anime'
-        : `/${section.type}`,
+    seeAllRoute: `/${section.type}`,
     items: section.items.map(item => {
       const { backdrop, ...rest } = item;
       return { ...rest, poster: backdrop || item.poster, title2: backdrop };
@@ -86,6 +76,7 @@ function registerGnulahdPrefix(app: FastifyInstance, prefix: '/v2' | '/gnulahd' 
     }
     const sections: Section[] = [
       { title: 'Ultimos episodios', type: 'anime', items: data.ultimosEpisodios, seeAllRoute: '/anime', totalItems: data.ultimosEpisodios.length },
+      { title: 'Ultimas Temporadas', type: 'anime', items: data.ultimasTemporadas || [], seeAllRoute: '/anime', totalItems: (data.ultimasTemporadas || []).length },
       { title: 'Top Anime', type: 'anime', items: data.topAnime, seeAllRoute: '/anime', totalItems: data.topAnime.length },
       { title: 'Todos', type: 'anime', items: todos.slice(0, 20), seeAllRoute: '/anime', totalItems: todos.length },
     ];

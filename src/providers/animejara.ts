@@ -192,6 +192,7 @@ export async function scrapeAnimejaraDetail(slug: string, onLog?: (message: stri
 export interface AnimeJaraHomeData {
   banners: BannerItem[];
   ultimosEpisodios: MediaItem[];
+  ultimasTemporadas: MediaItem[];
   topAnime: MediaItem[];
   todos: MediaItem[];
   totalTodos: number;
@@ -239,10 +240,12 @@ function extractJsArray(html: string, varName: string): string | null {
   return html.slice(start, end);
 }
 
-/** Banner y últimos episodios desde https://animejara.com/inicio.
+/** Banner, últimos episodios y últimas temporadas desde https://animejara.com/inicio.
  *  El hero es un array JS `heroData` (tendencias al azar); la sección
- *  "Últimos Episodios" son tarjetas a.ep-card dentro de .anime-grid. */
-export async function scrapeAnimejaraHome(): Promise<{ banners: BannerItem[]; ultimosEpisodios: MediaItem[] }> {
+ *  "Últimos Episodios" son tarjetas a.ep-card dentro de .anime-grid y
+ *  "Últimas Temporadas" tarjetas a.anime-card dentro de .anime-grid-5
+ *  (con la temporada en el fragmento #season-N del href). */
+export async function scrapeAnimejaraHome(): Promise<{ banners: BannerItem[]; ultimosEpisodios: MediaItem[]; ultimasTemporadas: MediaItem[] }> {
   try {
     const html = await fetchTextWithRetry(`${ANIMEJARA_BASE}/inicio`);
     const banners: BannerItem[] = [];
@@ -294,11 +297,35 @@ export async function scrapeAnimejaraHome(): Promise<{ banners: BannerItem[]; ul
       ultimosEpisodios.push({ id: `gani_${slug}`, title, poster, type: 'anime' });
     });
 
-    logger.info({ banners: banners.length, ultimosEpisodios: ultimosEpisodios.length }, 'AnimeJara home scraped');
-    return { banners, ultimosEpisodios };
+    const ultimasTemporadas: MediaItem[] = [];
+    $('.anime-grid-5 > a.anime-card').each((_, el) => {
+      const $el = $(el);
+      const href = $el.attr('href') || '';
+      const slug = animeSlugFromUrl(href);
+      if (!slug) return;
+      const seasonMatch = href.match(/#season-(\d+)/i);
+      if (!seasonMatch) return;
+      const img = $el.find('img').first();
+      const poster = img.attr('data-src') || img.attr('src') || undefined;
+      const title = $el.find('h3.card-title').first().text().trim();
+      if (!title) return;
+      const ratingText = $el.find('.badge-rating').first().text().match(/([\d.]+)/);
+      ultimasTemporadas.push({
+        id: `gani_${slug}`,
+        title,
+        poster,
+        // El sitio usa escala 0-5; se normaliza a 0-10 como el resto del catálogo.
+        rating: ratingText ? parseFloat(ratingText[1]) * 2 : undefined,
+        season: `Temporada ${seasonMatch[1]}`,
+        type: 'anime',
+      });
+    });
+
+    logger.info({ banners: banners.length, ultimosEpisodios: ultimosEpisodios.length, ultimasTemporadas: ultimasTemporadas.length }, 'AnimeJara home scraped');
+    return { banners, ultimosEpisodios, ultimasTemporadas };
   } catch (error) {
     logger.error({ error: (error as Error).message }, 'AnimeJara: fallo al scrapear el home');
-    return { banners: [], ultimosEpisodios: [] };
+    return { banners: [], ultimosEpisodios: [], ultimasTemporadas: [] };
   }
 }
 

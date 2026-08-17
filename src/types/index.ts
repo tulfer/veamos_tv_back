@@ -10,6 +10,8 @@ export interface MediaItem {
   genres?: string[];
   /** Posición en una lista ordenada (ej: Top Anime de jkanime). */
   order?: number;
+  /** Temporada a la que pertenece un ítem (ej: "Últimas Temporadas" de anime). */
+  season?: string;
   content?: ContentDetail;
 }
 
