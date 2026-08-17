@@ -128,12 +128,14 @@ async function expandMultiplayerEmbed(src: string): Promise<VideoServer[]> {
   }
 }
 
-/** Obtiene los episodios en LATINO del anime en animejara, resolviendo su slug vía jkanime. */
-export async function scrapeAnimejaraDetail(slug: string, onLog?: (message: string) => void): Promise<{ seasons: Season[] } | null> {
+/** Obtiene los episodios en LATINO del anime en animejara. Si se conoce el
+ *  slug de animejara (ej: ítems del catálogo) se pasa directo; si no, se
+ *  resuelve buscando en jkanime. */
+export async function scrapeAnimejaraDetail(slug: string, onLog?: (message: string) => void, animejaraSlug?: string): Promise<{ seasons: Season[] } | null> {
   try {
-    const animejaraSlug = await searchJkanimeSlug(slug, onLog);
-    if (!animejaraSlug) return null;
-    const detailUrl = `${ANIMEJARA_BASE}/anime/${animejaraSlug}`;
+    const resolvedSlug = animejaraSlug || (await searchJkanimeSlug(slug, onLog));
+    if (!resolvedSlug) return null;
+    const detailUrl = `${ANIMEJARA_BASE}/anime/${resolvedSlug}`;
     onLog?.(`AnimeJara: consultando ${detailUrl}`);
     const html = await fetchTextWithRetry(detailUrl);
     const temporadas = extractTemporadasData(html);
@@ -150,7 +152,7 @@ export async function scrapeAnimejaraDetail(slug: string, onLog?: (message: stri
         if (!Number.isFinite(number) || number <= 0) continue;
         const idiomas = Array.isArray(ep.idiomas) ? ep.idiomas.join(' ') : String(ep.idiomas || '');
         if (!/latino/i.test(idiomas)) continue;
-        const episodeUrl = `${ANIMEJARA_BASE}/episode/${animejaraSlug}-${seasonNumber}x${number}/`;
+        const episodeUrl = `${ANIMEJARA_BASE}/episode/${resolvedSlug}-${seasonNumber}x${number}/`;
         const embedUrl = await fetchEpisodeEmbedUrl(episodeUrl);
         if (!embedUrl) {
           onLog?.(`AnimeJara: episodio ${number} sin iframe de reproductor`);

@@ -3,7 +3,7 @@ import path from 'path';
 import { FastifyRequest, FastifyReply } from 'fastify';
 import { scrapeMovies, scrapeMovieDetail, scrapePopularMovies } from '../../providers/movies';
 import { scrapeSeries, scrapeSeriesDetail, scrapePopularSeries } from '../../providers/series';
-import { saveSyncData, loadSyncData, saveHomeData, loadHomeData, getCollectionCounts, getCollectionCount, getAutoRefreshConfig, setAutoRefreshConfig, upsertItemByCol, replaceCollection, getGnulahdAutoSyncConfig, setGnulahdAutoSyncConfig, GNULAHD_AUTO_TASKS, listCollection } from '../../services/data-store';
+import { saveSyncData, loadSyncData, saveHomeData, loadHomeData, getCollectionCounts, getCollectionCount, getAutoRefreshConfig, setAutoRefreshConfig, upsertItemByCol, upsertItemsByCol, replaceCollection, getGnulahdAutoSyncConfig, setGnulahdAutoSyncConfig, GNULAHD_AUTO_TASKS, listCollection } from '../../services/data-store';
 import { fetchItemDetails } from '../../providers/cineby';
 import { closeBrowser } from '../../services/video-resolver';
 import { fetchLiveChannels, parseM3U, validateBatch, M3UParsedChannel } from '../../providers/live-tv';
@@ -780,6 +780,10 @@ export async function runAnimeSync(pages: number[], shouldReplace = false): Prom
     const pageList = pages.length > 0 ? pages : Array.from({ length: totalPages }, (_, i) => i + 1);
     pushLog(type, `Catálogo animejara: ${firstPage.total || '?'} animes, ${pageList.length} páginas a escanear`);
 
+    // Contenidos ya persistidos: se conservan al re-sincronizar el catálogo y
+    // solo se resuelven los que falten (o todos si replace).
+    const persistedContent = new Map(((await loadSyncData())?.gnulahdAnime || []).map((item) => [item.id, item.content]));
+
     const todos: typeof firstPage.items = [];
     const seen = new Set<string>();
     const addItems = (items: typeof firstPage.items) => {
@@ -813,6 +817,7 @@ export async function runAnimeSync(pages: number[], shouldReplace = false): Prom
             description: item.description,
             genres: item.genres,
             type: 'anime',
+            content: persistedContent.get(item.id),
           } as SyncSeries),
         );
         persistQueue = write.catch(() => undefined);
@@ -822,8 +827,48 @@ export async function runAnimeSync(pages: number[], shouldReplace = false): Prom
     }
 
     await saveAnimeJaraHomeData({ banners: home.banners, ultimosEpisodios: schedule, ultimasTemporadas: home.ultimasTemporadas, topAnime, todos, totalTodos: firstPage.total || todos.length, updatedAt: Date.now() });
-    updateSyncProgress(type, todos.length, `${todos.length} animes sincronizados (banner, últimos episodios, top y catálogo)`);
-    pushLog(type, `Sync de anime completado: ${todos.length} animes en el catálogo`);
+
+    // Contenidos de cada anime: animejara (slug conocido del catálogo) y
+    // jkanime como refuerzo si quedan episodios con pocos servidores.
+    const { scrapeAnimeContent } = await import('../../services/gnulahd-content');
+    const CONTENT_CONC = 4;
+    let contentsDone = 0;
+    let contentsWithData = 0;
+    updateSyncProgress(type, 0, `Resolviendo contenidos de ${todos.length} animes...`);
+    for (let start = 0; start < todos.length; start += CONTENT_CONC) {
+      const batch = todos.slice(start, start + CONTENT_CONC);
+      const batchResults = await Promise.all(
+        batch.map(async (item) => {
+          if (!shouldReplace && persistedContent.get(item.id)?.seasons?.length) {
+            return { item, content: persistedContent.get(item.id) };
+          }
+          const slug = item.id.replace(/^gani_/, '');
+          const content = await scrapeAnimeContent(slug, item.title, slug);
+          if (content?.seasons?.length) pushLog(type, `Contenido listo para ${item.title}: ${content.seasons.length} temporadas`);
+          return { item, content };
+        }),
+      );
+      await upsertItemsByCol(
+        collection,
+        batchResults.map(({ item, content }) => ({
+          id: item.id,
+          title: item.title,
+          poster: item.poster,
+          rating: item.rating,
+          year: item.year,
+          description: item.description,
+          genres: item.genres,
+          type: 'anime',
+          content,
+        }) as SyncSeries),
+      );
+      contentsDone += batch.length;
+      contentsWithData += batchResults.filter(({ content }) => content?.seasons?.length).length;
+      updateSyncProgress(type, contentsDone, `Contenidos: ${contentsDone}/${todos.length} animes...`, todos.length);
+    }
+
+    updateSyncProgress(type, todos.length, `${todos.length} animes sincronizados (${contentsWithData} con contenido)`);
+    pushLog(type, `Sync de anime completado: ${todos.length} animes en el catálogo, ${contentsWithData} con contenido`);
     return todos.length;
   });
   return true;

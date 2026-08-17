@@ -355,8 +355,10 @@ export async function getGnulahdDetailContent(id: string): Promise<ContentDetail
 }
 
 /** Contenido de anime on-demand: AnimeJara (episodios en latino) y, si quedan
- *  episodios con menos de 3 servidores por idioma, JKAnime (subtitulado). */
-async function scrapeAnimeContent(slug: string, fallbackTitle?: string): Promise<ContentDetail | null> {
+ *  episodios con menos de 3 servidores por idioma, JKAnime (subtitulado).
+ *  Si se conoce el slug de animejara (catálogo), se pasa para evitar la
+ *  búsqueda previa en jkanime. */
+export async function scrapeAnimeContent(slug: string, fallbackTitle?: string, knownAnimejaraSlug?: string): Promise<ContentDetail | null> {
   const pushAnimeLog = (message: string) => pushLog('gnulahdAnime', message);
   const base: ContentDetail = {
     id: `gani_${slug}`,
@@ -369,7 +371,7 @@ async function scrapeAnimeContent(slug: string, fallbackTitle?: string): Promise
     type: 'anime',
   };
 
-  const animejara = await scrapeAnimejaraDetail(slug, pushAnimeLog);
+  const animejara = await scrapeAnimejaraDetail(slug, pushAnimeLog, knownAnimejaraSlug);
   if (!animejara?.seasons?.length) {
     const jkanime = await scrapeJkanimeDetail(slug, pushAnimeLog);
     if (!jkanime?.seasons?.length) return null;
