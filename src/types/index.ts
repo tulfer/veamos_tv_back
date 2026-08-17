@@ -8,6 +8,8 @@ export interface MediaItem {
   year?: number;
   type: 'movie' | 'series' | 'anime' | 'live';
   genres?: string[];
+  /** Posición en una lista ordenada (ej: Top Anime de jkanime). */
+  order?: number;
   content?: ContentDetail;
 }
 

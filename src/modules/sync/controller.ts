@@ -755,7 +755,7 @@ export async function runAnimeSync(pages: number[], shouldReplace = false): Prom
   }
   runBackgroundSync(type, async () => {
     const { scrapeAnimejaraHome, scrapeAnimejaraCatalogPage, saveAnimeJaraHomeData } = await import('../../providers/animejara');
-    const { scrapeJkanimeTopAnime } = await import('../../providers/jkanime');
+    const { scrapeJkanimeTopAnime, scrapeJkanimeSchedule } = await import('../../providers/jkanime');
     const collection = 'gnulahd-anime';
 
     if (shouldReplace) {
@@ -765,7 +765,11 @@ export async function runAnimeSync(pages: number[], shouldReplace = false): Prom
 
     updateSyncProgress(type, 0, 'Scrapeando home de animejara.com/inicio...');
     const home = await scrapeAnimejaraHome();
-    pushLog(type, `AnimeJara home: ${home.banners.length} banners y ${home.ultimosEpisodios.length} últimos episodios`);
+    pushLog(type, `AnimeJara home: ${home.banners.length} banners`);
+
+    updateSyncProgress(type, 0, 'Scrapeando programación (últimos episodios) de jkanime.net...');
+    const schedule = await scrapeJkanimeSchedule();
+    pushLog(type, `JKAnime programación: ${schedule.length} últimos episodios`);
 
     updateSyncProgress(type, 0, 'Scrapeando Top Anime de jkanime.net...');
     const topAnime = await scrapeJkanimeTopAnime();
@@ -817,7 +821,7 @@ export async function runAnimeSync(pages: number[], shouldReplace = false): Prom
       logger.info({ page, total: todos.length }, 'AnimeJara catalog page synced');
     }
 
-    await saveAnimeJaraHomeData({ ...home, topAnime, todos, totalTodos: firstPage.total || todos.length, updatedAt: Date.now() });
+    await saveAnimeJaraHomeData({ banners: home.banners, ultimosEpisodios: schedule, topAnime, todos, totalTodos: firstPage.total || todos.length, updatedAt: Date.now() });
     updateSyncProgress(type, todos.length, `${todos.length} animes sincronizados (banner, últimos episodios, top y catálogo)`);
     pushLog(type, `Sync de anime completado: ${todos.length} animes en el catálogo`);
     return todos.length;

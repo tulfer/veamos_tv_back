@@ -217,7 +217,8 @@ export async function scrapeJkanimeDetail(slug: string, onLog?: (message: string
 }
 
 /** Top Anime desde el home de jkanime: los 10 ítems de las dos filas al final
- *  (.row.upto con 4 + .row.lower con 6), cada uno con su rank. */
+ *  (.row.upto con 4 + .row.lower con 6), cada uno con su posición (data-rank),
+ *  que NO es una calificación sino el orden del ranking. */
 export async function scrapeJkanimeTopAnime(): Promise<MediaItem[]> {
   try {
     const html = await fetchHTML(`${BASE_URL}/`);
@@ -238,7 +239,7 @@ export async function scrapeJkanimeTopAnime(): Promise<MediaItem[]> {
         id: `gani_${slug}`,
         title,
         poster,
-        rating: rankText ? parseInt(rankText, 10) : undefined,
+        order: rankText ? parseInt(rankText, 10) : undefined,
         type: 'anime',
       });
     });
@@ -246,6 +247,34 @@ export async function scrapeJkanimeTopAnime(): Promise<MediaItem[]> {
     return items;
   } catch (error) {
     logger.error({ error: (error as Error).message }, 'JKAnime: fallo al scrapear el top anime');
+    return [];
+  }
+}
+
+/** Últimos episodios desde la sección "Programación" del home de jkanime:
+ *  los 32 ítems de la pestaña "Animes" (el último episodio emitido de cada
+ *  anime, con su poster de la serie). */
+export async function scrapeJkanimeSchedule(): Promise<MediaItem[]> {
+  try {
+    const html = await fetchHTML(`${BASE_URL}/`);
+    const $ = cheerio.load(html);
+    const items: MediaItem[] = [];
+    $('#animes .dir1 > .card > a').each((_, el) => {
+      const $el = $(el);
+      const href = $el.attr('href') || '';
+      const parts = href.replace(/\/+$/, '').split('/').filter(Boolean);
+      const slug = parts.length >= 2 ? parts[parts.length - 2] : '';
+      if (!slug) return;
+      const title = $el.find('.card-title').first().text().trim();
+      if (!title) return;
+      const img = $el.find('img').first();
+      const poster = img.attr('data-animepic') || img.attr('src') || undefined;
+      items.push({ id: `gani_${slug}`, title, poster, type: 'anime' });
+    });
+    logger.info({ schedule: items.length }, 'JKAnime programación scraped');
+    return items;
+  } catch (error) {
+    logger.error({ error: (error as Error).message }, 'JKAnime: fallo al scrapear la programación');
     return [];
   }
 }
