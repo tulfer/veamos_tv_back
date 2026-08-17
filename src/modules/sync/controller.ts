@@ -42,6 +42,18 @@ const migrationStatus: MigrationStatus = {
 
 const CONCURRENCY = 5;
 
+// Resultado del escaneo de canales de sitios web. No puede vivir en
+// memoryCache: runBackgroundSync lo vacía al iniciar cualquier sync y el
+// panel dejaría de recibir la lista seleccionable.
+interface ScrapeResultEntry {
+  provider: string;
+  section?: string;
+  at: number;
+  channels: Array<ScrapeChannelItem & { ok: boolean }>;
+}
+const SCRAPE_RESULT_TTL = 30 * 60_000;
+let scrapeResultCache: ScrapeResultEntry | null = null;
+
 function mergeByIdGeneric<T extends { id: string }>(newItems: T[], existingItems: T[]): T[] {
   const map = new Map<string, T>();
   for (const item of existingItems) {
@@ -1339,18 +1351,18 @@ export async function scrapeChannelsHandler(request: FastifyRequest, reply: Fast
 
     const okCount = results.filter((r) => r.ok).length;
     pushLog('scrapeImport', `✔ Validación terminada: ${okCount} funcionan, ${results.length - okCount} no funcionan`);
-    memoryCache.set('scrape:result', { provider, section, at: Date.now(), channels: results }, 30 * 60_000);
+    scrapeResultCache = { provider, section, at: Date.now(), channels: results };
     logger.info({ provider, section, total: results.length, ok: okCount }, 'Channel list scrape completed');
     return results.length;
   });
 }
 
 export async function scrapeResultHandler(_request: FastifyRequest, reply: FastifyReply) {
-  const result = memoryCache.get<{ provider: string; section?: string; at: number; channels: Array<ScrapeChannelItem & { ok: boolean }> }>('scrape:result');
-  if (!result) {
+  if (!scrapeResultCache || Date.now() - scrapeResultCache.at > SCRAPE_RESULT_TTL) {
+    scrapeResultCache = null;
     return reply.send({ provider: null, channels: [] });
   }
-  return reply.send(result);
+  return reply.send(scrapeResultCache);
 }
 
 export async function importScrapedChannelsHandler(request: FastifyRequest, reply: FastifyReply) {
