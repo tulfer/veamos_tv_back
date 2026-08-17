@@ -1395,40 +1395,53 @@ export async function importScrapedChannelsHandler(request: FastifyRequest, repl
     const newChannels: LiveChannel[] = [];
     let skipped = 0;
     let failed = 0;
-    for (let i = 0; i < channels.length; i++) {
-      const item = channels[i];
-      updateSyncProgress('scrapeImport', i, `[${i + 1}/${channels.length}] ${item.title}...`, channels.length);
-      if (existingTitles.has((item.title || '').toLowerCase().trim())) {
-        pushLog('scrapeImport', `⏭ ${item.title}: ya existe, se omite`);
-        skipped++;
-        continue;
-      }
-      const slug = item.slug || new URL(item.url).pathname.replace(/^\//, '').replace(/\/+$/, '').replace(/\.\w+$/, '');
-      try {
-        const ch = await getChannelStream(provider, slug, undefined, 'scrapeImport');
-        if (!ch?.url) {
-          pushLog('scrapeImport', `❌ ${item.title}: no se encontró stream`);
-          failed++;
-          continue;
+    type ImportOutcome =
+      | { kind: 'ok'; url: string; refreshOption?: string }
+      | { kind: 'skipped' }
+      | { kind: 'failed'; error?: string };
+    const CONC = 4;
+    for (let i = 0; i < channels.length; i += CONC) {
+      const batch = channels.slice(i, i + CONC);
+      const settled = await Promise.allSettled(batch.map(async (item): Promise<ImportOutcome> => {
+        if (existingTitles.has((item.title || '').toLowerCase().trim())) {
+          return { kind: 'skipped' };
         }
-        const live: LiveChannel = {
-          id: `live_${existingChannels.length + newChannels.length + 1}`,
-          title: item.title || '',
-          logo: item.logo,
-          group: item.group || 'Canales TV',
-          url: ch.url,
-          refreshUrl: item.url,
-          refreshOption: ch.refreshOption,
-          proveedor: provider,
-          type: 'live',
-          online: true,
-        };
-        newChannels.push(live);
-        pushLog('scrapeImport', `✔ ${item.title}: stream resuelto`);
-      } catch (e: any) {
-        pushLog('scrapeImport', `❌ ${item.title}: ${(e?.message || e)?.toString().substring(0, 120)}`);
-        failed++;
-      }
+        try {
+          const slug = item.slug || new URL(item.url).pathname.replace(/^\//, '').replace(/\/+$/, '').replace(/\.\w+$/, '');
+          const ch = await getChannelStream(provider, slug, undefined, 'scrapeImport');
+          if (!ch?.url) return { kind: 'failed', error: 'no se encontró stream' };
+          return { kind: 'ok', url: ch.url, refreshOption: ch.refreshOption };
+        } catch (e: any) {
+          return { kind: 'failed', error: (e?.message || e)?.toString().substring(0, 120) };
+        }
+      }));
+      settled.forEach((result, idx) => {
+        const outcome: ImportOutcome = result.status === 'fulfilled' ? result.value : { kind: 'failed', error: 'excepción inesperada' };
+        const item = batch[idx];
+        if (outcome.kind === 'skipped') {
+          pushLog('scrapeImport', `⏭ ${item.title}: ya existe, se omite`);
+          skipped++;
+        } else if (outcome.kind === 'failed') {
+          pushLog('scrapeImport', `❌ ${item.title}: ${outcome.error}`);
+          failed++;
+        } else {
+          const live: LiveChannel = {
+            id: `live_${existingChannels.length + newChannels.length + 1}`,
+            title: item.title || '',
+            logo: item.logo,
+            group: item.group || 'Canales TV',
+            url: outcome.url,
+            refreshUrl: item.url,
+            refreshOption: outcome.refreshOption,
+            proveedor: provider,
+            type: 'live',
+            online: true,
+          };
+          newChannels.push(live);
+          pushLog('scrapeImport', `✔ ${item.title}: stream resuelto`);
+        }
+      });
+      updateSyncProgress('scrapeImport', newChannels.length + skipped + failed, `[${Math.min(i + CONC, channels.length)}/${channels.length}] canales procesados (${newChannels.length} importados, ${skipped} omitidos, ${failed} sin stream)`, channels.length);
     }
 
     if (newChannels.length > 0) {
