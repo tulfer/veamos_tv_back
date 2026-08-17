@@ -11,6 +11,9 @@ import {
   syncEstrenoSeriesHandler,
   importM3UHandler,
   previewM3UHandler,
+  scrapeChannelsHandler,
+  scrapeResultHandler,
+  importScrapedChannelsHandler,
   syncHomeByscHandler,
   syncGnulahdHomeHandler,
   syncGnulahdMoviesHandler,
@@ -69,6 +72,9 @@ export async function syncRoutes(app: FastifyInstance) {
   app.post('/sync/popular/series', syncPopularSeriesHandler);
   app.post('/sync/live/import', importM3UHandler);
   app.post('/sync/live/m3u-preview', previewM3UHandler);
+  app.post('/sync/live/scrape', scrapeChannelsHandler);
+  app.get('/sync/live/scrape-result', scrapeResultHandler);
+  app.post('/sync/live/scrape-import', importScrapedChannelsHandler);
   app.post('/sync/home-bysc', syncHomeByscHandler);
   app.post('/sync/gnulahd/home', syncGnulahdHomeHandler);
   app.post('/sync/gnulahd/movies', syncGnulahdMoviesHandler);

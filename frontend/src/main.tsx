@@ -11,6 +11,13 @@ type GAuto = { tasks: Partial<Record<string, GAutoTask>> };
 type GItem = { id: string; title: string; poster?: string; year?: number; type?: string };
 type Bk = { id: string; createdAt: number; counts: Record<string, number> };
 type M3uCh = { idx: number; title: string; group: string; logo: string; country: string; url: string };
+type SpItem = { idx: number; title: string; logo?: string; url: string; slug: string; group: string; ok: boolean };
+const scrapeProviders: { id: string; label: string; sections: [string, string][] }[] = [
+  { id: 'tvenvivo2', label: 'TV En Vivo 2', sections: [['home', 'Deportes'], ['shows', 'Regionales']] },
+  { id: 'tvporinternet2', label: 'TV por Internet 2', sections: [['home', 'HOME'], ['shows', 'USA']] },
+  { id: 'cablevisionhd', label: 'CableVision HD', sections: [['home', 'HOME'], ['shows', 'EVENTOS']] },
+  { id: 'vertvcable', label: 'VerTV Cable', sections: [] },
+];
 const backupCols: [string, string][] = [['movies', 'Películas'], ['series', 'Series'], ['channels', 'Canales'], ['popular-movies', 'Populares (M)'], ['popular-series', 'Populares (S)'], ['estreno-movies', 'Estrenos (M)'], ['estreno-series', 'Estrenos (S)'], ['gnulahd-movies', 'GNULA Películas'], ['gnulahd-series', 'GNULA Series'], ['gnulahd-anime', 'GNULA Anime']];
 const providers = ['wsdeportes', 'cablevisionhd', 'tvporinternet2', 'tvenvivo2', 'chatytv', 'senalcolombia', 'vertvcable'];
 const gnulahdTasks = ['gnulahdHome', 'gnulahdMovies', 'gnulahdSeries', 'gnulahdAnime'];
@@ -57,6 +64,14 @@ function App() {
   const [m3uSel, setM3uSel] = useState<number[]>([]);
   const [m3uMsg, setM3uMsg] = useState('');
   const [m3uLoading, setM3uLoading] = useState(false);
+  const [spProvider, setSpProvider] = useState('tvenvivo2');
+  const [spSection, setSpSection] = useState('home');
+  const [spResult, setSpResult] = useState<SpItem[]>([]);
+  const [spRunning, setSpRunning] = useState(false);
+  const [spSel, setSpSel] = useState<number[]>([]);
+  const [spSearch, setSpSearch] = useState('');
+  const [spMsg, setSpMsg] = useState('');
+  const [spLogs, setSpLogs] = useState<string[]>([]);
 
   useEffect(() => {
     const loadStatus = () => fetch('/sync/status').then(r => r.json()).then(setStatus).catch(() => {});
@@ -79,15 +94,61 @@ function App() {
     loadItemLogs();
     const itemLogTimer = window.setInterval(loadItemLogs, 3000);
     fetch('/sync/detail/refreshOne').then(r => r.json()).then(setOneLogs).catch(() => {});
+    const loadSpLogs = () => fetch('/sync/detail/scrapeImport').then(r => r.json()).then(setSpLogs).catch(() => {});
+    loadSpLogs();
+    const spLogTimer = window.setInterval(loadSpLogs, 3000);
     const es = new EventSource('/sync/events');
     es.onmessage = e => { const ev = JSON.parse(e.data); if (ev.type === 'status') setStatus(ev.status); if (ev.type === 'provider-status') { setActiveThreads(ev.active); if (ev.running && ev.provider) setThreads(v => ({ ...v, [ev.provider]: {} })); } if (ev.type === 'log' && ev.syncType === 'refreshOne') setOneLogs(v => [...v, ev.message].slice(-300)); if (ev.type === 'log' && ev.syncType === 'gnulahdItem') setItemLogs(v => [...v, ev.message].slice(-300)); if (ev.type === 'log' && ev.provider && ev.threadId) setThreads(v => ({ ...v, [ev.provider]: { ...(v[ev.provider] || {}), [ev.threadId]: [...((v[ev.provider] || {})[ev.threadId] || []), ev.message].slice(-199) } })); };
-    return () => { es.close(); window.clearInterval(logTimer); window.clearInterval(statusTimer); window.clearInterval(itemLogTimer); };
+    return () => { es.close(); window.clearInterval(logTimer); window.clearInterval(statusTimer); window.clearInterval(itemLogTimer); window.clearInterval(spLogTimer); };
   }, []);
   const loadGitems = () => fetch('/sync/gnulahd/items?kind=' + gitemKind).then(r => r.json()).then(d => { setGitems(d.items || []); setGitemId(v => (d.items || []).some((i: GItem) => i.id === v) ? v : ''); }).catch(() => {});
   useEffect(() => { loadGitems(); }, [gitemKind]);
   const loadBackups = () => fetch('/sync/backups').then(r => r.json()).then(d => setBackups(d.items || [])).catch(() => {});
   useEffect(() => { loadBackups(); }, []);
   const runBackup = async () => { setBkBusy(true); setBkMsg(''); try { const r = await fetch('/sync/backups', { method: 'POST' }); const d = await r.json(); if (!r.ok) throw new Error(d.error || 'Error HTTP ' + r.status); setBkMsg('✔ Backup creado: ' + backupCols.map(([k, l]) => `${l}: ${d.counts?.[k] ?? 0}`).join(' · ')); loadBackups(); } catch (e: any) { setBkMsg('✖ ' + (e.message || 'Error')); } finally { setBkBusy(false); } };
+  useEffect(() => {
+    if (!spRunning) return;
+    let stopped = false;
+    const t = window.setInterval(async () => {
+      if (stopped) return;
+      const [res, st] = await Promise.all([
+        fetch('/sync/live/scrape-result').then(r => r.json()).catch(() => null),
+        fetch('/sync/status').then(r => r.json()).catch(() => null),
+      ]);
+      if (res?.channels?.length) {
+        setSpResult(res.channels.map((c: Omit<SpItem, 'idx'>, idx: number) => ({ ...c, idx })));
+        setSpSel([]); setSpSearch('');
+        setSpMsg('✔ ' + res.channels.filter((c: SpItem) => c.ok).length + ' de ' + res.channels.length + ' canales funcionan. Marca los que quieras importar.');
+        setSpRunning(false); stopped = true; return;
+      }
+      const job = st?.['scrapeImport'];
+      if (job && job.status !== 'running') {
+        setSpRunning(false); setSpMsg('✖ El escaneo terminó sin resultados'); stopped = true;
+      }
+    }, 2000);
+    return () => { stopped = true; window.clearInterval(t); };
+  }, [spRunning]);
+  const runScrape = async () => {
+    setSpRunning(true); setSpResult([]); setSpSel([]); setSpSearch(''); setSpMsg('');
+    try {
+      const r = await fetch('/sync/live/scrape', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider: spProvider, section: spSection }) });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Error HTTP ' + r.status);
+      setSpMsg('✔ Escaneo iniciado en segundo plano, validando streams...');
+    } catch (e: any) { setSpRunning(false); setSpMsg('✖ ' + (e.message || 'Error')); }
+  };
+  const doImportScrape = async () => {
+    if (!spSel.length) return setSpMsg('Selecciona al menos un canal que funcione');
+    const selCh = spSel.map(i => spResult[i]).filter(Boolean).map(({ idx, ...rest }) => rest);
+    setSpMsg('');
+    try {
+      const r = await fetch('/sync/live/scrape-import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider: spProvider, channels: selCh }) });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Error HTTP ' + r.status);
+      setStatus(v => ({ ...v, scrapeImport: { ...(v.scrapeImport || { lastRun: null }), status: 'running', progress: { current: 0, message: 'Importación en segundo plano' } } }));
+      setSpMsg('✔ Importación iniciada con ' + selCh.length + ' canales. Mira el log.');
+    } catch (e: any) { setSpMsg('✖ ' + (e.message || 'Error')); }
+  };
   const loadM3U = async () => { if (!m3uUrl.trim()) return setM3uMsg('Escribe la URL de la lista M3U'); setM3uLoading(true); setM3uMsg(''); try { const r = await fetch('/sync/live/m3u-preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: m3uUrl.trim() }) }); const d = await r.json(); if (!r.ok) throw new Error(d.error || 'Error HTTP ' + r.status); setM3uToken(d.token || ''); setM3uPreview(d.channels || []); setM3uSel([]); setM3uSearch(''); setM3uMsg('✔ ' + (d.count ?? 0) + ' canales encontrados. Marca los que quieras importar.'); } catch (e: any) { setM3uMsg('✖ ' + (e.message || 'Error')); } finally { setM3uLoading(false); } };
   const doImportM3U = async () => { if (!m3uSel.length) return setM3uMsg('Carga una lista y selecciona al menos un canal'); const selCh = m3uSel.map(i => m3uPreview[i]).filter(Boolean).map(({ idx, ...rest }) => rest); if (!selCh.length) return setM3uMsg('Selecciona canales de la lista cargada'); setM3uLoading(true); setM3uMsg(''); try { const r = await fetch('/sync/live/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ channels: selCh }) }); const d = await r.json(); if (!r.ok) throw new Error(d.error || 'Error HTTP ' + r.status); setStatus(v => ({ ...v, importM3U: { ...(v.importM3U || { lastRun: null }), status: 'running', progress: { current: 0, message: 'Solicitud aceptada; proceso en segundo plano' } } })); setProcessMessages(v => ({ ...v, importM3U: '✅ Solicitud aceptada; proceso en segundo plano' })); setM3uMsg('✔ Importación iniciada con ' + selCh.length + ' canales seleccionados.'); } catch (e: any) { setM3uMsg('✖ ' + (e.message || 'Error')); } finally { setM3uLoading(false); } };
   const toggleBkCol = (k: string) => setBkCols(v => v.includes(k) ? v.filter(x => x !== k) : [...v, k]);
@@ -98,6 +159,7 @@ function App() {
   const copyItemLogs = () => navigator.clipboard?.writeText(itemLogs.join('\n'));
   const itemRunning = status['gnulahdItem']?.status === 'running';
   const filtered = useMemo(() => { const q = search.toLowerCase(); return channels.filter(c => !q || `${c.title || ''} ${c.id} ${c.group || ''}`.toLowerCase().includes(q)); }, [channels, search]);
+  const existingTitles = useMemo(() => new Set(channels.map(c => (c.title || '').toLowerCase().trim())), [channels]);
   const running = Object.values(status).filter(x => x.status === 'running').length, completed = Object.values(status).filter(x => x.status === 'completed').length, failed = Object.values(status).filter(x => x.status === 'failed').length;
   const saveAuto = async (p: string, on: boolean) => { const focused = document.activeElement; const typed = focused instanceof HTMLInputElement && focused.type === 'number' ? Number(focused.value) : null; const next = { ...auto, providers: { ...auto.providers, [p]: typed !== null ? Math.max(1, typed) : (on ? (auto.providers[p] || 5) : 0) } }; setAuto(next); await fetch('/sync/auto-refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next) }); };
   const saveGAuto = async (key: string, enabled: boolean, hours?: number) => { const prev = gauto.tasks[key] || {}; const current = { enabled, intervalHours: hours ?? prev.intervalHours ?? 12, pages: prev.pages || (key === 'gnulahdHome' ? undefined : '1-10') }; const next: GAuto = { tasks: { ...gauto.tasks, [key]: current } }; setGauto(next); await fetch('/sync/gnulahd/auto', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tasks: { [key]: current } }) }).catch(() => {}); };
@@ -118,6 +180,7 @@ function App() {
     <section className="panel refresh-one-log-card"><div className="one-log-head"><div><h2>Log de actualización de canales</h2><span>{oneLogs.length ? `${oneLogs.length} registros` : 'Sin ejecución reciente'}</span></div><button className="copy-log" onClick={copyOneLogs} disabled={!oneLogs.length}>Copiar log</button></div><div className="one-log-body">{oneLogs.length ? oneLogs.map((line, i) => <div key={i}>{line}</div>) : <span>Selecciona canales y presiona “Refresh seleccionados” para ver el progreso.</span>}</div></section>
     <section className="panel backup-card"><PanelTitle title="Backup de base de datos" subtitle="Crea un respaldo completo, descarga el último o restaura todo o solo las colecciones que elijas." /><div className="bk-row"><button className="primary-button" onClick={runBackup} disabled={bkBusy}>{bkBusy ? '⟳ Trabajando...' : '💾 Realizar backup'}</button><a className="bk-download" href="/sync/backups/download" download={backups[0] ? 'backup-' + backups[0].createdAt + '.json' : 'backup.json'}>⬇ Descargar último backup</a></div><div className="bk-cols-head"><strong>Restaurar</strong><small>Elige la fuente (backup de la BD o el archivo descargado) y qué colecciones restaurar.</small></div><div className="gitem-row"><Field label="Backup disponible (BD)"><select value={bkId} onChange={e => { setBkId(e.target.value); setBkFile(null); }}><option value="">— Selecciona un backup —</option>{backups.map(b => <option key={b.id} value={b.id}>{new Date(b.createdAt).toLocaleString('es-CO', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} · {Object.values(b.counts).reduce((a, c) => a + c, 0)} items</option>)}</select></Field><Field label="O archivo descargado (.json)"><input type="file" accept=".json,application/json" onChange={e => { setBkFile(e.target.files?.[0] || null); setBkId(''); }} /></Field></div><div className="bk-cols"><label className="bk-col"><input type="checkbox" checked={bkCols.length === backupCols.length} onChange={e => setAllBkCols(e.target.checked)} /> Restaurar todo</label>{backupCols.map(([k, l]) => <label className="bk-col" key={k}><input type="checkbox" checked={bkCols.includes(k)} onChange={() => toggleBkCol(k)} /> {l}</label>)}</div><div className="bk-row"><button className="primary-button" onClick={doRestore} disabled={bkBusy || (!bkId && !bkFile)}>{bkBusy ? '⟳ Trabajando...' : '↺ Restaurar'}</button><button className="secondary-button" onClick={loadBackups} disabled={bkBusy}>↻ Recargar backups</button></div>{bkMsg && <div className="form-message">{bkMsg}</div>}</section>
     <section className="panel gitem-card"><PanelTitle title="Sincronizar ítem GNULA" subtitle="Selecciona un slug de la base de datos o agrega uno nuevo; los pasos y los servidores de cada proveedor se registran en vivo." /><div className="gitem-row"><Field label="Tipo"><select value={gitemKind} onChange={e => { setGitemKind(e.target.value); setGitemId(''); }}><option value="movies">Películas</option><option value="series">Series</option><option value="anime">Anime</option></select></Field><button className="icon-button" title="Recargar lista" onClick={loadGitems}>↻</button></div><div className="gitem-row"><Field label="Slug en base de datos"><Combobox options={gitems} value={gitemId} onChange={setGitemId} placeholder="Escribe para buscar por título o slug..." /></Field><button className="primary-button" onClick={runItem} disabled={!gitemId || itemRunning}>{itemRunning ? '⟳ Sincronizando...' : '▶ Sincronizar'}</button></div><div className="gitem-divider">＋ Agregar un ítem nuevo por slug (no necesita estar en BD)</div><div className="gitem-row"><Field label="Slug nuevo"><input value={gnewSlug} onChange={e => setGnewSlug(e.target.value)} placeholder="ej: silo" onKeyDown={e => { if (e.key === 'Enter') addItem(); }} /></Field><button className="primary-button" onClick={addItem} disabled={!gnewSlug.trim() || itemRunning}>{itemRunning ? '⟳ Sincronizando...' : '＋ Agregar y sincronizar'}</button></div><div className="one-log-head"><div><h2>Log de sincronización</h2><span>{itemLogs.length ? `${itemLogs.length} registros` : 'Sin ejecución reciente'}</span></div><button className="copy-log" onClick={copyItemLogs} disabled={!itemLogs.length}>Copiar log</button></div><div className="process-log">{itemLogs.length ? itemLogs.map((line, i) => <div key={i}>{line}</div>) : <span>Selecciona un ítem o escribe un slug para ver el progreso.</span>}</div></section>
+    <section className="panel scrape-card"><PanelTitle title="Importar canales de sitios web" subtitle="Escanea el sitio, valida los streams (igual que el refresh por proveedor) y elige cuáles importar. El proveedor se guarda en cada canal." /><ScrapeImportPanel provider={spProvider} setProvider={setSpProvider} section={spSection} setSection={setSpSection} result={spResult} setResult={setSpResult} sel={spSel} setSel={setSpSel} search={spSearch} setSearch={setSpSearch} running={spRunning} msg={spMsg} logs={spLogs} existingTitles={existingTitles} onScan={runScrape} onImport={doImportScrape} /></section>
   </main>{selected && <Modal def={selected} params={params} setParams={setParams} close={() => setSelected(null)} execute={() => execute(selected)} executing={executing} />}</div>;
 }
 function Field({ label, children }: { label: string; children: React.ReactNode }) { return <label className="field"><span>{label}</span>{children}</label>; }
@@ -146,4 +209,14 @@ function Modal({ def, params, setParams, close, execute, executing }: { def: Def
 
 function M3UImportPanel({ url, setUrl, preview, sel, setSel, search, setSearch, msg, loading, onLoad, onImport }: { url: string; setUrl: (v: string) => void; preview: M3uCh[]; sel: number[]; setSel: (v: number[]) => void; search: string; setSearch: (v: string) => void; msg: string; loading: boolean; onLoad: () => void; onImport: () => void }) { const q = search.toLowerCase(); const filtered = preview.filter(c => (c.title + ' ' + c.group + ' ' + c.country).toLowerCase().includes(q)); const allChecked = filtered.length > 0 && filtered.every(c => sel.includes(c.idx)); const toggle = (idx: number) => setSel(sel.includes(idx) ? sel.filter(x => x !== idx) : [...sel, idx]); const toggleAll = () => setSel(allChecked ? sel.filter(x => !filtered.some(c => c.idx === x)) : Array.from(new Set([...sel, ...filtered.map(c => c.idx)]))); return <div className="m3u-panel"><div className="gitem-row"><Field label="URL de la lista M3U"><input value={url} onChange={e => setUrl(e.target.value)} placeholder="https://iptv-org.github.io/iptv/index.m3u" onKeyDown={e => { if (e.key === 'Enter') onLoad(); }} /></Field><button className="primary-button" onClick={onLoad} disabled={loading}>{loading ? '⟳ Cargando...' : '📡 Cargar lista'}</button></div>{msg && <div className="form-message">{msg}</div>}{preview.length > 0 && <><div className="gitem-row"><Field label="Buscar canal"><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Filtrar por nombre, grupo o país..." /></Field></div><div className="m3u-head"><strong>{filtered.length} / {preview.length} canales</strong><label className="bk-col m3u-all"><input type="checkbox" checked={allChecked} onChange={toggleAll} /> Todos los visibles</label></div><div className="m3u-list">{filtered.map(c => <label className="bk-col" key={c.idx}><input type="checkbox" checked={sel.includes(c.idx)} onChange={() => toggle(c.idx)} />{c.logo && <img className="m3u-logo" src={c.logo} alt="" />}<span className="m3u-title">{c.title}</span><small className="m3u-meta">{(c.group || '') + (c.country ? ' · ' + c.country : '')}</small></label>)}</div><div className="gitem-row"><button className="primary-button" onClick={onImport} disabled={loading || !sel.length}>{loading ? '⟳ Trabajando...' : `▶ Importar seleccionados (${sel.length})`}</button></div></>}</div>; }
 function ProviderLogs({ provider, threads }: { provider: string; threads: Record<string, string[]> }) { const ids = Object.keys(threads); const [active, setActive] = useState(''); const current = active && threads[active] ? active : ids[ids.length - 1]; const copy = () => navigator.clipboard?.writeText((threads[current] || []).join('\n')); return <details className="provider-log"><summary>Logs de {pretty(provider)} <span>{ids.length} hilos</span></summary>{ids.length ? <><div className="thread-toolbar"><div className="thread-tabs">{ids.map((id, i) => { const hasError = threads[id].some(line => /error|fall[oó]|failed|exception/i.test(line)); return <button className={`${id === current ? 'active ' : ''}${hasError ? 'failed' : 'ok'}`} onClick={() => setActive(id)} key={id}>Hilo {i + 1}<span className="thread-state">{hasError ? '!' : '✓'}</span></button>; })}</div><button className="copy-log" onClick={copy}>Copiar</button></div><div className="thread-log">{threads[current].map((line, i) => <div key={i}>{line}</div>)}</div></> : <div className="log-empty">Sin ejecuciones todavía</div>}</details>; }
+function ScrapeImportPanel({ provider, setProvider, section, setSection, result, setResult, sel, setSel, search, setSearch, running, msg, logs, existingTitles, onScan, onImport }: { provider: string; setProvider: (v: string) => void; section: string; setSection: (v: string) => void; result: SpItem[]; setResult: (v: SpItem[]) => void; sel: number[]; setSel: (v: number[]) => void; search: string; setSearch: (v: string) => void; running: boolean; msg: string; logs: string[]; existingTitles: Set<string>; onScan: () => void; onImport: () => void }) {
+  const def = scrapeProviders.find(p => p.id === provider) || scrapeProviders[0];
+  const q = search.toLowerCase();
+  const filtered = result.filter(c => (c.title + ' ' + c.group).toLowerCase().includes(q));
+  const okCount = result.filter(c => c.ok).length;
+  const allChecked = filtered.length > 0 && filtered.every(c => sel.includes(c.idx));
+  const toggle = (idx: number) => setSel(sel.includes(idx) ? sel.filter(x => x !== idx) : [...sel, idx]);
+  const toggleAll = () => setSel(allChecked ? sel.filter(x => !filtered.some(c => c.idx === x)) : Array.from(new Set([...sel, ...filtered.filter(c => c.ok).map(c => c.idx)])));
+  return <div className="m3u-panel"><div className="gitem-row"><Field label="Proveedor"><select value={provider} onChange={e => { setProvider(e.target.value); const d = scrapeProviders.find(p => p.id === e.target.value); setSection(d?.sections?.[0]?.[0] || 'home'); setResult([]); setSel([]); }}>{scrapeProviders.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}</select></Field>{def.sections.length > 0 && <Field label="Sección"><select value={section} onChange={e => setSection(e.target.value)}>{def.sections.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></Field>}<button className="primary-button" onClick={onScan} disabled={running}>{running ? '⟳ Escaneando...' : '🔍 Escanear'}</button></div>{msg && <div className="form-message">{msg}</div>}<div className="one-log-head"><div><h2>Log del escaneo</h2><span>{logs.length ? `${logs.length} registros` : 'Sin ejecución reciente'}</span></div><button className="copy-log" onClick={() => navigator.clipboard?.writeText(logs.join('\n'))} disabled={!logs.length}>Copiar log</button></div><div className="process-log scrape-log">{logs.length ? logs.map((line, i) => <div key={i}>{line}</div>) : <span>Elige proveedor y presiona “Escanear” para validar los canales del sitio.</span>}</div>{result.length > 0 && <><div className="gitem-row"><Field label="Buscar canal"><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Filtrar por nombre o sección..." /></Field></div><div className="m3u-head"><strong>{filtered.length} / {result.length} canales · {okCount} funcionan</strong><label className="bk-col m3u-all"><input type="checkbox" checked={allChecked} onChange={toggleAll} /> Todos los que funcionan</label></div><div className="m3u-list">{filtered.map(c => { const exists = existingTitles.has(c.title.toLowerCase().trim()); return <label className="bk-col" key={c.idx}><input type="checkbox" checked={sel.includes(c.idx)} onChange={() => toggle(c.idx)} disabled={!c.ok || exists} />{c.logo && <img className="m3u-logo" src={c.logo} alt="" />}<span className="m3u-title">{c.title}</span><span className={c.ok ? 'scrape-ok' : 'scrape-fail'}>{exists ? '⚠ Ya existe' : c.ok ? '✔ Funciona' : '✖ No funciona'}</span><small>{c.group}</small></label>; })}</div><div className="bk-row"><button className="primary-button" onClick={onImport} disabled={!sel.length || running}>▶ Importar seleccionados ({sel.length})</button></div></>}</div>;
+}
 createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>);

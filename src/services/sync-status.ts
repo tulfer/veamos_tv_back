@@ -23,7 +23,8 @@ export type SyncType =
   | 'gnulahdMovies'
   | 'gnulahdSeries'
   | 'gnulahdAnime'
-  | 'gnulahdItem';
+  | 'gnulahdItem'
+  | 'scrapeImport';
 
 export interface SyncProgress {
   current: number;
@@ -199,6 +200,7 @@ const state: SyncState = {
   gnulahdSeries: { ...defaultStatus },
   gnulahdAnime: { ...defaultStatus },
   gnulahdItem: { ...defaultStatus },
+  scrapeImport: { ...defaultStatus },
 };
 
 export function startSync(type: SyncType): boolean {

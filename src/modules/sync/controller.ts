@@ -11,6 +11,7 @@ import { fetchHTML, httpClient } from '../../utils/http';
 import { logger } from '../../utils/logger';
 import { memoryCache } from '../../cache/memory';
 import { SyncMovie, SyncSeries, SyncData, LiveChannel, VideoLanguage, Season } from '../../types';
+import type { ScrapeChannelItem } from '../../providers/channel-list';
 import { startSync, completeSync, failSync, updateSyncProgress, getLogs, clearLogs, pushLog, SyncType, getSyncStatus } from '../../services/sync-status';
 import { firestoreMigrationStatus, getFirestoreMigrationStatus, runFirestoreToSupabase, FirestoreMigrationStatus } from '../../services/firestore-migrate';
 import { REFRESH_PROVIDERS, getProviderRefreshQueueStatus } from '../live-tv/controller';
@@ -1193,6 +1194,161 @@ export async function importM3UHandler(request: FastifyRequest, reply: FastifyRe
 
     updateSyncProgress('importM3U', newChannels.length, `${newChannels.length} canales importados (${skipped} omitidos)`);
     logger.info({ imported: newChannels.length, skipped }, 'M3U import completed');
+    return newChannels.length;
+  });
+}
+
+// ---- Importación de canales desde sitios web ----
+
+export async function scrapeChannelsHandler(request: FastifyRequest, reply: FastifyReply) {
+  const body = request.body as { provider?: string; section?: string } | undefined;
+  const provider = body?.provider as 'tvenvivo2' | 'tvporinternet2' | 'cablevisionhd' | 'vertvcable' | undefined;
+  if (!provider) {
+    return reply.status(400).send({ error: 'provider_required', message: 'Falta el proveedor (tvenvivo2, tvporinternet2, cablevisionhd, vertvcable)' });
+  }
+  if (!startSync('scrapeImport')) {
+    return reply.send({ ok: true, message: 'Scrape already in progress' });
+  }
+
+  reply.send({ ok: true, message: 'Scrape started' });
+
+  runBackgroundSync('scrapeImport', async () => {
+    const { scrapeChannelList, SCRAPE_PROVIDERS } = await import('../../providers/channel-list');
+    const { getChannelStream } = await import('../../providers/custom-channels');
+    const def = SCRAPE_PROVIDERS.find((p) => p.id === provider);
+    if (!def) {
+      pushLog('scrapeImport', `❌ Proveedor desconocido: ${provider}`);
+      return 0;
+    }
+    const section = body?.section || def.sections[0]?.id || 'home';
+    updateSyncProgress('scrapeImport', 0, `Escaneando ${def.label}...`);
+    const items = await scrapeChannelList(provider, section);
+    if (items.length === 0) {
+      pushLog('scrapeImport', '⚠ No se encontraron canales en el sitio');
+      return 0;
+    }
+    pushLog('scrapeImport', `✔ ${items.length} canales encontrados, validando streams...`);
+    updateSyncProgress('scrapeImport', 0, `${items.length} canales encontrados, validando...`, items.length);
+
+    const results: Array<ScrapeChannelItem & { ok: boolean }> = [];
+    const CONC = 4;
+    for (let i = 0; i < items.length; i += CONC) {
+      const batch = items.slice(i, i + CONC);
+      const settled = await Promise.allSettled(batch.map(async (item) => {
+        try {
+          const ch = await getChannelStream(provider, item.slug, undefined, 'scrapeImport');
+          if (ch?.url) return { ...item, ok: true };
+          pushLog('scrapeImport', `❌ ${item.title}: no se encontró stream`);
+          return { ...item, ok: false };
+        } catch (e: any) {
+          pushLog('scrapeImport', `❌ ${item.title}: ${(e?.message || e)?.toString().substring(0, 120)}`);
+          return { ...item, ok: false };
+        }
+      }));
+      settled.forEach((r, idx) => {
+        if (r.status === 'fulfilled') results.push(r.value);
+        else results.push({ ...batch[idx], ok: false });
+      });
+      updateSyncProgress('scrapeImport', results.length, `${results.length}/${items.length} canales validados`, items.length);
+    }
+
+    const okCount = results.filter((r) => r.ok).length;
+    pushLog('scrapeImport', `✔ Validación terminada: ${okCount} funcionan, ${results.length - okCount} no funcionan`);
+    memoryCache.set('scrape:result', { provider, section, at: Date.now(), channels: results }, 30 * 60_000);
+    logger.info({ provider, section, total: results.length, ok: okCount }, 'Channel list scrape completed');
+    return results.length;
+  });
+}
+
+export async function scrapeResultHandler(_request: FastifyRequest, reply: FastifyReply) {
+  const result = memoryCache.get<{ provider: string; section?: string; at: number; channels: Array<ScrapeChannelItem & { ok: boolean }> }>('scrape:result');
+  if (!result) {
+    return reply.send({ provider: null, channels: [] });
+  }
+  return reply.send(result);
+}
+
+export async function importScrapedChannelsHandler(request: FastifyRequest, reply: FastifyReply) {
+  const body = request.body as {
+    provider?: 'tvenvivo2' | 'tvporinternet2' | 'cablevisionhd' | 'vertvcable';
+    channels?: Array<{ title?: string; logo?: string; url?: string; slug?: string; group?: string }>;
+  } | undefined;
+  const provider = body?.provider;
+  const channels = (body?.channels || []).filter((c) => c && c.title && c.url);
+  if (!provider) {
+    return reply.status(400).send({ error: 'provider_required', message: 'Falta el proveedor' });
+  }
+  if (channels.length === 0) {
+    return reply.status(400).send({ error: 'no_channels', message: 'No hay canales seleccionados válidos' });
+  }
+  if (!startSync('scrapeImport')) {
+    return reply.send({ ok: true, message: 'Import already in progress' });
+  }
+
+  reply.send({ ok: true, message: 'Scrape import started' });
+
+  runBackgroundSync('scrapeImport', async () => {
+    const { getChannelStream } = await import('../../providers/custom-channels');
+    updateSyncProgress('scrapeImport', 0, `Resolviendo streams de ${channels.length} canales seleccionados...`, channels.length);
+
+    const existing = await loadSyncData();
+    const existingChannels = existing?.channels || [];
+    const existingTitles = new Set(existingChannels.map((ch) => ch.title.toLowerCase().trim()));
+
+    const newChannels: LiveChannel[] = [];
+    let skipped = 0;
+    let failed = 0;
+    for (let i = 0; i < channels.length; i++) {
+      const item = channels[i];
+      updateSyncProgress('scrapeImport', i, `[${i + 1}/${channels.length}] ${item.title}...`, channels.length);
+      if (existingTitles.has((item.title || '').toLowerCase().trim())) {
+        pushLog('scrapeImport', `⏭ ${item.title}: ya existe, se omite`);
+        skipped++;
+        continue;
+      }
+      const slug = item.slug || new URL(item.url).pathname.replace(/^\//, '').replace(/\/+$/, '').replace(/\.\w+$/, '');
+      try {
+        const ch = await getChannelStream(provider, slug, undefined, 'scrapeImport');
+        if (!ch?.url) {
+          pushLog('scrapeImport', `❌ ${item.title}: no se encontró stream`);
+          failed++;
+          continue;
+        }
+        const live: LiveChannel = {
+          id: `live_${existingChannels.length + newChannels.length + 1}`,
+          title: item.title || '',
+          logo: item.logo,
+          group: item.group || 'Canales TV',
+          url: ch.url,
+          refreshUrl: item.url,
+          refreshOption: ch.refreshOption,
+          proveedor: provider,
+          type: 'live',
+          online: true,
+        };
+        newChannels.push(live);
+        pushLog('scrapeImport', `✔ ${item.title}: stream resuelto`);
+      } catch (e: any) {
+        pushLog('scrapeImport', `❌ ${item.title}: ${(e?.message || e)?.toString().substring(0, 120)}`);
+        failed++;
+      }
+    }
+
+    if (newChannels.length > 0) {
+      await saveSyncData({
+        movies: existing?.movies || [],
+        series: existing?.series || [],
+        channels: [...existingChannels, ...newChannels],
+        popularMovies: existing?.popularMovies || [],
+        popularSeries: existing?.popularSeries || [],
+        estrenoMovies: existing?.estrenoMovies || [],
+        estrenoSeries: existing?.estrenoSeries || [],
+        updatedAt: Date.now(),
+      });
+    }
+
+    updateSyncProgress('scrapeImport', newChannels.length, `${newChannels.length} importados (${skipped} omitidos, ${failed} sin stream)`);
+    logger.info({ provider, imported: newChannels.length, skipped, failed }, 'Scrape import completed');
     return newChannels.length;
   });
 }
