@@ -1,4 +1,5 @@
 import { getRowStrict, setRow, tryAcquireLock, releaseLock } from './store';
+import { broadcastRealtime } from './realtime';
 import { logger } from '../utils/logger';
 
 /**
@@ -34,6 +35,8 @@ export async function listDeviceCodes(): Promise<DeviceCode[]> {
 
 async function saveDeviceCodes(codes: DeviceCode[]): Promise<void> {
   await setRow(KEY, codes);
+  // El panel /mipanel se entera al instante (código tomado, liberado, etc.).
+  broadcastRealtime('codes');
 }
 
 function randomCode(): string {

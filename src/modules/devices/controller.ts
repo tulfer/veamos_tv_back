@@ -1,6 +1,27 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
 import { createDeviceCode, deleteDeviceCode, listDeviceCodes, registerDevice, unlinkDeviceCode } from '../../services/device-codes';
-import { addAppVersion, activateAppVersion, getAppVersions, removeAppVersion } from '../../services/app-versions';
+import { addAppVersion, activateAppVersion, deactivateAppVersion, getAppVersions, removeAppVersion } from '../../services/app-versions';
+import { subscribeRealtime } from '../../services/realtime';
+
+/** Stream SSE del panel: emite eventos 'codes' y 'versions' cuando la base
+ *  cambia (código tomado por un dispositivo, versión activada, etc.). */
+export async function deviceEventsHandler(request: FastifyRequest, reply: FastifyReply) {
+  reply.hijack();
+  const response = reply.raw;
+  response.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  response.write(': connected\n\n');
+  const unsubscribe = subscribeRealtime((frame) => response.write(frame));
+  const heartbeat = setInterval(() => response.write(': heartbeat\n\n'), 15000);
+  request.raw.on('close', () => {
+    clearInterval(heartbeat);
+    unsubscribe();
+  });
+}
 
 export async function registerDeviceHandler(request: FastifyRequest, reply: FastifyReply) {
   const { code } = request.params as { code?: string };
@@ -22,11 +43,11 @@ export async function registerDeviceHandler(request: FastifyRequest, reply: Fast
   } catch (e: any) {
     return reply.status(500).send({ error: 'internal_error', message: e?.message || 'Error al validar la versión' });
   }
-  if (!appCfg.active) {
+  if (!appCfg.activeVersions.length) {
     return reply.status(403).send({ error: 'no_active_version', message: 'No hay una versión activa configurada en el panel' });
   }
-  if (version !== appCfg.active) {
-    return reply.status(403).send({ error: 'version_invalid', message: `La versión ${version} no está activa (activa: ${appCfg.active})` });
+  if (!appCfg.activeVersions.includes(version)) {
+    return reply.status(403).send({ error: 'version_invalid', message: `La versión ${version} no está activa (activas: ${appCfg.activeVersions.join(', ')})` });
   }
   try {
     const result = await registerDevice(code, deviceId);
@@ -108,6 +129,16 @@ export async function activateVersionHandler(request: FastifyRequest, reply: Fas
     return reply.send({ ok: true, ...cfg });
   } catch (e: any) {
     return reply.status(400).send({ error: 'activate_failed', message: e?.message || 'Error al activar la versión' });
+  }
+}
+
+export async function deactivateVersionHandler(request: FastifyRequest, reply: FastifyReply) {
+  const { version } = request.params as { version?: string };
+  try {
+    const cfg = await deactivateAppVersion(version || '');
+    return reply.send({ ok: true, ...cfg });
+  } catch (e: any) {
+    return reply.status(400).send({ error: 'deactivate_failed', message: e?.message || 'Error al desactivar la versión' });
   }
 }
 

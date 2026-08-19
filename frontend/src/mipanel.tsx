@@ -21,13 +21,23 @@ function App() {
   const [msg, setMsg] = useState('');
   const [busy, setBusy] = useState(false);
   const [verEnabled, setVerEnabled] = useState<string[]>([]);
-  const [verActive, setVerActive] = useState<string | null>(null);
+  const [verActiveList, setVerActiveList] = useState<string[]>([]);
   const [verInput, setVerInput] = useState('');
   const [verMsg, setVerMsg] = useState('');
 
   const load = () => fetch('/devices/codes').then(r => r.json()).then(d => setCodes(d.items || [])).catch(() => {});
-  const loadVersions = () => fetch('/devices/versions').then(r => r.json()).then(d => { setVerEnabled(d.enabled || []); setVerActive(d.active || null); }).catch(() => {});
+  const loadVersions = () => fetch('/devices/versions').then(r => r.json()).then(d => { setVerEnabled(d.enabled || []); setVerActiveList(d.activeVersions || []); }).catch(() => {});
   useEffect(() => { load(); loadVersions(); }, []);
+
+  // Actualización en tiempo real: el servidor avisa (SSE) cuando la base
+  // cambia (código tomado por un dispositivo, última conexión, versión
+  // activada...), así no se consulta la base por polling.
+  useEffect(() => {
+    const events = new EventSource('/devices/events');
+    events.addEventListener('codes', () => load());
+    events.addEventListener('versions', () => loadVersions());
+    return () => events.close();
+  }, []);
 
   const addVersion = async () => {
     if (!verInput.trim()) return setVerMsg('Escribe una versión (ej: 1.1.5)');
@@ -48,13 +58,24 @@ function App() {
       const r = await fetch('/devices/versions/' + encodeURIComponent(v) + '/activate', { method: 'POST' });
       const d = await r.json();
       if (!r.ok) throw new Error(d.message || d.error || 'Error HTTP ' + r.status);
-      setVerMsg('✔ Versión ' + v + ' ahora es la activa');
+      setVerMsg('✔ Versión ' + v + ' ahora está activa');
+      loadVersions();
+    } catch (e: any) { setVerMsg('✖ ' + (e.message || 'Error')); } finally { setBusy(false); }
+  };
+
+  const deactivateVersion = async (v: string) => {
+    setBusy(true); setVerMsg('');
+    try {
+      const r = await fetch('/devices/versions/' + encodeURIComponent(v) + '/deactivate', { method: 'POST' });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.message || d.error || 'Error HTTP ' + r.status);
+      setVerMsg('✔ Versión ' + v + ' ya no está activa');
       loadVersions();
     } catch (e: any) { setVerMsg('✖ ' + (e.message || 'Error')); } finally { setBusy(false); }
   };
 
   const removeVersion = async (v: string) => {
-    if (!window.confirm('¿Eliminar la versión ' + v + '?' + (v === verActive ? ' Quedará sin versión activa.' : ''))) return;
+    if (!window.confirm('¿Eliminar la versión ' + v + '?' + (verActiveList.includes(v) ? ' Se quitará también de las versiones activas.' : ''))) return;
     setBusy(true); setVerMsg('');
     try {
       const r = await fetch('/devices/versions/' + encodeURIComponent(v), { method: 'DELETE' });
@@ -157,20 +178,25 @@ function App() {
       </table>
     </section>
     <section className="panel" style={{ marginTop: 18 }}>
-      <Head title="Versiones de la app" subtitle="La versión activa es la única que puede registrar dispositivos. Sin versión activa, ningún dispositivo se registra." />
+      <Head title="Versiones de la app" subtitle="Las versiones activas son las que pueden registrar dispositivos; puede haber varias a la vez. Sin ninguna activa, ningún dispositivo se registra." />
       <div className="gitem-row">
         <Field label="Versión (ej: 1.1.5)"><input value={verInput} onChange={e => setVerInput(e.target.value)} placeholder="1.1.5" onKeyDown={e => { if (e.key === 'Enter') addVersion(); }} /></Field>
         <button className="primary-button" onClick={addVersion} disabled={busy}>➕ Agregar versión</button>
       </div>
       {verMsg && <div className="form-message">{verMsg}</div>}
       <div className="ver-list">
-        {verEnabled.map(v => (
-          <div className={'ver-chip' + (v === verActive ? ' active' : '')} key={v}>
-            <span className="ver-name">{v}</span>
-            {v === verActive ? <span className="badge-enuso">Activa</span> : <button className="mini-btn" onClick={() => activateVersion(v)} disabled={busy}>Activar</button>}
-            <button className="mini-btn danger" onClick={() => removeVersion(v)} disabled={busy} title="Eliminar versión">✕</button>
-          </div>
-        ))}
+        {verEnabled.map(v => {
+          const isActive = verActiveList.includes(v);
+          return (
+            <div className={'ver-chip' + (isActive ? ' active' : '')} key={v}>
+              <span className="ver-name">{v}</span>
+              {isActive
+                ? <><span className="badge-enuso">Activa</span><button className="mini-btn" onClick={() => deactivateVersion(v)} disabled={busy} title="Quitar de las versiones activas">Desactivar</button></>
+                : <button className="mini-btn" onClick={() => activateVersion(v)} disabled={busy}>Activar</button>}
+              <button className="mini-btn danger" onClick={() => removeVersion(v)} disabled={busy} title="Eliminar versión">✕</button>
+            </div>
+          );
+        })}
         {!verEnabled.length && <span style={{ color: '#8d95b7' }}>Sin versiones. Agrega la primera (quedará activa).</span>}
       </div>
     </section>
