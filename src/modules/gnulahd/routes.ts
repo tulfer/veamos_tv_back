@@ -81,7 +81,7 @@ function registerGnulahdPrefix(app: FastifyInstance, prefix: '/v2/:code') {
     }
     sections.push(
       { title: 'Ultimos episodios', type: 'anime', items: data.ultimosEpisodios, seeAllRoute: '/anime', totalItems: data.ultimosEpisodios.length },
-      { title: 'Ultimas Temporadas', type: 'anime', items: data.ultimasTemporadas || [], seeAllRoute: '/anime', totalItems: (data.ultimasTemporadas || []).length },
+      { title: 'Ultimas Temporadas Latino', type: 'anime', items: data.ultimasTemporadas || [], seeAllRoute: '/anime', totalItems: (data.ultimasTemporadas || []).length },
       { title: 'Top Anime', type: 'anime', items: data.topAnime, seeAllRoute: '/anime', totalItems: data.topAnime.length },
       { title: 'Todos', type: 'anime', items: todos.slice(0, 20), seeAllRoute: '/anime', totalItems: todos.length },
     );

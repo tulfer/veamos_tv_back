@@ -72,10 +72,15 @@ function extractServers($: cheerio.CheerioAPI, pageUrl: string): VideoLanguage[]
 }
 
 /** Parsea la página de detalle de un anime de latanime.org: detecta los
- *  enlaces de episodios y extrae los servidores (latino) de cada uno. */
-async function parseLatanimeDetail(detailUrl: string, slug: string, onLog?: (message: string) => void): Promise<{ seasons: Season[] } | null> {
+ *  enlaces de episodios y extrae los servidores (latino) de cada uno. Devuelve
+ *  también el título real (subtítulo en h3, o el h2 de la página). */
+async function parseLatanimeDetail(detailUrl: string, slug: string, onLog?: (message: string) => void): Promise<{ title?: string; seasons: Season[] } | null> {
   const html = await fetchHTML(detailUrl);
   const $ = cheerio.load(html);
+  const h3 = $('h3').map((_, el) => $(el).text().trim()).get().find((text) => text && !/cap[ií]tulos?/i.test(text));
+  const h2 = $('h2').first().text().trim();
+  const ogTitle = ($('meta[property="og:title"]').first().attr('content') || '').replace(/\s*[—|–|-]\s*Latanime\s*$/i, '').trim();
+  const title = h3 || h2 || ogTitle || undefined;
   const links = new Map<number, string>();
   $('a[href]').each((_, element) => {
     const href = absoluteUrl($(element).attr('href') || '', detailUrl);
@@ -101,10 +106,10 @@ async function parseLatanimeDetail(detailUrl: string, slug: string, onLog?: (mes
     }
   }
   onLog?.(`Latanime: ${episodes.length} episodios con videos`);
-  return episodes.length ? { seasons: [{ season_number: 1, title: 'Temporada 1', episodes }] } : null;
+  return episodes.length ? { ...(title ? { title } : {}), seasons: [{ season_number: 1, title: 'Temporada 1', episodes }] } : null;
 }
 
-export async function scrapeLatanimeDetail(slug: string, onLog?: (message: string) => void, knownSlug?: string, searchTitle?: string): Promise<{ seasons: Season[] } | null> {
+export async function scrapeLatanimeDetail(slug: string, onLog?: (message: string) => void, knownSlug?: string, searchTitle?: string): Promise<{ title?: string; seasons: Season[] } | null> {
   try {
     // El slug conocido (calendario/emisión/catálogo) se intenta directo y, si
     // no hay episodios ahí, se cae a la búsqueda por título.

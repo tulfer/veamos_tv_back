@@ -397,11 +397,14 @@ export async function scrapeAnimeContent(slug: string, fallbackTitle?: string, k
   const mergedSeasons = mergeAnimeSources(jkanime?.seasons, latanime?.seasons);
   const seasons = mergedSeasons || (jkanime?.seasons?.length ? jkanime.seasons : latanime?.seasons);
   if (!seasons?.length) return null;
+  // El título real viene de la fuente que aportó el contenido: jkanime (ya
+  // llega por fallbackTitle del catálogo) o el h3 de latanime (subtítulo).
+  const title = jkanime?.seasons?.length ? base.title : (latanime?.title || base.title);
   const totalEpisodes = seasons.reduce((total, season) => total + season.episodes.length, 0);
   const totalServers = seasons.reduce(
     (total, season) => total + season.episodes.reduce((count, episode) => count + serverCount(episode.videos), 0),
     0,
   );
-  pushAnimeLog(`Contenido listo para ${base.title}: ${seasons.length} temporadas, ${totalEpisodes} episodios, ${totalServers} servidores`);
-  return { ...base, seasons };
+  pushAnimeLog(`Contenido listo para ${title}: ${seasons.length} temporadas, ${totalEpisodes} episodios, ${totalServers} servidores`);
+  return { ...base, title, seasons };
 }
