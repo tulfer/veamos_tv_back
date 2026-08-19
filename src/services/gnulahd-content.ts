@@ -389,7 +389,9 @@ export async function scrapeAnimeContent(slug: string, fallbackTitle?: string, k
   };
 
   const jkanime = await scrapeJkanimeDetail(slug, pushAnimeLog, knownJkanimeSlug);
-  const latanime = await scrapeLatanimeDetail(slug, pushAnimeLog, knownLatanimeSlug, fallbackTitle || slug);
+  // El slug conocido (catálogo jkanime o calendario/emisión de latanime) se
+  // intenta directo en latanime y, si no existe ahí, se cae a la búsqueda.
+  const latanime = await scrapeLatanimeDetail(slug, pushAnimeLog, knownLatanimeSlug || slug, fallbackTitle || slug);
   if (!jkanime?.seasons?.length && !latanime?.seasons?.length) return null;
 
   const mergedSeasons = mergeAnimeSources(jkanime?.seasons, latanime?.seasons);

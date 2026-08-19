@@ -77,7 +77,7 @@ function registerGnulahdPrefix(app: FastifyInstance, prefix: '/v2/:code') {
     }
     const sections: Section[] = [];
     if (data.calendario?.items?.length) {
-      sections.push({ title: `Calendario - ${data.calendario.day}`, type: 'anime', items: data.calendario.items, seeAllRoute: '/anime', totalItems: data.calendario.items.length });
+      sections.push({ title: `Calendario Latino - ${data.calendario.day}`, type: 'anime', items: data.calendario.items, seeAllRoute: '/anime', totalItems: data.calendario.items.length });
     }
     sections.push(
       { title: 'Ultimos episodios', type: 'anime', items: data.ultimosEpisodios, seeAllRoute: '/anime', totalItems: data.ultimosEpisodios.length },
