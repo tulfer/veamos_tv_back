@@ -12,6 +12,8 @@ export interface MediaItem {
   order?: number;
   /** Temporada a la que pertenece un ítem (ej: "Últimas Temporadas" de anime). */
   season?: string;
+  /** Número de episodio relevante (ej: calendario "Próximo - N" o programación). */
+  episode?: number;
   content?: ContentDetail;
 }
 

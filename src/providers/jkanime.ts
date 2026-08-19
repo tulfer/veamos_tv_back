@@ -1,6 +1,6 @@
 import * as cheerio from 'cheerio';
 import { fetchHTML, httpClient } from '../utils/http';
-import { Episode, Season, VideoLanguage, VideoServer, MediaItem } from '../types';
+import { Episode, Season, VideoLanguage, VideoServer, MediaItem, BannerItem } from '../types';
 import { isUnsupportedVideoHost } from '../utils/unsupported-video-hosts';
 import { logger } from '../utils/logger';
 
@@ -168,9 +168,9 @@ export async function searchJkanimeSlug(slug: string, onLog?: (message: string) 
   }
 }
 
-export async function scrapeJkanimeDetail(slug: string, onLog?: (message: string) => void): Promise<{ seasons: Season[] } | null> {
+export async function scrapeJkanimeDetail(slug: string, onLog?: (message: string) => void, knownSlug?: string): Promise<{ seasons: Season[] } | null> {
   try {
-    const slugPath = await searchJkanimeSlug(slug, onLog);
+    const slugPath = knownSlug || (await searchJkanimeSlug(slug, onLog));
     if (!slugPath) return null;
     const detailUrl = `${BASE_URL}/${slugPath}`;
     const session = await fetchPageWithSession(detailUrl);
@@ -276,5 +276,66 @@ export async function scrapeJkanimeSchedule(): Promise<MediaItem[]> {
   } catch (error) {
     logger.error({ error: (error as Error).message }, 'JKAnime: fallo al scrapear la programación');
     return [];
+  }
+}
+
+/** Banner desde el home de jkanime: los slides del hero (.hero__slider), con
+ *  su imagen de fondo (data-setbg), título (h2), descripción (p) y slug. */
+export async function scrapeJkanimeBanner(): Promise<BannerItem[]> {
+  try {
+    const html = await fetchHTML(`${BASE_URL}/`);
+    const $ = cheerio.load(html);
+    const items: BannerItem[] = [];
+    $('.hero__slider .hero__items').each((_, el) => {
+      const $el = $(el);
+      const backdrop = $el.attr('data-setbg') || '';
+      if (!backdrop) return;
+      const title = $el.find('.hero__text h2').first().text().trim();
+      if (!title) return;
+      const description = $el.find('.hero__text p').first().text().trim();
+      const href = $el.find('a[href]').first().attr('href') || '';
+      const slug = href.replace(/\/+$/, '').split('/').filter(Boolean).pop() || '';
+      if (!slug) return;
+      items.push({
+        id: `gani_${slug}`,
+        title,
+        image: backdrop,
+        backdrop,
+        poster: backdrop,
+        type: 'anime',
+        ...(description ? { description } : {}),
+      });
+    });
+    logger.info({ banner: items.length }, 'JKAnime banner scraped');
+    return items;
+  } catch (error) {
+    logger.error({ error: (error as Error).message }, 'JKAnime: fallo al scrapear el banner');
+    return [];
+  }
+}
+
+/** Catálogo de jkanime desde el directorio: https://jkanime.net/directorio?p={n}.
+ *  El listado viaja como JSON embebido en `var animes = {...}` (paginación de
+ *  Laravel: data[], total y last_page). */
+export async function scrapeJkanimeDirectorPage(page: number): Promise<{ items: MediaItem[]; total: number; totalPages: number }> {
+  try {
+    const html = await fetchHTML(`${BASE_URL}/directorio?p=${page}`);
+    const match = html.match(/var animes = (\{[\s\S]*?\});/);
+    if (!match) return { items: [], total: 0, totalPages: 0 };
+    const json = JSON.parse(match[1]) as { data?: Array<{ slug?: string; title?: string; synopsis?: string; image?: string; tipo?: string }>; total?: number; last_page?: number };
+    const items: MediaItem[] = (json.data || [])
+      .filter((item) => item.tipo !== 'Pelicula' && item.slug)
+      .map((item) => ({
+        id: `gani_${item.slug}`,
+        title: item.title || item.slug || '',
+        description: item.synopsis || undefined,
+        poster: item.image || undefined,
+        type: 'anime' as const,
+      }));
+    logger.info({ page, items: items.length, total: json.total, lastPage: json.last_page }, 'JKAnime directorio scraped');
+    return { items, total: json.total || items.length, totalPages: json.last_page || 1 };
+  } catch (error) {
+    logger.error({ error: (error as Error).message, page }, 'JKAnime: fallo al scrapear el directorio');
+    return { items: [], total: 0, totalPages: 0 };
   }
 }

@@ -44,8 +44,12 @@ async function runDueSync(task: string): Promise<void> {
       await runGnulahdHomeSync();
     } else if (kind) {
       const config = await getGnulahdAutoSyncConfig();
-      const pages = parsePages(config.tasks[task as GnulahdAutoTask]?.pages);
-      await runGnulahdKindSync(kind as 'peliculas' | 'series' | 'anime', pages.length > 0 ? pages : [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+      const taskCfg = config.tasks[task as GnulahdAutoTask];
+      const pages = parsePages(taskCfg?.pages);
+      // El auto-sync usa los mismos parámetros guardados en la tarjeta
+      // (páginas y "reemplazar contenido").
+      const replace = taskCfg?.replace === true;
+      await runGnulahdKindSync(kind as 'peliculas' | 'series' | 'anime', pages.length > 0 ? pages : [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], replace);
     }
   } catch (error) {
     logger.error({ error: (error as Error).message, task }, 'gnulahd auto-sync: falló la ejecución');

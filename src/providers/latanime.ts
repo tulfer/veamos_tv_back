@@ -1,7 +1,9 @@
 import * as cheerio from 'cheerio';
+import type { AnyNode } from 'domhandler';
 import { fetchHTML } from '../utils/http';
-import { Episode, Season, VideoLanguage, VideoServer } from '../types';
+import { Episode, Season, VideoLanguage, VideoServer, MediaItem } from '../types';
 import { isUnsupportedVideoHost } from '../utils/unsupported-video-hosts';
+import { logger } from '../utils/logger';
 
 const BASE_URL = 'https://latanime.org';
 
@@ -69,24 +71,26 @@ function extractServers($: cheerio.CheerioAPI, pageUrl: string): VideoLanguage[]
   return servers.length ? [{ language: 'Latino', servers }] : [];
 }
 
-export async function scrapeLatanimeDetail(slug: string, onLog?: (message: string) => void): Promise<{ seasons: Season[] } | null> {
+export async function scrapeLatanimeDetail(slug: string, onLog?: (message: string) => void, knownSlug?: string, searchTitle?: string): Promise<{ seasons: Season[] } | null> {
   try {
-    const query = slug.replace(/-/g, '+');
-    const searchUrl = `${BASE_URL}/buscar?q=${query}`;
-    onLog?.(`Latanime: consultando búsqueda ${searchUrl}`);
-    const searchHtml = await fetchHTML(searchUrl);
-    const search = cheerio.load(searchHtml);
-    let detailUrl: string | null = null;
-    search('a[href]').each((_, element) => {
-      if (detailUrl) return;
-      const href = absoluteUrl(search(element).attr('href') || '', `${BASE_URL}/buscar`);
-      if (href && new URL(href).hostname === 'latanime.org' && /\/anime\//i.test(new URL(href).pathname)) detailUrl = href;
-    });
+    let detailUrl: string | null = knownSlug ? `${BASE_URL}/anime/${knownSlug}` : null;
     if (!detailUrl) {
-      onLog?.('Latanime: no se encontró resultado en la búsqueda');
-      return null;
+      const query = (searchTitle || slug).replace(/[\s_-]+/g, '+');
+      const searchUrl = `${BASE_URL}/buscar?q=${query}`;
+      onLog?.(`Latanime: consultando búsqueda ${searchUrl}`);
+      const searchHtml = await fetchHTML(searchUrl);
+      const search = cheerio.load(searchHtml);
+      search('a[href]').each((_, element) => {
+        if (detailUrl) return;
+        const href = absoluteUrl(search(element).attr('href') || '', `${BASE_URL}/buscar`);
+        if (href && new URL(href).hostname === 'latanime.org' && /\/anime\//i.test(new URL(href).pathname)) detailUrl = href;
+      });
+      if (!detailUrl) {
+        onLog?.('Latanime: no se encontró resultado en la búsqueda');
+        return null;
+      }
+      onLog?.(`Latanime: resultado encontrado ${detailUrl}`);
     }
-    onLog?.(`Latanime: resultado encontrado ${detailUrl}`);
     const html = await fetchHTML(detailUrl);
     const $ = cheerio.load(html);
     const links = new Map<number, string>();
@@ -118,5 +122,73 @@ export async function scrapeLatanimeDetail(slug: string, onLog?: (message: strin
   } catch (error) {
     onLog?.(`Latanime: error ${(error as Error).message}`);
     return null;
+  }
+}
+
+function seasonFromTitle(title: string, slug: string): string {
+  const text = `${slug} ${title}`.toLowerCase();
+  const match = text.match(/temporada[- ]?(\d+)|(?:^|[-\s])s(\d{1,2})(?:[- ]|$)|(\d+)ª\s*temporada/);
+  if (!match) return 'En emisión';
+  const n = match[1] || match[2] || match[3];
+  return n ? `Temporada ${n}` : 'En emisión';
+}
+
+function parseAnimeCards($: cheerio.CheerioAPI, scope: cheerio.Cheerio<AnyNode>): MediaItem[] {
+  const items: MediaItem[] = [];
+  const seen = new Set<string>();
+  scope.find('a[href*="/anime/"]').each((_, el) => {
+    const $el = $(el);
+    const href = $el.attr('href') || '';
+    const slug = href.split('/').filter(Boolean).pop() || '';
+    if (!slug || seen.has(slug)) return;
+    seen.add(slug);
+    const img = $el.find('img').first();
+    const poster = img.attr('data-src') || img.attr('src') || undefined;
+    const title = $el.find('h3').first().text().trim();
+    if (!title) return;
+    const item: MediaItem = { id: `gani_${slug}`, title, poster, type: 'anime' };
+    const yearText = $el.find('span[style*="ffc119"]').text();
+    const yearMatch = yearText.match(/\b(19|20)\d{2}\b/);
+    if (yearMatch) item.year = parseInt(yearMatch[0], 10);
+    const badge = $el.find('.badge').first().text().trim();
+    const badgeNumber = badge.match(/(\d+)/);
+    if (badgeNumber) item.episode = parseInt(badgeNumber[1], 10);
+    items.push(item);
+  });
+  return items;
+}
+
+/** Últimas temporadas desde https://latanime.org/emision: los animes en emisión
+ *  con su temporada actual (derivada del título/slug) y el año. */
+export async function scrapeLatanimeEmision(): Promise<MediaItem[]> {
+  try {
+    const html = await fetchHTML(`${BASE_URL}/emision`);
+    const $ = cheerio.load(html);
+    const items = parseAnimeCards($, $.root());
+    for (const item of items) {
+      const title = item.title;
+      item.season = seasonFromTitle(title, item.id.replace(/^gani_/, ''));
+    }
+    logger.info({ emision: items.length }, 'Latanime emisión scraped');
+    return items;
+  } catch (error) {
+    logger.error({ error: (error as Error).message }, 'Latanime: fallo al scrapear la emisión');
+    return [];
+  }
+}
+
+/** Calendario de https://latanime.org/calendario para un día concreto
+ *  (lunes/martes/miercoles/jueves/viernes/sabado/domingo/otros). */
+export async function scrapeLatanimeCalendarDay(day: string): Promise<{ day: string; items: MediaItem[] }> {
+  try {
+    const html = await fetchHTML(`${BASE_URL}/calendario`);
+    const $ = cheerio.load(html);
+    const pane = $(`#${day}-tap-pane`).first();
+    const items = parseAnimeCards($, pane.length ? pane : $.root());
+    logger.info({ day, items: items.length }, 'Latanime calendario scraped');
+    return { day: day.charAt(0).toUpperCase() + day.slice(1), items };
+  } catch (error) {
+    logger.error({ error: (error as Error).message, day }, 'Latanime: fallo al scrapear el calendario');
+    return { day: day.charAt(0).toUpperCase() + day.slice(1), items: [] };
   }
 }

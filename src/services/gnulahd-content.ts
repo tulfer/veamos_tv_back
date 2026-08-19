@@ -1,11 +1,11 @@
-import { ContentDetail, SyncMovie, SyncSeries, Episode, VideoLanguage } from '../types';
+import { ContentDetail, SyncMovie, SyncSeries, Episode, VideoLanguage, Season } from '../types';
 import { loadSyncData, upsertItemByCol, upsertItemsByCol } from './data-store';
 import { scrapeGnulahdDetail } from '../providers/gnulahd';
 import { scrapeMovieDetail } from '../providers/movies';
 import { scrapeSeriesDetail } from '../providers/series';
 import { scrapePelisPediaMovieDetail, scrapePelisPediaSeriesDetail } from '../providers/pelispedia';
-import { scrapeAnimejaraDetail } from '../providers/animejara';
 import { scrapeJkanimeDetail } from '../providers/jkanime';
+import { scrapeLatanimeDetail } from '../providers/latanime';
 import { unwrapDetailProxy } from './content-detail';
 import { logger } from '../utils/logger';
 import { memoryCache } from '../cache/memory';
@@ -57,6 +57,28 @@ function mergeEpisodeVideos(primary: Episode, extra: Episode, force = false): vo
   if (!force && !hasFewerThanTwoServersPerLanguage(primary.videos)) return;
   const merged = mergeVideoLanguages(primary.videos, extra.videos);
   if (merged?.length) primary.videos = merged;
+}
+
+/** Mezcla temporadas de anime: la base es JKAnime (subtitulado, suele tener
+ *  más episodios) y a cada episodio se le agregan los servidores en latino de
+ *  Latanime si existen, sin recortar la lista de episodios. */
+function mergeAnimeSources(subtitled: Season[] | undefined, latino: Season[] | undefined): Season[] | null {
+  const base = subtitled?.length ? subtitled : latino?.length ? latino : null;
+  if (!base) return null;
+  const latinoEpisodes = latino?.flatMap((season) => season.episodes) || [];
+  return base.map((season) => ({
+    ...season,
+    episodes: season.episodes.map((episode) => {
+      const extra = latinoEpisodes.find((item) => item.episode_number === episode.episode_number);
+      if (!extra?.videos?.length) return episode;
+      const videos = [...(episode.videos || [])];
+      for (const language of extra.videos) {
+        if (videos.some((item) => item.language.toLowerCase() === language.language.toLowerCase())) continue;
+        videos.push({ ...language, servers: [...language.servers] });
+      }
+      return { ...episode, videos };
+    }),
+  }));
 }
 
 /** Completa un detalle V2 con servidores PelisPlus cuando V2 solo tiene uno. */
@@ -115,38 +137,31 @@ export async function enrichGnulahdDetail(detail: ContentDetail, logType: Gnulah
   }
   const needsAnimeEnrichment = detail.seasons?.some((season) => season.episodes.some((episode) => hasFewerThanThreeServersPerLanguage(episode.videos)));
   if (detail.type === 'anime' && needsAnimeEnrichment && detail.seasons?.length) {
-    pushLog(logType, `Consultando AnimeJara para ${slug}...`);
-    const extra = await scrapeAnimejaraDetail(slug, (message) => pushLog(logType, message));
-    if (extra?.seasons?.length) {
-      const extraEpisodes = extra.seasons.reduce((total, season) => total + season.episodes.length, 0);
-      const extraServers = extra.seasons.reduce((total, season) => total + season.episodes.reduce((count, episode) => count + serverCount(episode.videos), 0), 0);
-      pushLog(logType, `AnimeJara devolviÃ³ ${extraEpisodes} episodios y ${extraServers} servidores para ${slug}`);
-      for (const season of detail.seasons) {
-        const extraSeason = extra.seasons.find((item) => item.season_number === season.season_number) || extra.seasons[0];
-        for (const episode of season.episodes) {
-          const extraEpisode = extraSeason.episodes.find((item) => item.episode_number === episode.episode_number);
-          if (extraEpisode) mergeEpisodeVideos(episode, extraEpisode, true);
-        }
-      }
-    } else {
-      pushLog(logType, `AnimeJara no devolviÃ³ servidores para ${slug}`);
-    }
+    // JKAnime (subtitulado) y Latanime (latino): el subtitulado suele tener más
+    // episodios, así que se mezclan los servidores latino en los episodios que
+    // los tengan sin recortar la lista de episodios.
     pushLog(logType, `Consultando JKAnime para ${slug}...`);
     const jkanime = await scrapeJkanimeDetail(slug, (message) => pushLog(logType, message));
+    const latanime = await scrapeLatanimeDetail(slug, (message) => pushLog(logType, message), undefined, detail.title);
     if (jkanime?.seasons?.length) {
-      const jEpisodes = jkanime.seasons.reduce((total, season) => total + season.episodes.length, 0);
-      const jServers = jkanime.seasons.reduce((total, season) => total + season.episodes.reduce((count, episode) => count + serverCount(episode.videos), 0), 0);
-      const jkanimeLog = `JKAnime devolviÃ³ ${jEpisodes} episodios y ${jServers} servidores para ${slug}`;
-      pushLog(logType, jkanimeLog);
-      for (const season of detail.seasons) {
-        const extraSeason = jkanime.seasons.find((item) => item.season_number === season.season_number) || jkanime.seasons[0];
-        for (const episode of season.episodes) {
-          const extraEpisode = extraSeason.episodes.find((item) => item.episode_number === episode.episode_number);
-          if (extraEpisode) mergeEpisodeVideos(episode, extraEpisode, true);
-        }
-      }
+      const episodes = jkanime.seasons.reduce((total, season) => total + season.episodes.length, 0);
+      const servers = jkanime.seasons.reduce((total, season) => total + season.episodes.reduce((count, episode) => count + serverCount(episode.videos), 0), 0);
+      pushLog(logType, `JKAnime devolvió ${episodes} episodios y ${servers} servidores para ${slug}`);
     } else {
-      pushLog(logType, `JKAnime no devolviÃ³ servidores para ${slug}`);
+      pushLog(logType, `JKAnime no devolvió servidores para ${slug}`);
+    }
+    if (latanime?.seasons?.length) {
+      const episodes = latanime.seasons.reduce((total, season) => total + season.episodes.length, 0);
+      const servers = latanime.seasons.reduce((total, season) => total + season.episodes.reduce((count, episode) => count + serverCount(episode.videos), 0), 0);
+      pushLog(logType, `Latanime devolvió ${episodes} episodios y ${servers} servidores para ${slug}`);
+    } else {
+      pushLog(logType, `Latanime no devolvió servidores para ${slug}`);
+    }
+    const mergedSeasons = mergeAnimeSources(jkanime?.seasons, latanime?.seasons);
+    if (mergedSeasons) {
+      detail.seasons = mergedSeasons;
+    } else if (jkanime?.seasons?.length) {
+      detail.seasons = jkanime.seasons;
     }
   }
   return detail;
@@ -309,7 +324,7 @@ export async function getGnulahdDetailContent(id: string): Promise<ContentDetail
   // Los ids nativos de GNULA usan slugs con guiones (gmov_dragon-ball-z-...).
   // Los convertidos desde PelisPlus/PelisPedia llevan guiones bajos
   // (gser_malcolm_el_de_en_medio) y los de anime (gani_...) son convención
-  // propia (animejara/jkanime): en ambos casos se va directo al respaldo sin
+  // propia (jkanime/latanime): en ambos casos se va directo al respaldo sin
   // quemar reintentos en un 404.
   const nativeSlug = id.slice(id.indexOf('_') + 1);
   const scraped = nativeSlug.includes('_') || id.startsWith('gani_') ? null : await scrapeGnulahdDetail(id);
@@ -341,10 +356,10 @@ export async function getGnulahdDetailContent(id: string): Promise<ContentDetail
       return normalized;
     }
   } else {
-    // Anime: animejara (latino) primero; si algún episodio queda con menos de
-    // 3 servidores por idioma, se busca el nombre en jkanime y se mezcla.
+    // Anime: el catálogo usa slugs de jkanime (subtitulado); el latino de
+    // latanime se busca por título y se mezcla por episodio.
     const slug = id.replace(/^gani_/, '');
-    const animeDetail = await scrapeAnimeContent(slug, item?.title);
+    const animeDetail = await scrapeAnimeContent(slug, item?.title, slug);
     if (animeDetail) {
       await healGnulahd('gnulahd-anime', animeDetail);
       return animeDetail;
@@ -354,11 +369,13 @@ export async function getGnulahdDetailContent(id: string): Promise<ContentDetail
   return item ? (isSeriesCol ? mapGnulahdSeries(item as SyncSeries) : mapGnulahdMovie(item as SyncMovie)) : null;
 }
 
-/** Contenido de anime on-demand: AnimeJara (episodios en latino) y, si quedan
- *  episodios con menos de 3 servidores por idioma, JKAnime (subtitulado).
- *  Si se conoce el slug de animejara (catálogo), se pasa para evitar la
- *  búsqueda previa en jkanime. */
-export async function scrapeAnimeContent(slug: string, fallbackTitle?: string, knownAnimejaraSlug?: string): Promise<ContentDetail | null> {
+/** Contenido de anime on-demand: JKAnime (subtitulado) como base de episodios
+ *  y Latanime (latino) como refuerzo por episodio. El subtitulado suele tener
+ *  más capítulos que el latino; se conservan todos y solo se marcan con
+ *  servidores en latino los que existan en latanime.
+ *  knownJkanimeSlug / knownLatanimeSlug evitan la búsqueda previa cuando el
+ *  slug ya se conoce (catálogo / calendario / emisión). */
+export async function scrapeAnimeContent(slug: string, fallbackTitle?: string, knownJkanimeSlug?: string, knownLatanimeSlug?: string): Promise<ContentDetail | null> {
   const pushAnimeLog = (message: string) => pushLog('gnulahdAnime', message);
   const base: ContentDetail = {
     id: `gani_${slug}`,
@@ -371,28 +388,18 @@ export async function scrapeAnimeContent(slug: string, fallbackTitle?: string, k
     type: 'anime',
   };
 
-  const animejara = await scrapeAnimejaraDetail(slug, pushAnimeLog, knownAnimejaraSlug);
-  if (!animejara?.seasons?.length) {
-    const jkanime = await scrapeJkanimeDetail(slug, pushAnimeLog);
-    if (!jkanime?.seasons?.length) return null;
-    return { ...base, seasons: jkanime.seasons };
-  }
+  const jkanime = await scrapeJkanimeDetail(slug, pushAnimeLog, knownJkanimeSlug);
+  const latanime = await scrapeLatanimeDetail(slug, pushAnimeLog, knownLatanimeSlug, fallbackTitle || slug);
+  if (!jkanime?.seasons?.length && !latanime?.seasons?.length) return null;
 
-  const needsJkanime = animejara.seasons.some((season) => season.episodes.some((episode) => hasFewerThanThreeServersPerLanguage(episode.videos)));
-  if (needsJkanime) {
-    pushAnimeLog(`AnimeJara con pocos servidores, consultando JKAnime para ${slug}...`);
-    const jkanime = await scrapeJkanimeDetail(slug, pushAnimeLog);
-    if (jkanime?.seasons?.length) {
-      for (const season of animejara.seasons) {
-        const extraSeason = jkanime.seasons.find((item) => item.season_number === season.season_number) || jkanime.seasons[0];
-        for (const episode of season.episodes) {
-          const extraEpisode = extraSeason?.episodes.find((item) => item.episode_number === episode.episode_number);
-          if (extraEpisode) mergeEpisodeVideos(episode, extraEpisode, true);
-        }
-      }
-      pushAnimeLog(`JKAnime agregó servidores a ${slug}`);
-    }
-  }
-
-  return { ...base, seasons: animejara.seasons };
+  const mergedSeasons = mergeAnimeSources(jkanime?.seasons, latanime?.seasons);
+  const seasons = mergedSeasons || (jkanime?.seasons?.length ? jkanime.seasons : latanime?.seasons);
+  if (!seasons?.length) return null;
+  const totalEpisodes = seasons.reduce((total, season) => total + season.episodes.length, 0);
+  const totalServers = seasons.reduce(
+    (total, season) => total + season.episodes.reduce((count, episode) => count + serverCount(episode.videos), 0),
+    0,
+  );
+  pushAnimeLog(`Contenido listo para ${base.title}: ${seasons.length} temporadas, ${totalEpisodes} episodios, ${totalServers} servidores`);
+  return { ...base, seasons };
 }

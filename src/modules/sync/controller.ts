@@ -715,7 +715,7 @@ export async function syncGnulahdHomeHandler(_request: FastifyRequest, reply: Fa
 
 /** Ejecuta el sync de un listado GNULA en segundo plano (usado por handlers y autosync).
  *  Devuelve true si la sincronización arrancó (false si ya había una en curso).
- *  El anime usa fuentes propias (animejara + jkanime), ver runAnimeSync. */
+ *  El anime usa fuentes propias (jkanime + latanime), ver runAnimeSync. */
 export async function runGnulahdKindSync(kind: 'peliculas' | 'series' | 'anime', pages: number[], shouldReplace = false): Promise<boolean> {
   if (kind === 'anime') return runAnimeSync(pages, shouldReplace);
   const type: SyncType = kind === 'peliculas' ? 'gnulahdMovies' : 'gnulahdSeries';
@@ -742,11 +742,11 @@ export async function runGnulahdKindSync(kind: 'peliculas' | 'series' | 'anime',
   return true;
 }
 
-/** Sync de la sección Anime: banner y últimos episodios de animejara.com/inicio,
- *  Top Anime (10) de jkanime.net y todo el catálogo de
- *  animejara.com/catalogo/?paged={n}. Los ítems del catálogo se guardan en la
- *  colección gnulahd-anime; el contenido se resuelve on-demand (animejara →
- *  jkanime) en getGnulahdDetailContent. */
+/** Sync de la sección Anime: banner, programación, top y catálogo de
+ *  jkanime.net, y últimas temporadas + calendario de latanime.org.
+ *  El catálogo sale de jkanime.net/directorio?p={n} y se guarda en la colección
+ *  gnulahd-anime; el contenido se resuelve con jkanime (subtitulado) como base
+ *  y latanime (latino) por episodio en scrapeAnimeContent. */
 export async function runAnimeSync(pages: number[], shouldReplace = false): Promise<boolean> {
   const type = 'gnulahdAnime';
   if (!startSync(type)) {
@@ -754,8 +754,9 @@ export async function runAnimeSync(pages: number[], shouldReplace = false): Prom
     return false;
   }
   runBackgroundSync(type, async () => {
-    const { scrapeAnimejaraHome, scrapeAnimejaraCatalogPage, saveAnimeJaraHomeData } = await import('../../providers/animejara');
-    const { scrapeJkanimeTopAnime, scrapeJkanimeSchedule } = await import('../../providers/jkanime');
+    const { scrapeJkanimeBanner, scrapeJkanimeSchedule, scrapeJkanimeTopAnime, scrapeJkanimeDirectorPage } = await import('../../providers/jkanime');
+    const { scrapeLatanimeEmision, scrapeLatanimeCalendarDay } = await import('../../providers/latanime');
+    const { saveAnimeHomeData } = await import('../../providers/anime');
     const collection = 'gnulahd-anime';
 
     if (shouldReplace) {
@@ -763,9 +764,19 @@ export async function runAnimeSync(pages: number[], shouldReplace = false): Prom
       updateSyncProgress(type, 0, 'Colección de animes vaciada; sincronizando de nuevo...');
     }
 
-    updateSyncProgress(type, 0, 'Scrapeando home de animejara.com/inicio...');
-    const home = await scrapeAnimejaraHome();
-    pushLog(type, `AnimeJara home: ${home.banners.length} banners y ${home.ultimasTemporadas.length} últimas temporadas`);
+    updateSyncProgress(type, 0, 'Scrapeando banner de jkanime.net...');
+    const banners = await scrapeJkanimeBanner();
+    pushLog(type, `JKAnime banner: ${banners.length} banners`);
+
+    const dayNames = ['domingo', 'lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado'];
+    const today = dayNames[new Date().getDay()] || 'otros';
+    updateSyncProgress(type, 0, `Scrapeando calendario de latanime.org (${today})...`);
+    const calendario = await scrapeLatanimeCalendarDay(today);
+    pushLog(type, `Latanime calendario (${calendario.day}): ${calendario.items.length} animes`);
+
+    updateSyncProgress(type, 0, 'Scrapeando últimas temporadas de latanime.org/emision...');
+    const ultimasTemporadas = await scrapeLatanimeEmision();
+    pushLog(type, `Latanime emisión: ${ultimasTemporadas.length} animes`);
 
     updateSyncProgress(type, 0, 'Scrapeando programación (últimos episodios) de jkanime.net...');
     const schedule = await scrapeJkanimeSchedule();
@@ -775,10 +786,10 @@ export async function runAnimeSync(pages: number[], shouldReplace = false): Prom
     const topAnime = await scrapeJkanimeTopAnime();
     pushLog(type, `JKAnime top: ${topAnime.length} animes`);
 
-    const firstPage = await scrapeAnimejaraCatalogPage(1);
-    const totalPages = Math.max(1, Math.ceil((firstPage.total || firstPage.items.length) / Math.max(1, firstPage.items.length)));
-    const pageList = pages.length > 0 ? pages : Array.from({ length: totalPages }, (_, i) => i + 1);
-    pushLog(type, `Catálogo animejara: ${firstPage.total || '?'} animes, ${pageList.length} páginas a escanear`);
+    const firstPage = await scrapeJkanimeDirectorPage(1);
+    const totalPages = Math.max(1, firstPage.totalPages);
+    const pageList = pages.length > 0 ? pages : Array.from({ length: Math.min(totalPages, 10) }, (_, i) => i + 1);
+    pushLog(type, `Directorio jkanime: ${firstPage.total || '?'} animes, ${pageList.length} páginas a escanear`);
 
     // Contenidos ya persistidos: se conservan al re-sincronizar el catálogo y
     // solo se resuelven los que falten (o todos si replace).
@@ -802,10 +813,10 @@ export async function runAnimeSync(pages: number[], shouldReplace = false): Prom
     for (const page of pageList) {
       let pageItems = page === 1 ? firstPage.items : [];
       if (page !== 1) {
-        const pageData = await scrapeAnimejaraCatalogPage(page);
+        const pageData = await scrapeJkanimeDirectorPage(page);
         pageItems = addItems(pageData.items);
       }
-      updateSyncProgress(type, todos.length, `Escaneando página ${page}/${pageList.length} del catálogo (${todos.length} animes)...`);
+      updateSyncProgress(type, todos.length, `Escaneando página ${page}/${pageList.length} del directorio (${todos.length} animes)...`);
       for (const item of pageItems) {
         const write = persistQueue.then(() =>
           upsertItemByCol(collection, {
@@ -823,13 +834,13 @@ export async function runAnimeSync(pages: number[], shouldReplace = false): Prom
         persistQueue = write.catch(() => undefined);
       }
       await persistQueue;
-      logger.info({ page, total: todos.length }, 'AnimeJara catalog page synced');
+      logger.info({ page, total: todos.length }, 'JKAnime directorio page synced');
     }
 
-    await saveAnimeJaraHomeData({ banners: home.banners, ultimosEpisodios: schedule, ultimasTemporadas: home.ultimasTemporadas, topAnime, todos, totalTodos: firstPage.total || todos.length, updatedAt: Date.now() });
+    await saveAnimeHomeData({ banners, calendario, ultimosEpisodios: schedule, ultimasTemporadas, topAnime, todos, totalTodos: firstPage.total || todos.length, updatedAt: Date.now() });
 
-    // Contenidos de cada anime: animejara (slug conocido del catálogo) y
-    // jkanime como refuerzo si quedan episodios con pocos servidores.
+    // Contenidos de cada anime: jkanime (subtitulado, slug conocido del
+    // catálogo) como base y latanime (latino) mezclado por episodio.
     const { scrapeAnimeContent } = await import('../../services/gnulahd-content');
     const CONTENT_CONC = 4;
     let contentsDone = 0;
@@ -844,7 +855,6 @@ export async function runAnimeSync(pages: number[], shouldReplace = false): Prom
           }
           const slug = item.id.replace(/^gani_/, '');
           const content = await scrapeAnimeContent(slug, item.title, slug);
-          if (content?.seasons?.length) pushLog(type, `Contenido listo para ${item.title}: ${content.seasons.length} temporadas`);
           return { item, content };
         }),
       );
@@ -1001,18 +1011,11 @@ export async function syncGnulahdItemHandler(request: FastifyRequest, reply: Fas
     } else {
       pushLog('gnulahdItem', `GNULA no devolvió detalle para ${slug}; probando proveedores de respaldo...`);
       if (isAnime) {
-        const { scrapeAnimejaraDetail } = await import('../../providers/animejara');
-        const { scrapeJkanimeDetail } = await import('../../providers/jkanime');
-        const animeExtra = await scrapeAnimejaraDetail(slug, (message) => pushLog('gnulahdItem', message));
-        if (animeExtra?.seasons?.length) {
-          pushLog('gnulahdItem', `AnimeJara devolvió el ítem (${animeExtra.seasons.length} temporadas)`);
-          detail = { id, title: slug, description: `${slug} disponible en Veamos TV.`, rating: 8.0, year: 2024, genres: ['Acción'], cast: [{ name: 'Reparto Principal' }], type: 'anime', seasons: animeExtra.seasons };
-        } else {
-          const jkanime = await scrapeJkanimeDetail(slug, (message) => pushLog('gnulahdItem', message));
-          if (jkanime?.seasons?.length) {
-            pushLog('gnulahdItem', `JKAnime devolvió el ítem (${jkanime.seasons.length} temporadas)`);
-            detail = { id, title: slug, description: `${slug} disponible en Veamos TV.`, rating: 8.0, year: 2024, genres: ['Acción'], cast: [{ name: 'Reparto Principal' }], type: 'anime', seasons: jkanime.seasons };
-          }
+        const { scrapeAnimeContent } = await import('../../services/gnulahd-content');
+        const animeContent = await scrapeAnimeContent(slug, slug);
+        if (animeContent?.seasons?.length) {
+          pushLog('gnulahdItem', `JKAnime/Latanime devolvió el ítem (${animeContent.seasons.length} temporadas)`);
+          detail = animeContent;
         }
       } else {
         const { scrapeMovieDetail } = await import('../../providers/movies');

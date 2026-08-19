@@ -388,6 +388,8 @@ export interface GnulahdAutoTaskConfig {
   intervalHours: number;
   /** Páginas a sincronizar (solo kind: movies/series/anime). */
   pages?: string;
+  /** Reemplazar (sobrescribir) el contenido al sincronizar. */
+  replace?: boolean;
   lastRunAt?: number;
 }
 
@@ -409,6 +411,7 @@ function normalizeGnulahdTaskConfig(value: unknown): GnulahdAutoTaskConfig | und
     enabled: raw.enabled === true,
     intervalHours: Number.isFinite(hours) && hours >= 0.1 ? hours : DEFAULT_GNULAHD_TASK.intervalHours,
     ...(pages ? { pages } : {}),
+    ...(raw.replace === true ? { replace: true } : {}),
     ...(lastRunAt ? { lastRunAt } : {}),
   };
 }
@@ -446,6 +449,7 @@ export async function setGnulahdAutoSyncConfig(config: { tasks?: Partial<Record<
         enabled: patch.enabled !== undefined ? Boolean(patch.enabled) : currentTask.enabled,
         intervalHours: Number.isFinite(Number(hours)) && Number(hours) >= 0.1 ? Number(hours) : currentTask.intervalHours,
         ...(patch.pages !== undefined ? { pages: patch.pages.trim() ? patch.pages.trim() : '1-10' } : currentTask.pages ? { pages: currentTask.pages } : {}),
+        ...(patch.replace !== undefined ? { replace: Boolean(patch.replace) } : currentTask.replace === true ? { replace: true } : {}),
         ...(currentTask.lastRunAt ? { lastRunAt: currentTask.lastRunAt } : {}),
       };
     }
@@ -461,6 +465,7 @@ export async function setGnulahdAutoSyncLastRun(task: GnulahdAutoTask, timestamp
     enabled: currentTask.enabled,
     intervalHours: currentTask.intervalHours,
     ...(currentTask.pages ? { pages: currentTask.pages } : {}),
+    ...(currentTask.replace === true ? { replace: true } : {}),
     lastRunAt: timestamp,
   };
   await setRow(storeKeys.gnulahdAutoSync, { ...current, updatedAt: Date.now() });
