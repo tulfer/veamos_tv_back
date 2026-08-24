@@ -14,6 +14,8 @@ export interface MediaItem {
   season?: string;
   /** Número de episodio relevante (ej: calendario "Próximo - N" o programación). */
   episode?: number;
+  /** Proveedor de origen en búsquedas combinadas. */
+  source?: 'gnula' | 'pelisplus' | 'pelispedia' | 'live';
   content?: ContentDetail;
 }
 

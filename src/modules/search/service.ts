@@ -2,40 +2,82 @@ import { MediaItem, SearchResult, SyncMovie, SyncSeries } from '../../types';
 import { fetchLiveChannels } from '../../providers/live-tv';
 import { scrapeSearch } from '../../providers/search';
 import { scrapePelisPediaSearch } from '../../providers/pelispedia';
-import { searchGnulahd } from '../../providers/gnulahd';
 import { upsertItemsByCol, loadSyncData } from '../../services/data-store';
 import { memoryCache } from '../../cache/memory';
 import { logger } from '../../utils/logger';
 
-const PELIS_FALLBACK_THRESHOLD = 4;
+const PAGE_SIZE = 20;
+
+/** Relevancia de un título frente a la consulta: 0 (nada) a 1000 (exacto). */
+function relevanceScore(title: string, query: string): number {
+  const t = normalize(title);
+  const q = normalize(query);
+  if (!t || !q) return 0;
+  if (t === q) return 1000;
+  let score = 0;
+  if (t.startsWith(q)) score += 600;
+  else if (t.includes(q)) score += 350;
+  const qWords = q.split(/\s+/).filter(Boolean);
+  if (qWords.length > 1) {
+    const tWords = new Set(t.split(/\s+/).filter(Boolean));
+    const matched = qWords.filter((word) => tWords.has(word)).length;
+    score += Math.round((matched / qWords.length) * 300);
+  }
+  return score;
+}
+
+function byRelevance(query: string) {
+  return (a: MediaItem, b: MediaItem): number => {
+    const scoreA = relevanceScore(a.title, query);
+    const scoreB = relevanceScore(b.title, query);
+    if (scoreA !== scoreB) return scoreB - scoreA;
+    if (a.title.length !== b.title.length) return a.title.length - b.title.length;
+    const ratingA = a.rating || 0;
+    const ratingB = b.rating || 0;
+    if (ratingA !== ratingB) return ratingB - ratingA;
+    return (b.year || 0) - (a.year || 0);
+  };
+}
+
+function normalize(value: string): string {
+  return value
+    .toLowerCase()
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
 
 async function searchSync(query: string): Promise<{ movies: MediaItem[]; series: MediaItem[] }> {
   const data = await loadSyncData();
   if (!data) return { movies: [], series: [] };
 
-  const q = query.toLowerCase();
-  const movies: MediaItem[] = data.movies
-    .filter((m) => m.title.toLowerCase().includes(q))
-    .slice(0, 20)
-    .map((m) => ({ id: m.id, title: m.title, poster: m.poster, rating: m.rating, year: m.year, type: 'movie' }));
+  const q = normalize(query);
+  const pick = (
+    items: Array<{ id: string; title: string; poster?: string; rating?: number; year?: number }>,
+    type: 'movie' | 'series',
+  ): MediaItem[] =>
+    items
+      .filter((item) => normalize(item.title).includes(q))
+      // Se traen todos los que coinciden (acotados a 100) y el orden final lo
+      // decide la relevancia, no el orden de la base.
+      .slice(0, 100)
+      .map((item) => ({ id: item.id, title: item.title, poster: item.poster, rating: item.rating, year: item.year, type }));
 
-  const series: MediaItem[] = data.series
-    .filter((s) => s.title.toLowerCase().includes(q))
-    .slice(0, 20)
-    .map((s) => ({ id: s.id, title: s.title, poster: s.poster, rating: s.rating, year: s.year, type: 'series' }));
-
-  return { movies, series };
+  return {
+    movies: pick(data.movies, 'movie'),
+    series: pick(data.series, 'series'),
+  };
 }
 
-/** Los ítems de PelisPlus HD se guardan con id de catálogo v2 (gmov_/gser_) para
- *  que el content v2 los procese y persista. */
+/** Los ítems de PelisPlus/PelisPedia se guardan con id de catálogo v2
+ *  (gmov_/gser_) para que el content v2 los procese y persista. */
 function toV2Id(item: MediaItem): MediaItem {
   if (item.id.startsWith('mov_')) return { ...item, id: item.id.replace(/^mov_/, 'gmov_') };
   if (item.id.startsWith('ser_')) return { ...item, id: item.id.replace(/^ser_/, 'gser_') };
   return item;
 }
 
-/** Guarda los resultados de PelisPlus en las colecciones de v2 para que el
+/** Guarda los resultados externos en las colecciones de v2 para que el
  *  content service los encuentre sincronizados. */
 async function persistExternalToV2(external: { movies: MediaItem[]; series: MediaItem[] }): Promise<void> {
   try {
@@ -71,72 +113,76 @@ async function persistExternalToV2(external: { movies: MediaItem[]; series: Medi
   }
 }
 
-function byTitle(items: MediaItem[]): (item: MediaItem) => boolean {
-  const titles = new Set(items.map((item) => item.title.toLowerCase().trim()));
-  return (item) => !titles.has(item.title.toLowerCase().trim());
+/** Mezcla resultados de los proveedores en orden de prioridad (GNULA,
+ *  PelisPlus, PelisPedia) deduplicando por id (tras normalizar a v2) y por
+ *  título exacto, de modo que el mismo contenido no aparezca duplicado. */
+function mergeProviders(
+  query: string,
+  synced: MediaItem[],
+  pelisPlus: MediaItem[],
+  pelisPedia: MediaItem[],
+): MediaItem[] {
+  const byId = new Set<string>();
+  const byTitle = new Set<string>();
+  const merged: MediaItem[] = [];
+  const add = (item: MediaItem, source: 'gnula' | 'pelisplus' | 'pelispedia') => {
+    const key = normalize(item.title);
+    if (byId.has(item.id) || byTitle.has(key)) return;
+    byId.add(item.id);
+    byTitle.add(key);
+    merged.push({ ...item, source });
+  };
+  for (const item of synced) add(item, 'gnula');
+  for (const item of pelisPlus) add(item, 'pelisplus');
+  for (const item of pelisPedia) add(item, 'pelispedia');
+  return merged.sort(byRelevance(query));
 }
 
-/** Dedupe por id tras toV2Id: pelisplus/pelispedia/gnula comparten slugs y el
- *  mismo contenido puede llegar con títulos ligeramente distintos. */
-function dedupeById<T extends MediaItem>(items: T[]): T[] {
-  return [...new Map(items.map((item) => [item.id, item])).values()];
+function paginate(items: MediaItem[], page: number, query: string): SearchResult {
+  const start = (page - 1) * PAGE_SIZE;
+  return {
+    items: items.slice(start, start + PAGE_SIZE),
+    total: items.length,
+    totalPages: Math.max(1, Math.ceil(items.length / PAGE_SIZE)),
+    query,
+  };
 }
 
 export async function searchAll(query: string, page = 1): Promise<SearchResult> {
-  const q = query.toLowerCase().trim();
+  const q = normalize(query);
   const cacheKey = `search:all:${q}`;
   const cached = memoryCache.get<SearchResult>(cacheKey);
   if (cached) return cached;
 
-  const synced = await searchSync(query);
+  // Los 3 proveedores SIEMPRE: GNULA (catálogo sincronizado), PelisPlus HD y
+  // PelisPedia; los resultados se mezclan y se ordenan de más a menos
+  // coincidencia con la consulta.
+  const [synced, pelis, pelispedia] = await Promise.all([
+    searchSync(query),
+    scrapeSearch(query),
+    scrapePelisPediaSearch(query),
+  ]);
+
+  const contentItems = mergeProviders(
+    query,
+    [...synced.movies, ...synced.series],
+    [...pelis.movies.map(toV2Id), ...pelis.series.map(toV2Id)],
+    [...pelispedia.movies.map(toV2Id), ...pelispedia.series.map(toV2Id)],
+  );
+
   const liveChannels = await fetchLiveChannels().catch(() => [] as any[]);
   const liveItems: MediaItem[] = liveChannels
-    .filter((c: any) => c.title.toLowerCase().includes(q))
-    .map((c: any) => ({ id: c.id, title: c.title, poster: c.logo, type: 'live' as const }));
+    .filter((c: any) => normalize(c.title).includes(q))
+    .slice(0, 20)
+    .map((c: any) => ({ id: c.id, title: c.title, poster: c.logo, type: 'live' as const, source: 'live' as const }));
 
-  // 1) Buscar primero en PelisPlus HD.
-  const pelis = await scrapeSearch(query);
-  let externalMovies = pelis.movies.filter((em) => !synced.movies.some((sm) => sm.title.toLowerCase() === em.title.toLowerCase()));
-  let externalSeries = pelis.series.filter((es) => !synced.series.some((ss) => ss.title.toLowerCase() === es.title.toLowerCase()));
-
-  // 2) Si PelisPlus devuelve menos de 4 resultados, buscar en PelisPedia.
-  if (pelis.movies.length + pelis.series.length < PELIS_FALLBACK_THRESHOLD) {
-    const pelispedia = await scrapePelisPediaSearch(query);
-    const ppMovies = pelispedia.movies
-      .filter(byTitle(externalMovies))
-      .filter((em) => !synced.movies.some((sm) => sm.title.toLowerCase() === em.title.toLowerCase()));
-    const ppSeries = pelispedia.series
-      .filter(byTitle(externalSeries))
-      .filter((es) => !synced.series.some((ss) => ss.title.toLowerCase() === es.title.toLowerCase()));
-    externalMovies = [...externalMovies, ...ppMovies];
-    externalSeries = [...externalSeries, ...ppSeries];
-  }
-
-  // 3) Si aún hay menos de 4 resultados, completar con GNULA.
-  if (externalMovies.length + externalSeries.length < PELIS_FALLBACK_THRESHOLD) {
-    const gnula = await searchGnulahd(query);
-    const gnulaMovies = gnula.items.filter((item) => item.type === 'movie');
-    const gnulaSeries = gnula.items.filter((item) => item.type === 'series' || item.type === 'anime');
-    externalMovies = [...externalMovies, ...gnulaMovies.filter(byTitle(externalMovies)).filter((item) => !synced.movies.some((sm) => sm.title.toLowerCase() === item.title.toLowerCase()))];
-    externalSeries = [...externalSeries, ...gnulaSeries.filter(byTitle(externalSeries)).filter((item) => !synced.series.some((ss) => ss.title.toLowerCase() === item.title.toLowerCase()))];
-  }
-
-  // 4) Convertir a ids de catálogo v2 y guardarlos para que el content service los encuentre.
-  externalMovies = dedupeById(externalMovies.map(toV2Id));
-  externalSeries = dedupeById(externalSeries.map(toV2Id));
-
-  if (externalMovies.length > 0 || externalSeries.length > 0) {
+  const externalMovies = dedupeById([...pelis.movies, ...pelispedia.movies].map(toV2Id));
+  const externalSeries = dedupeById([...pelis.series, ...pelispedia.series].map(toV2Id));
+  if (externalMovies.length || externalSeries.length) {
     await persistExternalToV2({ movies: externalMovies, series: externalSeries });
   }
 
-  const allItems = [...synced.movies, ...externalMovies, ...synced.series, ...externalSeries, ...liveItems];
-
-  const result: SearchResult = {
-    items: allItems.slice(0, 20),
-    total: allItems.length,
-    query,
-  };
-
+  const result = paginate([...contentItems, ...liveItems], page, query);
   memoryCache.set(cacheKey, result, 120_000);
   return result;
 }
@@ -146,51 +192,43 @@ export async function searchByType(
   type: 'movie' | 'series' | 'live',
   page = 1,
 ): Promise<SearchResult> {
-  const q = query.toLowerCase().trim();
+  const q = normalize(query);
 
   if (type === 'live') {
     const channels = await fetchLiveChannels().catch(() => [] as any[]);
     const items: MediaItem[] = channels
-      .filter((c: any) => c.title.toLowerCase().includes(q))
-      .map((c: any) => ({ id: c.id, title: c.title, poster: c.logo, type: 'live' as const }));
-    return { items: items.slice(0, 20), total: items.length, query };
+      .filter((c: any) => normalize(c.title).includes(q))
+      .slice(0, 20)
+      .map((c: any) => ({ id: c.id, title: c.title, poster: c.logo, type: 'live' as const, source: 'live' as const }));
+    const result = paginate(items, page, query);
+    return result;
   }
 
-  const synced = await searchSync(query);
-  let items = type === 'movie' ? synced.movies : synced.series;
+  const isMovie = type === 'movie';
+  const [synced, pelis, pelispedia] = await Promise.all([
+    searchSync(query),
+    scrapeSearch(query),
+    scrapePelisPediaSearch(query),
+  ]);
 
-  // 1) PelisPlus HD primero.
-  const external = await scrapeSearch(query);
-  let filtered = (type === 'movie' ? external.movies : external.series)
-    .filter((em) => !items.some((sm) => sm.title.toLowerCase() === em.title.toLowerCase()));
+  const syncedItems = isMovie ? synced.movies : synced.series;
+  const pelisItems = (isMovie ? pelis.movies : pelis.series).map(toV2Id);
+  const pelisPediaItems = (isMovie ? pelispedia.movies : pelispedia.series).map(toV2Id);
 
-  // 2) Si hay menos de 4 resultados en PelisPlus, buscar en PelisPedia.
-  let sourceTotal = type === 'movie' ? external.movies.length : external.series.length;
-  if (sourceTotal < PELIS_FALLBACK_THRESHOLD) {
-    const pelispedia = await scrapePelisPediaSearch(query);
-    const ppItems = (type === 'movie' ? pelispedia.movies : pelispedia.series)
-      .filter(byTitle(filtered))
-      .filter((em) => !items.some((sm) => sm.title.toLowerCase() === em.title.toLowerCase()));
-    filtered = [...filtered, ...ppItems];
-    sourceTotal += type === 'movie' ? pelispedia.movies.length : pelispedia.series.length;
+  const contentItems = mergeProviders(query, syncedItems, pelisItems, pelisPediaItems);
+
+  const external = isMovie ? [...pelis.movies, ...pelispedia.movies] : [...pelis.series, ...pelispedia.series];
+  const externalItems = dedupeById(external.map(toV2Id));
+  if (externalItems.length) {
+    await persistExternalToV2(isMovie ? { movies: externalItems, series: [] } : { movies: [], series: externalItems });
   }
 
-  // 3) Si aún hay menos de 4 resultados, completar con GNULA.
-  if (sourceTotal < PELIS_FALLBACK_THRESHOLD) {
-    const gnula = await searchGnulahd(query);
-    const gnulaItems = type === 'movie'
-      ? gnula.items.filter((item) => item.type === 'movie')
-      : gnula.items.filter((item) => item.type === 'series' || item.type === 'anime');
-    filtered = [...filtered, ...gnulaItems.filter(byTitle(filtered)).filter((item) => !items.some((sm) => sm.title.toLowerCase() === item.title.toLowerCase()))];
-  }
+  const result = paginate(contentItems, page, query);
+  return result;
+}
 
-  filtered = dedupeById(filtered.map(toV2Id));
-
-  if (filtered.length > 0) {
-    if (type === 'movie') await persistExternalToV2({ movies: filtered, series: [] });
-    else await persistExternalToV2({ movies: [], series: filtered });
-    items = [...items, ...filtered].slice(0, 20);
-  }
-
-  return { items: items.slice(0, 20), total: items.length, query };
+/** Dedupe por id tras toV2Id: pelisplus/pelispedia/gnula comparten slugs y el
+ *  mismo contenido puede llegar con títulos ligeramente distintos. */
+function dedupeById<T extends MediaItem>(items: T[]): T[] {
+  return [...new Map(items.map((item) => [item.id, item])).values()];
 }
