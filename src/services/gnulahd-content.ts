@@ -220,10 +220,10 @@ function mapGnulahdSeries(series: SyncSeries): ContentDetail {
   };
 }
 
-async function healGnulahd(collection: GnulahdCollection, detail: ContentDetail): Promise<void> {
+async function healGnulahd(collection: GnulahdCollection, detail: ContentDetail, source?: string): Promise<void> {
   try {
     const { id, ...clean } = JSON.parse(JSON.stringify(detail)) as { id: string } & Record<string, unknown>;
-    await upsertItemByCol<{ id: string } & Record<string, unknown>>(collection, { id, content: detail, ...clean });
+    await upsertItemByCol<{ id: string } & Record<string, unknown>>(collection, { id, content: detail, ...clean, ...(source ? { source } : {}) });
     memoryCache.del('sync:data');
     logger.info({ id: detail.id, col: collection }, 'Detalle GNULA enriquecido guardado en la base');
   } catch (error) {
@@ -298,6 +298,22 @@ async function persistGnulahdDetails(details: ContentDetail[]): Promise<void> {
   }
 }
 
+function normalizeTitle(value: string): string {
+  return value
+    .toLowerCase()
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ');
+}
+
+/** ¿El contenido corresponde al ítem del catálogo? Un slug corto en GNULA
+ *  puede resolver a otro título (ej: "You" → "You and I Are Polar Opposites"),
+ *  así que el título cacheado debe coincidir con el del catálogo. */
+function titlesMatchExact(a: string, b: string): boolean {
+  return normalizeTitle(a) === normalizeTitle(b);
+}
+
 export async function getGnulahdDetailContent(id: string): Promise<ContentDetail | null> {
   const collection = collectionFor(id);
   if (!collection) return null;
@@ -308,6 +324,22 @@ export async function getGnulahdDetailContent(id: string): Promise<ContentDetail
   const item: SyncMovie | SyncSeries | undefined = isSeriesCol
     ? (collection === 'gnulahd-series' ? synced?.gnulahdSeries : synced?.gnulahdAnime)?.find((s) => s.id === id)
     : synced?.gnulahdMovies?.find((m) => m.id === id);
+
+  // Ítems persistidos por la búsqueda desde PelisPlus/PelisPedia: se resuelven
+  // desde su proveedor de origen, nunca desde GNULA (su slug puede coincidir
+  // con otro contenido ahí).
+  const isExternal = item?.source === 'pelisplus' || item?.source === 'pelispedia';
+  const isAnime = id.startsWith('gani_');
+
+  // El contenido cacheado solo se confía si su título corresponde al del
+  // catálogo (no aplica a anime: jkanime/latanime usan títulos propios).
+  const cachedContentOk = !item?.content || isAnime || !item.title || !item.content.title || titlesMatchExact(item.content.title, item.title);
+  if (item?.content && !cachedContentOk) {
+    logger.warn({ id, cached: item.content.title, catalog: item.title }, 'Contenido cacheado no corresponde al ítem; se re-resuelve');
+    item.content = undefined;
+    (item as SyncSeries).seasons = undefined;
+    (item as SyncMovie).videos = undefined;
+  }
 
   const isComplete = isSeriesCol
     ? !!((item as SyncSeries | undefined)?.seasons?.length)
@@ -325,35 +357,44 @@ export async function getGnulahdDetailContent(id: string): Promise<ContentDetail
   // Los convertidos desde PelisPlus/PelisPedia llevan guiones bajos
   // (gser_malcolm_el_de_en_medio) y los de anime (gani_...) son convención
   // propia (jkanime/latanime): en ambos casos se va directo al respaldo sin
-  // quemar reintentos en un 404.
+  // quemar reintentos en un 404. Los externos tampoco usan GNULA: su slug
+  // puede resolver a otro contenido ahí (hijack por slug corto).
   const nativeSlug = id.slice(id.indexOf('_') + 1);
-  const scraped = nativeSlug.includes('_') || id.startsWith('gani_') ? null : await scrapeGnulahdDetail(id);
+  const scraped = isExternal || isAnime || nativeSlug.includes('_') ? null : await scrapeGnulahdDetail(id);
   if (scraped) {
     const scrapedComplete = isSeriesCol ? !!scraped.seasons?.length : !!scraped.videos?.length;
-    if (scrapedComplete) {
-      await healGnulahd(collection, scraped);
+    const scrapedMatches = isAnime || !scraped.title || !item?.title || titlesMatchExact(scraped.title, item.title);
+    if (scrapedComplete && scrapedMatches) {
+      await healGnulahd(collection, scraped, item?.source);
     }
-    return scraped;
+    if (scrapedMatches) return scraped;
+    logger.warn({ id, scraped: scraped.title, catalog: item?.title }, 'GNULA devolvió otro contenido para el ítem; se busca en los proveedores de respaldo');
   }
 
   // Título que GNULA no tiene pero sí existe en PelisPlus HD: se scrapea con el
-  // mismo slug, se guarda en la colección v2 y se devuelve.
+  // mismo slug, se guarda en la colección v2 y se devuelve. Si el ítem vino de
+  // PelisPedia, se intenta ahí primero.
   if (collection !== 'gnulahd-anime') {
     const slug = id.replace(/^g(?:mov|ser|ani)_/, '');
-    let pelisDetail = isSeriesCol ? await scrapeSeriesDetail(`ser_${slug}`) : await scrapeMovieDetail(`mov_${slug}`);
-    const pelisComplete = isSeriesCol ? !!pelisDetail?.seasons?.length : !!pelisDetail?.videos?.length;
-    if (pelisDetail && pelisComplete) {
-      const normalized: ContentDetail = { ...pelisDetail, id };
-      await healGnulahd(collection, normalized);
-      return normalized;
-    }
-    // PelisPedia comparte el mismo slug y es el último respaldo.
-    pelisDetail = isSeriesCol ? await scrapePelisPediaSeriesDetail(`ser_${slug}`) : await scrapePelisPediaMovieDetail(`mov_${slug}`);
-    const pelisPediaComplete = isSeriesCol ? !!pelisDetail?.seasons?.length : !!pelisDetail?.videos?.length;
-    if (pelisDetail && pelisPediaComplete) {
-      const normalized: ContentDetail = { ...pelisDetail, id };
-      await healGnulahd(collection, normalized);
-      return normalized;
+    const fetchPelisPlus = () => (isSeriesCol ? scrapeSeriesDetail(`ser_${slug}`) : scrapeMovieDetail(`mov_${slug}`));
+    const fetchPelisPedia = () => (isSeriesCol ? scrapePelisPediaSeriesDetail(`ser_${slug}`) : scrapePelisPediaMovieDetail(`mov_${slug}`));
+    const order: Array<['pelisplus' | 'pelispedia', typeof fetchPelisPlus]> = isExternal && item?.source === 'pelispedia'
+      ? [['pelispedia', fetchPelisPedia], ['pelisplus', fetchPelisPlus]]
+      : [['pelisplus', fetchPelisPlus], ['pelispedia', fetchPelisPedia]];
+    for (const [provider, fetchDetail] of order) {
+      const detail = await fetchDetail();
+      const providerComplete = isSeriesCol ? !!detail?.seasons?.length : !!detail?.videos?.length;
+      if (detail && providerComplete) {
+        // El contenido debe corresponder al título del ítem; si no, se prueba
+        // el siguiente proveedor.
+        if (!isAnime && detail.title && item?.title && !titlesMatchExact(detail.title, item.title)) {
+          logger.warn({ id, provider, scraped: detail.title, catalog: item.title }, 'Proveedor devolvió otro contenido; se prueba el siguiente');
+          continue;
+        }
+        const normalized: ContentDetail = { ...detail, id };
+        await healGnulahd(collection, normalized, isExternal ? item?.source : undefined);
+        return normalized;
+      }
     }
   } else {
     // Anime: el catálogo usa slugs de jkanime (subtitulado); el latino de

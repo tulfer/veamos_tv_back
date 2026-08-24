@@ -186,6 +186,9 @@ export interface SyncMovie {
   country?: string;
   videos?: VideoLanguage[];
   downloads?: DownloadLink[];
+  /** Proveedor de origen cuando el ítem fue persistido por la búsqueda
+   *  (PelisPlus/PelisPedia); los sincronizados desde GNULA no lo llevan. */
+  source?: 'pelisplus' | 'pelispedia';
   /** Detalle completo cacheado por los sync de GNULA HD. */
   content?: ContentDetail;
 }
@@ -204,7 +207,10 @@ export interface SyncSeries {
   seasons?: Season[];
   videos?: VideoLanguage[];
   downloads?: DownloadLink[];
-type?: 'series' | 'anime';
+  type?: 'series' | 'anime';
+  /** Proveedor de origen cuando el ítem fue persistido por la búsqueda
+   *  (PelisPlus/PelisPedia); los sincronizados desde GNULA no lo llevan. */
+  source?: 'pelisplus' | 'pelispedia';
   /** Detalle completo cacheado por los sync de GNULA HD. */
   content?: ContentDetail;
 }

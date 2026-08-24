@@ -91,13 +91,15 @@ async function persistExternalToV2(external: { movies: MediaItem[]; series: Medi
     const newSeries: SyncSeries[] = [];
     for (const item of external.movies) {
       if (!moviesById.has(item.id)) {
-        newMovies.push({ id: item.id, title: item.title, poster: item.poster });
+        const source = item.source === 'pelispedia' || item.source === 'pelisplus' ? item.source : undefined;
+        newMovies.push({ id: item.id, title: item.title, poster: item.poster, ...(source ? { source } : {}) });
         moviesById.set(item.id, {} as SyncMovie);
       }
     }
     for (const item of external.series) {
       if (!seriesById.has(item.id)) {
-        newSeries.push({ id: item.id, title: item.title, poster: item.poster, type: item.type === 'anime' ? 'anime' : undefined });
+        const source = item.source === 'pelispedia' || item.source === 'pelisplus' ? item.source : undefined;
+        newSeries.push({ id: item.id, title: item.title, poster: item.poster, type: item.type === 'anime' ? 'anime' : undefined, ...(source ? { source } : {}) });
         seriesById.set(item.id, {} as SyncSeries);
       }
     }
@@ -176,8 +178,8 @@ export async function searchAll(query: string, page = 1): Promise<SearchResult> 
     .slice(0, 20)
     .map((c: any) => ({ id: c.id, title: c.title, poster: c.logo, type: 'live' as const, source: 'live' as const }));
 
-  const externalMovies = dedupeById([...pelis.movies, ...pelispedia.movies].map(toV2Id));
-  const externalSeries = dedupeById([...pelis.series, ...pelispedia.series].map(toV2Id));
+  const externalMovies = dedupeById([...markSource(pelis.movies, 'pelisplus'), ...markSource(pelispedia.movies, 'pelispedia')].map(toV2Id));
+  const externalSeries = dedupeById([...markSource(pelis.series, 'pelisplus'), ...markSource(pelispedia.series, 'pelispedia')].map(toV2Id));
   if (externalMovies.length || externalSeries.length) {
     await persistExternalToV2({ movies: externalMovies, series: externalSeries });
   }
@@ -217,7 +219,7 @@ export async function searchByType(
 
   const contentItems = mergeProviders(query, syncedItems, pelisItems, pelisPediaItems);
 
-  const external = isMovie ? [...pelis.movies, ...pelispedia.movies] : [...pelis.series, ...pelispedia.series];
+  const external = isMovie ? [...markSource(pelis.movies, 'pelisplus'), ...markSource(pelispedia.movies, 'pelispedia')] : [...markSource(pelis.series, 'pelisplus'), ...markSource(pelispedia.series, 'pelispedia')];
   const externalItems = dedupeById(external.map(toV2Id));
   if (externalItems.length) {
     await persistExternalToV2(isMovie ? { movies: externalItems, series: [] } : { movies: [], series: externalItems });
@@ -231,4 +233,8 @@ export async function searchByType(
  *  mismo contenido puede llegar con títulos ligeramente distintos. */
 function dedupeById<T extends MediaItem>(items: T[]): T[] {
   return [...new Map(items.map((item) => [item.id, item])).values()];
+}
+
+function markSource(items: MediaItem[], source: 'pelisplus' | 'pelispedia'): MediaItem[] {
+  return items.map((item) => ({ ...item, source }));
 }
