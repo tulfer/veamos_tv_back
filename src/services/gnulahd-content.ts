@@ -301,9 +301,10 @@ async function persistGnulahdDetails(details: ContentDetail[]): Promise<void> {
 function normalizeTitle(value: string): string {
   return value
     .toLowerCase()
-    .trim()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
     .replace(/\s+/g, ' ');
 }
 
@@ -330,6 +331,15 @@ export async function getGnulahdDetailContent(id: string): Promise<ContentDetail
   // con otro contenido ahí).
   const isExternal = item?.source === 'pelisplus' || item?.source === 'pelispedia';
   const isAnime = id.startsWith('gani_');
+  const isLegacyId = id.startsWith('mov_') || id.startsWith('ser_');
+
+  // Los ítems del catálogo legacy (mov_/ser_, sincronizados desde pelisplus
+  // pero con contenido en GNULA) no viven en las colecciones v2; se busca aquí
+  // su título para poder validar el contenido que devuelva GNULA.
+  const legacyItem: SyncMovie | SyncSeries | undefined = isLegacyId
+    ? (id.startsWith('mov_') ? synced?.movies?.find((m) => m.id === id) : synced?.series?.find((s) => s.id === id))
+    : undefined;
+  const catalogTitle = item?.title || legacyItem?.title;
 
   // El contenido cacheado solo se confía si su título corresponde al del
   // catálogo (no aplica a anime: jkanime/latanime usan títulos propios).
@@ -359,23 +369,30 @@ export async function getGnulahdDetailContent(id: string): Promise<ContentDetail
   // propia (jkanime/latanime): en ambos casos se va directo al respaldo sin
   // quemar reintentos en un 404. Los externos tampoco usan GNULA: su slug
   // puede resolver a otro contenido ahí (hijack por slug corto).
+  // Los legacy (mov_/ser_ del catálogo sincronizado) sí existen en GNULA con
+  // guiones: se convierten (guiones bajos → guiones) y se validan por título.
   const nativeSlug = id.slice(id.indexOf('_') + 1);
-  const scraped = isExternal || isAnime || nativeSlug.includes('_') ? null : await scrapeGnulahdDetail(id);
+  const gnulahdId = isLegacyId
+    ? `${id.startsWith('mov_') ? 'gmov_' : 'gser_'}${id.slice(4).replace(/_/g, '-')}`
+    : id;
+  const shouldSkipGnula = isExternal || isAnime || (!isLegacyId && nativeSlug.includes('_'));
+  const scraped = shouldSkipGnula ? null : await scrapeGnulahdDetail(gnulahdId);
   if (scraped) {
     const scrapedComplete = isSeriesCol ? !!scraped.seasons?.length : !!scraped.videos?.length;
-    const scrapedMatches = isAnime || !scraped.title || !item?.title || titlesMatchExact(scraped.title, item.title);
+    const scrapedMatches = isAnime || !scraped.title || !catalogTitle || titlesMatchExact(scraped.title, catalogTitle);
     if (scrapedComplete && scrapedMatches) {
-      await healGnulahd(collection, scraped, item?.source);
+      await healGnulahd(collection, { ...scraped, id }, item?.source);
     }
-    if (scrapedMatches) return scraped;
-    logger.warn({ id, scraped: scraped.title, catalog: item?.title }, 'GNULA devolvió otro contenido para el ítem; se busca en los proveedores de respaldo');
+    if (scrapedMatches) return { ...scraped, id };
+    logger.warn({ id, scraped: scraped.title, catalog: catalogTitle }, 'GNULA devolvió otro contenido para el ítem; se busca en los proveedores de respaldo');
   }
 
   // Título que GNULA no tiene pero sí existe en PelisPlus HD: se scrapea con el
   // mismo slug, se guarda en la colección v2 y se devuelve. Si el ítem vino de
   // PelisPedia, se intenta ahí primero.
   if (collection !== 'gnulahd-anime') {
-    const slug = id.replace(/^g(?:mov|ser|ani)_/, '');
+    // Cubre ids nativos (gmov_/gser_), legacy (mov_/ser_) y convertidos.
+    const slug = id.replace(/^g?(?:mov|ser|ani)_/, '');
     const fetchPelisPlus = () => (isSeriesCol ? scrapeSeriesDetail(`ser_${slug}`) : scrapeMovieDetail(`mov_${slug}`));
     const fetchPelisPedia = () => (isSeriesCol ? scrapePelisPediaSeriesDetail(`ser_${slug}`) : scrapePelisPediaMovieDetail(`mov_${slug}`));
     const order: Array<['pelisplus' | 'pelispedia', typeof fetchPelisPlus]> = isExternal && item?.source === 'pelispedia'
