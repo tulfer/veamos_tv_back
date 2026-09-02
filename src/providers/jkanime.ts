@@ -219,6 +219,61 @@ export async function scrapeJkanimeDetail(slug: string, onLog?: (message: string
 /** Top Anime desde el home de jkanime: los 10 ítems de las dos filas al final
  *  (.row.upto con 4 + .row.lower con 6), cada uno con su posición (data-rank),
  *  que NO es una calificación sino el orden del ranking. */
+/** Busca animes por query y retorna todos los resultados (hasta 20). */
+export async function searchJkanimeResults(query: string): Promise<MediaItem[]> {
+  try {
+    const searchUrl = `${BASE_URL}/buscar/${encodeURIComponent(query)}`;
+    const html = await fetchHTML(searchUrl);
+    const $ = cheerio.load(html);
+    const items: MediaItem[] = [];
+    const seen = new Set<string>();
+    // Primer pase: .anime__item (resultado estándar)
+    $('.anime__item').each((_, el) => {
+      const $el = $(el);
+      const href = absoluteUrl($el.find('a[href]').first().attr('href') || '', searchUrl);
+      if (!href) return;
+      try {
+        const { hostname, pathname } = new URL(href);
+        if (hostname !== 'jkanime.net') return;
+        const slug = pathname.replace(/^\/+|\/+$/g, '');
+        if (!slug || seen.has(slug) || !/^[-a-z0-9]+$/i.test(slug)) return;
+        seen.add(slug);
+        const posterEl = $el.find('.set-bg[data-setbg]').first() || $el.find('img').first();
+        const poster = posterEl.attr('data-setbg') || posterEl.attr('data-src') || posterEl.attr('src') || undefined;
+        const title =
+          $el.find('.anime__item__text h5').first().text().trim() ||
+          $el.find('h3').first().text().trim() ||
+          slug.replace(/-/g, ' ');
+        if (!title) return;
+        items.push({ id: `gani_${slug}`, title, poster, type: 'anime' });
+      } catch { /* skip */ }
+    });
+    // Respaldo: cualquier link a detalle (si no hubo .anime__item)
+    if (!items.length) {
+      $('a[href]').each((_, el) => {
+        if (items.length >= 20) return false;
+        const href = absoluteUrl($(el).attr('href') || '', searchUrl);
+        if (!href) return;
+        try {
+          const { hostname, pathname } = new URL(href);
+          if (hostname !== 'jkanime.net') return;
+          if (!/^\/[a-z0-9]+(?:-[a-z0-9]+)*\/?$/i.test(pathname)) return;
+          const slug = pathname.replace(/^\/+|\/+$/g, '');
+          if (!slug || seen.has(slug)) return;
+          seen.add(slug);
+          const title = $(el).text().trim() || slug.replace(/-/g, ' ');
+          items.push({ id: `gani_${slug}`, title, type: 'anime' });
+        } catch { /* skip */ }
+      });
+    }
+    logger.info({ query, results: items.length }, 'JKAnime search');
+    return items;
+  } catch (error) {
+    logger.error({ query, error: (error as Error).message }, 'JKAnime search failed');
+    return [];
+  }
+}
+
 export async function scrapeJkanimeTopAnime(): Promise<MediaItem[]> {
   try {
     const html = await fetchHTML(`${BASE_URL}/`);

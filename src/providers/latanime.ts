@@ -197,6 +197,40 @@ export async function scrapeLatanimeEmision(): Promise<MediaItem[]> {
   }
 }
 
+/** Busca animes por query y retorna todos los resultados (hasta 20). */
+export async function searchLatanimeResults(query: string): Promise<MediaItem[]> {
+  try {
+    const searchUrl = `${BASE_URL}/buscar?q=${encodeURIComponent(query)}`;
+    const html = await fetchHTML(searchUrl);
+    const $ = cheerio.load(html);
+    const items: MediaItem[] = [];
+    const seen = new Set<string>();
+    // Primer pase: cards con link a /anime/
+    $('a[href*="/anime/"]').each((_, el) => {
+      if (items.length >= 20) return false;
+      const href = absoluteUrl($(el).attr('href') || '', `${BASE_URL}/buscar`);
+      if (!href) return;
+      try {
+        const { hostname, pathname } = new URL(href);
+        if (hostname !== 'latanime.org') return;
+        const slug = pathname.split('/').filter(Boolean).pop() || '';
+        if (!slug || seen.has(slug)) return;
+        seen.add(slug);
+        const img = $(el).find('img').first();
+        const poster = img.attr('data-src') || img.attr('src') || undefined;
+        const title = $(el).find('h3').first().text().trim() || slug.replace(/-/g, ' ');
+        if (!title) return;
+        items.push({ id: `gani_${slug}`, title, poster, type: 'anime' });
+      } catch { /* skip */ }
+    });
+    logger.info({ query, results: items.length }, 'Latanime search');
+    return items;
+  } catch (error) {
+    logger.error({ query, error: (error as Error).message }, 'Latanime search failed');
+    return [];
+  }
+}
+
 /** Calendario de https://latanime.org/calendario para un día concreto
  *  (lunes/martes/miercoles/jueves/viernes/sabado/domingo/otros). */
 export async function scrapeLatanimeCalendarDay(day: string): Promise<{ day: string; items: MediaItem[] }> {

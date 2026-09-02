@@ -11,7 +11,7 @@ export async function searchHandler(request: FastifyRequest, reply: FastifyReply
   const pageNum = parseInt(page) || 1;
 
   let results;
-  if (type && ['movie', 'series', 'live'].includes(type)) {
+  if (type && ['movie', 'series', 'anime', 'live'].includes(type)) {
     results = await searchByType(q, type as any, pageNum);
   } else {
     results = await searchAll(q, pageNum);

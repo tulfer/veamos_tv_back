@@ -15,7 +15,7 @@ export interface MediaItem {
   /** Número de episodio relevante (ej: calendario "Próximo - N" o programación). */
   episode?: number;
   /** Proveedor de origen en búsquedas combinadas. */
-  source?: 'gnula' | 'pelisplus' | 'pelispedia' | 'live';
+  source?: 'gnula' | 'pelisplus' | 'pelispedia' | 'live' | 'jkanime' | 'latanime';
   content?: ContentDetail;
 }
 

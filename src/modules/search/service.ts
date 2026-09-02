@@ -2,6 +2,8 @@ import { MediaItem, SearchResult, SyncMovie, SyncSeries } from '../../types';
 import { fetchLiveChannels } from '../../providers/live-tv';
 import { scrapeSearch } from '../../providers/search';
 import { scrapePelisPediaSearch } from '../../providers/pelispedia';
+import { searchJkanimeResults } from '../../providers/jkanime';
+import { searchLatanimeResults } from '../../providers/latanime';
 import { upsertItemsByCol, loadSyncData } from '../../services/data-store';
 import { memoryCache } from '../../cache/memory';
 import { logger } from '../../utils/logger';
@@ -47,14 +49,14 @@ function normalize(value: string): string {
     .replace(/[\u0300-\u036f]/g, '');
 }
 
-async function searchSync(query: string): Promise<{ movies: MediaItem[]; series: MediaItem[] }> {
+async function searchSync(query: string): Promise<{ movies: MediaItem[]; series: MediaItem[]; anime: MediaItem[] }> {
   const data = await loadSyncData();
-  if (!data) return { movies: [], series: [] };
+  if (!data) return { movies: [], series: [], anime: [] };
 
   const q = normalize(query);
   const pick = (
     items: Array<{ id: string; title: string; poster?: string; rating?: number; year?: number }>,
-    type: 'movie' | 'series',
+    type: 'movie' | 'series' | 'anime',
   ): MediaItem[] =>
     items
       .filter((item) => normalize(item.title).includes(q))
@@ -66,6 +68,7 @@ async function searchSync(query: string): Promise<{ movies: MediaItem[]; series:
   return {
     movies: pick(data.movies, 'movie'),
     series: pick(data.series, 'series'),
+    anime: pick(data.gnulahdAnime, 'anime'),
   };
 }
 
@@ -140,6 +143,30 @@ function mergeProviders(
   return merged.sort(byRelevance(query));
 }
 
+/** Mezcla resultados de anime (catálogo local, jkanime y latanime)
+ *  deduplicando por id y por título exacto. */
+function mergeAnimeProviders(
+  query: string,
+  synced: MediaItem[],
+  jkanime: MediaItem[],
+  latanime: MediaItem[],
+): MediaItem[] {
+  const byId = new Set<string>();
+  const byTitle = new Set<string>();
+  const merged: MediaItem[] = [];
+  const add = (item: MediaItem, source: 'gnula' | 'jkanime' | 'latanime') => {
+    const key = normalize(item.title);
+    if (byId.has(item.id) || byTitle.has(key)) return;
+    byId.add(item.id);
+    byTitle.add(key);
+    merged.push({ ...item, source });
+  };
+  for (const item of synced) add(item, 'gnula');
+  for (const item of jkanime) add(item, 'jkanime');
+  for (const item of latanime) add(item, 'latanime');
+  return merged.sort(byRelevance(query));
+}
+
 function paginate(items: MediaItem[], page: number, query: string): SearchResult {
   const start = (page - 1) * PAGE_SIZE;
   return {
@@ -157,12 +184,14 @@ export async function searchAll(query: string, page = 1): Promise<SearchResult> 
   if (cached) return cached;
 
   // Los 3 proveedores SIEMPRE: GNULA (catálogo sincronizado), PelisPlus HD y
-  // PelisPedia; los resultados se mezclan y se ordenan de más a menos
-  // coincidencia con la consulta.
-  const [synced, pelis, pelispedia] = await Promise.all([
+  // PelisPedia + anime (catálogo local, jkanime y latanime); los resultados se
+  // mezclan y se ordenan de más a menos coincidencia con la consulta.
+  const [synced, pelis, pelispedia, jkanime, latanime] = await Promise.all([
     searchSync(query),
     scrapeSearch(query),
     scrapePelisPediaSearch(query),
+    searchJkanimeResults(query),
+    searchLatanimeResults(query),
   ]);
 
   const contentItems = mergeProviders(
@@ -171,6 +200,7 @@ export async function searchAll(query: string, page = 1): Promise<SearchResult> 
     [...pelis.movies.map(toV2Id), ...pelis.series.map(toV2Id)],
     [...pelispedia.movies.map(toV2Id), ...pelispedia.series.map(toV2Id)],
   );
+  const animeItems = mergeAnimeProviders(query, synced.anime, jkanime, latanime);
 
   const liveChannels = await fetchLiveChannels().catch(() => [] as any[]);
   const liveItems: MediaItem[] = liveChannels
@@ -184,14 +214,14 @@ export async function searchAll(query: string, page = 1): Promise<SearchResult> 
     await persistExternalToV2({ movies: externalMovies, series: externalSeries });
   }
 
-  const result = paginate([...contentItems, ...liveItems], page, query);
+  const result = paginate([...contentItems, ...animeItems, ...liveItems], page, query);
   memoryCache.set(cacheKey, result, 120_000);
   return result;
 }
 
 export async function searchByType(
   query: string,
-  type: 'movie' | 'series' | 'live',
+  type: 'movie' | 'series' | 'anime' | 'live',
   page = 1,
 ): Promise<SearchResult> {
   const q = normalize(query);
@@ -204,6 +234,16 @@ export async function searchByType(
       .map((c: any) => ({ id: c.id, title: c.title, poster: c.logo, type: 'live' as const, source: 'live' as const }));
     const result = paginate(items, page, query);
     return result;
+  }
+
+  if (type === 'anime') {
+    const [synced, jkanime, latanime] = await Promise.all([
+      searchSync(query),
+      searchJkanimeResults(query),
+      searchLatanimeResults(query),
+    ]);
+    const contentItems = mergeAnimeProviders(query, synced.anime, jkanime, latanime);
+    return paginate(contentItems, page, query);
   }
 
   const isMovie = type === 'movie';
