@@ -191,6 +191,9 @@ export interface SyncMovie {
   source?: 'pelisplus' | 'pelispedia';
   /** Detalle completo cacheado por los sync de GNULA HD. */
   content?: ContentDetail;
+  /** Momento (ms epoch) en que se resolvió content; los contenidos viejos se
+   *  re-resuelven (TTL) para refrescar capítulos. */
+  contentUpdatedAt?: number;
 }
 
 export interface SyncSeries {
@@ -213,6 +216,9 @@ export interface SyncSeries {
   source?: 'pelisplus' | 'pelispedia';
   /** Detalle completo cacheado por los sync de GNULA HD. */
   content?: ContentDetail;
+  /** Momento (ms epoch) en que se resolvió content; los contenidos viejos se
+   *  re-resuelven (TTL) para refrescar capítulos. */
+  contentUpdatedAt?: number;
 }
 
 export interface SyncData {

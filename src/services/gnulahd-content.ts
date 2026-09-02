@@ -21,6 +21,17 @@ import { pushLog } from './sync-status';
 type GnulahdCollection = 'gnulahd-movies' | 'gnulahd-series' | 'gnulahd-anime';
 type GnulahdLogType = 'gnulahdHome' | 'gnulahdMovies' | 'gnulahdSeries' | 'gnulahdAnime' | 'gnulahdItem';
 
+/** Los contenidos cacheados más viejos que esto se re-resuelven para
+ *  refrescar capítulos (TTL de 24h). */
+export const CONTENT_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** ¿El content de un ítem se considera vigente según su contentUpdatedAt?
+ *  Las filas sin timestamp se tratan como vencidas (se re-resuelven una vez
+ *  y el heal les escribe el timestamp). */
+export function isContentFresh(updatedAt?: number): boolean {
+  return typeof updatedAt === 'number' && Date.now() - updatedAt < CONTENT_TTL_MS;
+}
+
 function serverCount(videos?: VideoLanguage[]): number {
   return videos?.reduce((total, language) => total + (language.servers?.length || 0), 0) || 0;
 }
@@ -223,7 +234,13 @@ function mapGnulahdSeries(series: SyncSeries): ContentDetail {
 async function healGnulahd(collection: GnulahdCollection, detail: ContentDetail, source?: string): Promise<void> {
   try {
     const { id, ...clean } = JSON.parse(JSON.stringify(detail)) as { id: string } & Record<string, unknown>;
-    await upsertItemByCol<{ id: string } & Record<string, unknown>>(collection, { id, content: detail, ...clean, ...(source ? { source } : {}) });
+    await upsertItemByCol<{ id: string } & Record<string, unknown>>(collection, {
+      id,
+      content: detail,
+      contentUpdatedAt: Date.now(),
+      ...clean,
+      ...(source ? { source } : {}),
+    });
     memoryCache.del('sync:data');
     logger.info({ id: detail.id, col: collection }, 'Detalle GNULA enriquecido guardado en la base');
   } catch (error) {
@@ -293,6 +310,7 @@ async function persistGnulahdDetails(details: ContentDetail[]): Promise<void> {
     await upsertItemsByCol(collection, collectionDetails.map((detail) => ({
       id: detail.id,
       content: detail,
+      contentUpdatedAt: Date.now(),
       ...detail,
     })));
   }
@@ -342,10 +360,19 @@ export async function getGnulahdDetailContent(id: string): Promise<ContentDetail
   const catalogTitle = item?.title || legacyItem?.title;
 
   // El contenido cacheado solo se confía si su título corresponde al del
-  // catálogo (no aplica a anime: jkanime/latanime usan títulos propios).
-  const cachedContentOk = !item?.content || isAnime || !item.title || !item.content.title || titlesMatchExact(item.content.title, item.title);
-  if (item?.content && !cachedContentOk) {
-    logger.warn({ id, cached: item.content.title, catalog: item.title }, 'Contenido cacheado no corresponde al ítem; se re-resuelve');
+  // catálogo (no aplica a anime: jkanime/latanime usan títulos propios) Y
+  // está vigente (menos de CONTENT_TTL_MS). Si está vencido se re-resuelve
+  // para refrescar capítulos.
+  const contentUsable =
+    !!item?.content &&
+    isContentFresh(item.contentUpdatedAt) &&
+    (isAnime || !item.title || !item.content.title || titlesMatchExact(item.content.title, item.title));
+  // Solo se restaura el contenido previo si el motivo de invalidación fue la
+  // antigüedad (no un desajuste de título, que protege contra hijacks).
+  const staleOnly = !!item?.content && !isContentFresh(item.contentUpdatedAt);
+  const previousContent = item?.content;
+  if (item?.content && !contentUsable) {
+    logger.warn({ id, updatedAt: item.contentUpdatedAt, cached: item.content.title, catalog: item.title }, 'Contenido cacheado no corresponde o está vencido; se re-resuelve');
     item.content = undefined;
     (item as SyncSeries).seasons = undefined;
     (item as SyncMovie).videos = undefined;
@@ -424,7 +451,15 @@ export async function getGnulahdDetailContent(id: string): Promise<ContentDetail
     }
   }
 
-  return item ? (isSeriesCol ? mapGnulahdSeries(item as SyncSeries) : mapGnulahdMovie(item as SyncMovie)) : null;
+  // Si todo falló pero el ítem ya tenía contenido vencido (no un hijack por
+  // título), se devuelve el viejo en vez de dejar el ítem sin contenido.
+  if (!item) return null;
+  if (previousContent && staleOnly) {
+    item.content = previousContent;
+    (item as SyncSeries).seasons = (previousContent as ContentDetail).seasons;
+    (item as SyncMovie).videos = (previousContent as ContentDetail).videos;
+  }
+  return isSeriesCol ? mapGnulahdSeries(item as SyncSeries) : mapGnulahdMovie(item as SyncMovie);
 }
 
 /** Contenido de anime on-demand: JKAnime (subtitulado) como base de episodios

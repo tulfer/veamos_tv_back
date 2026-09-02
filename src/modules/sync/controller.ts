@@ -635,6 +635,7 @@ const result: SyncSeries = {
             videos: detail.videos,
             downloads: detail.downloads,
             content: detail,
+            contentUpdatedAt: Date.now(),
           };
           results.push(result);
           try { await onItem?.(result); } catch (error) { logger.warn({ error, id: result.id }, 'No se pudo guardar item GNULA durante el sync'); }
@@ -654,6 +655,7 @@ const result: SyncSeries = {
             videos: detail.videos,
             downloads: detail.downloads,
             content: detail,
+            contentUpdatedAt: Date.now(),
           };
           results.push(result);
           try { await onItem?.(result); } catch (error) { logger.warn({ error, id: result.id }, 'No se pudo guardar item GNULA durante el sync'); }
@@ -791,9 +793,9 @@ export async function runAnimeSync(pages: number[], shouldReplace = false): Prom
     const pageList = pages.length > 0 ? pages : Array.from({ length: Math.min(totalPages, 10) }, (_, i) => i + 1);
     pushLog(type, `Directorio jkanime: ${firstPage.total || '?'} animes, ${pageList.length} páginas a escanear`);
 
-    // Contenidos ya persistidos: se conservan al re-sincronizar el catálogo y
-    // solo se resuelven los que falten (o todos si replace).
-    const persistedContent = new Map(((await loadSyncData())?.gnulahdAnime || []).map((item) => [item.id, item.content]));
+    // Contenidos ya persistidos: se reutilizan mientras estén vigentes (<24h)
+    // y se re-resuelven los faltantes o vencidos (o todos si replace).
+    const persistedContent = new Map(((await loadSyncData())?.gnulahdAnime || []).map((item) => [item.id, { content: item.content, updatedAt: item.contentUpdatedAt }]));
 
     const todos: typeof firstPage.items = [];
     const seen = new Set<string>();
@@ -818,6 +820,7 @@ export async function runAnimeSync(pages: number[], shouldReplace = false): Prom
       }
       updateSyncProgress(type, todos.length, `Escaneando página ${page}/${pageList.length} del directorio (${todos.length} animes)...`);
       for (const item of pageItems) {
+        const persisted = persistedContent.get(item.id);
         const write = persistQueue.then(() =>
           upsertItemByCol(collection, {
             id: item.id,
@@ -828,7 +831,8 @@ export async function runAnimeSync(pages: number[], shouldReplace = false): Prom
             description: item.description,
             genres: item.genres,
             type: 'anime',
-            content: persistedContent.get(item.id),
+            content: persisted?.content,
+            contentUpdatedAt: persisted?.updatedAt,
           } as SyncSeries),
         );
         persistQueue = write.catch(() => undefined);
@@ -840,8 +844,10 @@ export async function runAnimeSync(pages: number[], shouldReplace = false): Prom
     await saveAnimeHomeData({ banners, calendario, ultimosEpisodios: schedule, ultimasTemporadas, topAnime, todos, totalTodos: firstPage.total || todos.length, updatedAt: Date.now() });
 
     // Contenidos de cada anime: jkanime (subtitulado, slug conocido del
-    // catálogo) como base y latanime (latino) mezclado por episodio.
-    const { scrapeAnimeContent } = await import('../../services/gnulahd-content');
+    // catálogo) como base y latanime (latino) mezclado por episodio. Solo se
+    // reutiliza el persistido si está vigente (<24h); los vencidos o que no
+    // tienen content se re-resuelven para refrescar capítulos.
+    const { scrapeAnimeContent, isContentFresh } = await import('../../services/gnulahd-content');
     const CONTENT_CONC = 4;
     let contentsDone = 0;
     let contentsWithData = 0;
@@ -850,17 +856,18 @@ export async function runAnimeSync(pages: number[], shouldReplace = false): Prom
       const batch = todos.slice(start, start + CONTENT_CONC);
       const batchResults = await Promise.all(
         batch.map(async (item) => {
-          if (!shouldReplace && persistedContent.get(item.id)?.seasons?.length) {
-            return { item, content: persistedContent.get(item.id) };
+          const persisted = persistedContent.get(item.id);
+          if (!shouldReplace && persisted?.content?.seasons?.length && isContentFresh(persisted.updatedAt)) {
+            return { item, content: persisted.content, contentUpdatedAt: persisted.updatedAt };
           }
           const slug = item.id.replace(/^gani_/, '');
           const content = await scrapeAnimeContent(slug, item.title, slug);
-          return { item, content };
+          return { item, content, contentUpdatedAt: Date.now() };
         }),
       );
       await upsertItemsByCol(
         collection,
-        batchResults.map(({ item, content }) => ({
+        batchResults.map(({ item, content, contentUpdatedAt }) => ({
           id: item.id,
           title: item.title,
           poster: item.poster,
@@ -870,6 +877,7 @@ export async function runAnimeSync(pages: number[], shouldReplace = false): Prom
           genres: item.genres,
           type: 'anime',
           content,
+          contentUpdatedAt,
         }) as SyncSeries),
       );
       contentsDone += batch.length;
@@ -1073,6 +1081,7 @@ export async function syncGnulahdItemHandler(request: FastifyRequest, reply: Fas
       videos: detail.videos,
       downloads: detail.downloads,
       content: detail,
+      contentUpdatedAt: Date.now(),
     };
     await upsertItemByCol(collection, item);
     pushLog('gnulahdItem', `✅ ${slug} sincronizado y guardado en ${collection}`);
