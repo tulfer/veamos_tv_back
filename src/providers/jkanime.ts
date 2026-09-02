@@ -123,6 +123,12 @@ function extractServers($: cheerio.CheerioAPI, pageUrl: string, rawHtml?: string
   return servers.length ? [{ language: 'Subtitulado', servers }] : [];
 }
 
+const JKANIME_NAV_PATHS = /\b(?:buscar|usuario|dash|notificaciones|guardado|historial|directorio|horario|comunidad|aplicacion|estrenos|top|salida|lista|pedidos)\b/i;
+
+function isJkanimeNav(pathname: string): boolean {
+  return JKANIME_NAV_PATHS.test(pathname);
+}
+
 function pickJkanimeDetail(search: cheerio.CheerioAPI, searchUrl: string): string | null {
   let detailUrl: string | null = null;
   // Resultados de animes suelen estar en contenedores .anime__item
@@ -132,14 +138,13 @@ function pickJkanimeDetail(search: cheerio.CheerioAPI, searchUrl: string): strin
     if (href && new URL(href).hostname === 'jkanime.net' && /^https?:\/\/jkanime\.net\/[a-z0-9]+(?:-[a-z0-9]+)*\/?$/.test(href)) detailUrl = href;
   });
   if (!detailUrl) {
-    const NAV_PATHS = /\/\b(?:buscar|usuario|dash|notificaciones|guardado|historial|directorio|horario|comunidad|aplicacion|estrenos|top|salida|lista)\b/i;
     search('a[href]').each((_, element) => {
       if (detailUrl) return;
       const href = absoluteUrl(search(element).attr('href') || '', searchUrl);
       if (!href) return;
       try {
         const { hostname, pathname } = new URL(href);
-        if (hostname !== 'jkanime.net' || NAV_PATHS.test(pathname)) return;
+        if (hostname !== 'jkanime.net' || isJkanimeNav(pathname)) return;
         if (/\.(?:css|js|png|jpg|jpeg|gif|webp|svg)$/i.test(pathname)) return;
         if (/^\/[a-z0-9]+(?:-[a-z0-9]+)*\/?$/i.test(pathname)) detailUrl = href;
       } catch { /* ignorar */ }
@@ -248,24 +253,6 @@ export async function searchJkanimeResults(query: string): Promise<MediaItem[]> 
         items.push({ id: `gani_${slug}`, title, poster, type: 'anime' });
       } catch { /* skip */ }
     });
-    // Respaldo: cualquier link a detalle (si no hubo .anime__item)
-    if (!items.length) {
-      $('a[href]').each((_, el) => {
-        if (items.length >= 20) return false;
-        const href = absoluteUrl($(el).attr('href') || '', searchUrl);
-        if (!href) return;
-        try {
-          const { hostname, pathname } = new URL(href);
-          if (hostname !== 'jkanime.net') return;
-          if (!/^\/[a-z0-9]+(?:-[a-z0-9]+)*\/?$/i.test(pathname)) return;
-          const slug = pathname.replace(/^\/+|\/+$/g, '');
-          if (!slug || seen.has(slug)) return;
-          seen.add(slug);
-          const title = $(el).text().trim() || slug.replace(/-/g, ' ');
-          items.push({ id: `gani_${slug}`, title, type: 'anime' });
-        } catch { /* skip */ }
-      });
-    }
     logger.info({ query, results: items.length }, 'JKAnime search');
     return items;
   } catch (error) {
