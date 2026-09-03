@@ -38,18 +38,32 @@ interface GnrdPlayerData {
 const GNRD_XOR_KEY = [103, 78, 55, 100];
 const LIST_CACHE_TTL = 10 * 60_000;
 
-/** El DNS del sitio es inestable: reintenta el fetch un par de veces. */
+/** Una respuesta 200 pero vacía/corta o sin los marcadores de GNULA suele ser
+ *  un challenge anti-bot o bloqueo del datacenter (no un catálogo vacío de
+ *  verdad). Se trata como error para que los reintentos/backoff actúen y no se
+ *  cachee un "0 items" falso. */
+function isGnulahdHTMLUsable(html: string): boolean {
+  const text = html.trim();
+  if (text.length < 10_000) return false;
+  // El HTML de GNULA siempre incluye estos marcadores; un challenge no.
+  return /gnrd-card|gnrdHero|gnrd-grid|gnrd-pg-seo|wp-content/i.test(text);
+}
+
+/** El DNS del sitio es inestable Y puede responder con un challenge anti-bot:
+ *  reintenta el fetch varias veces con backoff y solo devuelve HTML que parece
+ *  un catálogo real de GNULA. */
 async function fetchGnulahdHTML(url: string): Promise<string> {
   let lastError: unknown;
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  for (let attempt = 1; attempt <= 4; attempt++) {
     try {
-      return await fetchHTML(url);
+      const html = await fetchHTML(url);
+      if (isGnulahdHTMLUsable(html)) return html;
+      lastError = new Error('HTML de GNULA no utilizable (posible anti-bot o vacío)');
+      if (attempt >= 4) break;
     } catch (error) {
       lastError = error;
-      if (attempt < 3) {
-        await new Promise((resolve) => setTimeout(resolve, 800 * attempt));
-      }
     }
+    await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
   }
   throw lastError;
 }
@@ -309,6 +323,11 @@ export async function scrapeGnulahdHome(): Promise<GnulahdHomeData> {
     if (section) sections.push(section);
   });
 
+  // Un home sin banners ni secciones indica que el HTML fue un anti-bot o
+  // quedó vacío; no debe sobrescribir el home existente con vacío.
+  if (banners.length === 0 && sections.length === 0) {
+    throw new Error('Gnulahd home sin banners ni secciones (anti-bot o vacío)');
+  }
   logger.info({ banners: banners.length, sections: sections.length }, 'Gnulahd home scraped');
   return { banners, sections, updatedAt: Date.now() };
 }
