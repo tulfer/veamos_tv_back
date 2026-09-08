@@ -38,11 +38,25 @@ const envSchema = z.object({
 });
 
 const parsed = envSchema.safeParse(process.env);
-const env = parsed.success ? parsed.data : envSchema.parse({});
+let env: z.infer<typeof envSchema>;
 
-if (!parsed.success) {
+if (parsed.success) {
+  env = parsed.data;
+} else {
+  // No tirar la config entera (y perder DATABASE_URL) por UN campo inválido
+  // (p.ej. NODE_ENV mal escrito). Se parte de los defaults del esquema y se
+  // aplican los valores de process.env que individualmente pasen la validación.
   const flat = parsed.error.flatten().fieldErrors;
-  process.stderr.write(`WARNING: Invalid env vars, using defaults: ${JSON.stringify(flat)}\n`);
+  const base = envSchema.parse({}) as Record<string, unknown>;
+  for (const key of Object.keys(envSchema.shape)) {
+    if (process.env[key] === undefined) continue;
+    const probe = { ...base, [key]: process.env[key] };
+    if (envSchema.safeParse(probe).success) {
+      base[key] = process.env[key];
+    }
+  }
+  env = base as z.infer<typeof envSchema>;
+  process.stderr.write(`WARNING: Invalid env vars, usando defaults parciales: ${JSON.stringify(flat)}\n`);
 }
 
 export { env };

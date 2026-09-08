@@ -25,6 +25,11 @@ type GnulahdLogType = 'gnulahdHome' | 'gnulahdMovies' | 'gnulahdSeries' | 'gnula
  *  refrescar capítulos (TTL de 24h). */
 export const CONTENT_TTL_MS = 24 * 60 * 60 * 1000;
 
+/** Pausa (ms) entre lotes de scrape de detalle. GNULA aplica rate-limit a IPs
+ *  de datacenter cuando recibe muchas requests seguidas; espaciar los lotes
+ *  evita el bloqueo durante prefetch del home. */
+const BATCH_DELAY_MS = 2500;
+
 /** ¿El content de un ítem se considera vigente según su contentUpdatedAt?
  *  Las filas sin timestamp se tratan como vencidas (se re-resuelven una vez
  *  y el heal les escribe el timestamp). */
@@ -287,6 +292,10 @@ export async function prefetchGnulahdDetails(
       }
     }
     onProgress?.(Math.min(i + batch.length, uniqueIds.length), uniqueIds.length, savedDetails);
+    const remaining = uniqueIds.length - (i + batch.length);
+    if (remaining > 0) {
+      await new Promise((resolve) => setTimeout(resolve, BATCH_DELAY_MS));
+    }
   }
 
   memoryCache.del('sync:data');

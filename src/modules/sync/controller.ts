@@ -41,6 +41,10 @@ const migrationStatus: MigrationStatus = {
 };
 
 const CONCURRENCY = 5;
+// Pausa (ms) entre lotes de requests de detalle. GNULA aplica rate-limit/anti-bot
+// a IPs de datacenter (dokploy) cuando reciben muchas requests seguidas; espaciar
+// los lotes reduce drásticamente los bloqueos sin dejar de poblar el catálogo.
+const BATCH_DELAY_MS = 2500;
 
 // Resultado del escaneo de canales de sitios web. No puede vivir en
 // memoryCache: runBackgroundSync lo vacía al iniciar cualquier sync y el
@@ -96,6 +100,9 @@ async function processBatch<T>(items: T[], fn: (item: T) => Promise<void>): Prom
   for (let i = 0; i < items.length; i += CONCURRENCY) {
     const batch = items.slice(i, i + CONCURRENCY);
     await Promise.allSettled(batch.map(fn));
+    if (i + CONCURRENCY < items.length && BATCH_DELAY_MS > 0) {
+      await new Promise((resolve) => setTimeout(resolve, BATCH_DELAY_MS));
+    }
   }
 }
 
@@ -883,6 +890,9 @@ export async function runAnimeSync(pages: number[], shouldReplace = false): Prom
       contentsDone += batch.length;
       contentsWithData += batchResults.filter(({ content }) => content?.seasons?.length).length;
       updateSyncProgress(type, contentsDone, `Contenidos: ${contentsDone}/${todos.length} animes...`, todos.length);
+      if (start + CONTENT_CONC < todos.length) {
+        await new Promise((resolve) => setTimeout(resolve, BATCH_DELAY_MS));
+      }
     }
 
     updateSyncProgress(type, todos.length, `${todos.length} animes sincronizados (${contentsWithData} con contenido)`);
