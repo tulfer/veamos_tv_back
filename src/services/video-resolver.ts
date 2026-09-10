@@ -3,6 +3,10 @@ import { logger } from '../utils/logger';
 import { memoryCache } from '../cache/memory';
 
 const CACHE_TTL = 600_000;
+// TTL menor para fallos de resolución: un embed roto no debe reintentarse en
+// cada prefetch (cada intento espera el timeout), pero tampoco quedar inutilizable
+// para siempre si el host vuelve.
+const FAIL_CACHE_TTL = 120_000;
 
 const STREAM_PATTERNS = [
   /(https?:\/\/[^"'\\\s<>]+\.(?:m3u8|mp4)[^"'\\\s<>]*)/gi,
@@ -52,6 +56,8 @@ export async function closeBrowser(): Promise<void> {
 export async function resolveVideoUrl(embedUrl: string): Promise<string> {
   const cacheKey = `resolved:video:${embedUrl}`;
   const cached = memoryCache.get<string>(cacheKey);
+  // El fallback devuelve la misma embedUrl; si está cacheado, reutilizarlo evita
+  // reintentar hosts rotos en cada item del prefetch.
   if (cached) return cached;
 
   try {
@@ -73,10 +79,12 @@ export async function resolveVideoUrl(embedUrl: string): Promise<string> {
     }
 
     const result = streamUrl || embedUrl;
-    memoryCache.set(cacheKey, result, CACHE_TTL);
+    memoryCache.set(cacheKey, result, streamUrl ? CACHE_TTL : FAIL_CACHE_TTL);
     return result;
   } catch (error) {
     logger.warn({ error, embedUrl }, 'Failed to resolve video URL');
+    // Cachear el fallo (corto) para no reintentar hosts muertos en cada prefetch.
+    memoryCache.set(cacheKey, embedUrl, FAIL_CACHE_TTL);
     return embedUrl;
   }
 }

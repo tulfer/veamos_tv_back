@@ -703,14 +703,15 @@ export async function runGnulahdHomeSync(): Promise<boolean> {
     const data = await scrapeGnulahdHome();
     const ids = [...data.banners, ...data.sections.flatMap((section) => section.items)].map((item) => item.id);
     await saveGnulahdHomeData(data);
-    updateSyncProgress(type, 0, `${ids.length} ítems encontrados, obteniendo contenidos...`);
+    updateSyncProgress(type, 0, `${ids.length} ítems encontrados, actualizando contenidos...`);
+    // Actualiza el content de cada ítem del home: reutiliza el vigente (<24h) y
+    // re-escarepea el faltante/vencido. Conc=2 + delay para no martillar la
+    // player API de GNULA (502 bajo rate-limit).
     const cached = await prefetchGnulahdDetails(ids, (completed, total, saved) => {
-      updateSyncProgress(type, completed, `Obteniendo contenidos (${completed}/${total}), ${saved} guardados...`, total);
+      updateSyncProgress(type, completed, `Contenidos (${completed}/${total}), ${saved} con contenido...`, total);
     }, type);
-    updateSyncProgress(type, ids.length, `${cached}/${ids.length} contenidos guardados, guardando home...`, ids.length);
-    await saveGnulahdHomeData(data);
     const count = data.banners.length + data.sections.length;
-    updateSyncProgress(type, count, `${count} banners/secciones guardadas`);
+    updateSyncProgress(type, count, `${count} banners/secciones guardadas; ${cached} contenidos actualizados`);
     return count;
   });
   return true;

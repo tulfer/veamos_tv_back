@@ -49,7 +49,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 /** Espera a que el sync en segundo plano del controller termine (polling). */
-async function waitForCompletion(type: SyncType, timeoutMs = 30 * 60 * 1000): Promise<SyncJobStatus> {
+async function waitForCompletion(type: SyncType, timeoutMs = 40 * 60 * 1000): Promise<SyncJobStatus> {
   const started = Date.now();
   for (;;) {
     const entry = getSyncStatus()[type];

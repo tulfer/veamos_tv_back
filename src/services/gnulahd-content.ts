@@ -30,11 +30,32 @@ export const CONTENT_TTL_MS = 24 * 60 * 60 * 1000;
  *  evita el bloqueo durante prefetch del home. */
 const BATCH_DELAY_MS = 2500;
 
+/** Delay entre lotes del prefetch de detalles del home. Menor que BATCH_DELAY_MS
+ *  porque con CONC=2 ya se limita el ritmo a la player API. */
+const DETAIL_BATCH_DELAY_MS = 1200;
+
 /** ¿El content de un ítem se considera vigente según su contentUpdatedAt?
  *  Las filas sin timestamp se tratan como vencidas (se re-resuelven una vez
  *  y el heal les escribe el timestamp). */
 export function isContentFresh(updatedAt?: number): boolean {
   return typeof updatedAt === 'number' && Date.now() - updatedAt < CONTENT_TTL_MS;
+}
+
+/** ¿El content tiene datos reproducibles de verdad? Un detalle cuyo player API
+ *  devolvió 502 queda con videos/seasons vacíos; ese detalle NO debe tratarse
+ *  como "vigente" (si no, una película rota quedaría sinservidor 24h). */
+export function hasPlayableContent(content?: ContentDetail | null): boolean {
+  if (!content) return false;
+  if (Array.isArray(content.videos) && content.videos.length > 0) return true;
+  if (Array.isArray(content.downloads) && content.downloads.length > 0) return true;
+  if (Array.isArray(content.seasons)) {
+    for (const season of content.seasons) {
+      if (Array.isArray(season.episodes) && season.episodes.some((e) => Array.isArray(e.videos) && e.videos.length > 0)) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 function serverCount(videos?: VideoLanguage[]): number {
@@ -261,50 +282,97 @@ export async function prefetchGnulahdDetails(
   logType: GnulahdLogType = 'gnulahdAnime',
 ): Promise<number> {
   const uniqueIds = Array.from(new Set(ids.filter(Boolean)));
-  const details: ContentDetail[] = [];
   const failedIds: string[] = [];
-  let savedDetails = 0;
-  for (let i = 0; i < uniqueIds.length; i += 5) {
-    const batch = uniqueIds.slice(i, i + 5);
+  let saved = 0;
+  let reused = 0;
+
+  // Contenido ya persistido: se reutiliza mientras esté vigente (<24h); solo se
+  // re-escarepea lo que falte o esté vencido. Así el sync del home actualiza el
+  // content sin re-scrapear todo en cada corrida (y sin martillar la player API).
+  const synced = await loadSyncData();
+  const existingById = new Map<string, SyncMovie | SyncSeries>();
+  for (const item of [...(synced?.gnulahdMovies || []), ...(synced?.gnulahdSeries || []), ...(synced?.gnulahdAnime || [])]) {
+    existingById.set(item.id, item);
+  }
+
+  const needsScrape: string[] = [];
+  for (const id of uniqueIds) {
+    const item = existingById.get(id);
+    const isAnime = id.startsWith('gani_');
+    const fresh =
+      !!item?.content &&
+      isContentFresh(item.contentUpdatedAt) &&
+      hasPlayableContent(item.content) &&
+      (isAnime || !item.title || !item.content.title || titlesMatchExact(item.content.title, item.title));
+    if (fresh) {
+      saved++;
+      reused++;
+    } else {
+      needsScrape.push(id);
+    }
+  }
+
+  const CONC = 2;
+  for (let i = 0; i < needsScrape.length; i += CONC) {
+    const batch = needsScrape.slice(i, i + CONC);
     let completedInBatch = 0;
     const results = await Promise.allSettled(batch.map(async (id) => {
       try {
-        const detail = await scrapeGnulahdDetail(id);
-        return detail ? await enrichGnulahdDetail(detail, logType) : detail;
+        // Prefetch del home: solo se captura el detalle de GNULA (con sus
+        // servidores). El enriquecimiento cruzado (pelisplus/pelispedia/
+        // jkanime/latanime) se deja para el detalle bajo demanda. Concurrencia
+        // 2 + delay: la player API de GNULA responde 502 cuando se martilla con
+        // requests en paralelo.
+        return await scrapeGnulahdDetail(id);
       } finally {
         completedInBatch++;
-        onProgress?.(Math.min(i + completedInBatch, uniqueIds.length), uniqueIds.length, savedDetails);
+        onProgress?.(saved + Math.min(i + completedInBatch, needsScrape.length), uniqueIds.length, saved);
       }
     }));
     for (const result of results) {
-      if (result.status === 'fulfilled' && result.value) {
-        details.push(result.value);
-        try {
-          await persistGnulahdDetails([result.value]);
-          savedDetails++;
-        } catch (error) {
-          logger.warn({ error, id: result.value.id }, 'No se pudo guardar detalle GNULA; el sync continuarÃ¡');
-        }
-      } else if (result.status === 'fulfilled') {
-        failedIds.push(batch[results.indexOf(result)]);
-      } else {
-        failedIds.push(batch[results.indexOf(result)]);
+      const failedId = batch[results.indexOf(result)] as string | undefined;
+      if (result.status === 'rejected') {
+        if (failedId) failedIds.push(failedId);
+        continue;
+      }
+      const detail = result.value;
+      if (!detail) {
+        if (failedId) failedIds.push(failedId);
+        continue;
+      }
+      // Se persiste siempre (los metadatos sirven), pero solo cuenta como
+      // "con contenido" si tiene datos reproducibles; si el player dio 502
+      // quedará marcado para re-intento en la siguiente corrida.
+      try {
+        await persistGnulahdDetails([detail]);
+      } catch (error) {
+        logger.warn({ error, id: detail.id }, 'No se pudo guardar detalle GNULA; el sync continuarÃ¡');
+        if (failedId) failedIds.push(failedId);
+        continue;
+      }
+      if (hasPlayableContent(detail)) {
+        saved++;
+      } else if (failedId) {
+        failedIds.push(failedId);
       }
     }
-    onProgress?.(Math.min(i + batch.length, uniqueIds.length), uniqueIds.length, savedDetails);
-    const remaining = uniqueIds.length - (i + batch.length);
+    onProgress?.(saved, uniqueIds.length, saved);
+    const remaining = needsScrape.length - (i + batch.length);
     if (remaining > 0) {
-      await new Promise((resolve) => setTimeout(resolve, BATCH_DELAY_MS));
+      await new Promise((resolve) => setTimeout(resolve, DETAIL_BATCH_DELAY_MS));
     }
   }
 
   memoryCache.del('sync:data');
   if (failedIds.length > 0) {
-    pushLog(logType, `Fallaron ${failedIds.length} detalles: ${failedIds.join(', ')}`);
-  } else {
-    pushLog(logType, 'Todos los detalles fueron procesados correctamente.');
+    pushLog(logType, `${failedIds.length} detalles sin contenido (reintentables): ${failedIds.join(', ')}`);
+  } else if (needsScrape.length > 0) {
+    pushLog(logType, 'Todos los detalles pendientes fueron procesados correctamente.');
   }
-  return savedDetails;
+  if (reused > 0) {
+    pushLog(logType, `${reused} contenidos vigentes reutilizados (no re-escrapeados)`);
+  }
+  return saved;
 }
 
 async function persistGnulahdDetails(details: ContentDetail[]): Promise<void> {
@@ -369,12 +437,13 @@ export async function getGnulahdDetailContent(id: string): Promise<ContentDetail
   const catalogTitle = item?.title || legacyItem?.title;
 
   // El contenido cacheado solo se confía si su título corresponde al del
-  // catálogo (no aplica a anime: jkanime/latanime usan títulos propios) Y
-  // está vigente (menos de CONTENT_TTL_MS). Si está vencido se re-resuelve
-  // para refrescar capítulos.
+  // catálogo (no aplica a anime: jkanime/latanime usan títulos propios), está
+  // vigente (menos de CONTENT_TTL_MS) Y tiene datos reproducibles (un detalle
+  // con player 502 quedaría sin servidores; ese deve re-resolverse).
   const contentUsable =
     !!item?.content &&
     isContentFresh(item.contentUpdatedAt) &&
+    hasPlayableContent(item.content) &&
     (isAnime || !item.title || !item.content.title || titlesMatchExact(item.content.title, item.title));
   // Solo se restaura el contenido previo si el motivo de invalidación fue la
   // antigüedad (no un desajuste de título, que protege contra hijacks).

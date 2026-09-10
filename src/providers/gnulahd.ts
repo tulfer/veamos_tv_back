@@ -1,6 +1,6 @@
 import * as cheerio from 'cheerio';
 import type { AnyNode } from 'domhandler';
-import { fetchHTML } from '../utils/http';
+import { fetchHTMLWithCookies, cookieHeader } from '../utils/http';
 import { httpClient } from '../utils/http';
 import { logger } from '../utils/logger';
 import { isUnsupportedVideoHost } from '../utils/unsupported-video-hosts';
@@ -19,7 +19,105 @@ import { storeKeys, getRow, setRow } from '../services/store';
  * IDs: gmov_<slug> (película), gser_<slug> (serie), gani_<slug> (anime).
  */
 
-export const GNULLAHD_BASE_URL = 'https://ww3.gnulahd.nu';
+/** Dominios oficiales de GNULA (mismo sitio, distintos hostnames). El primero
+ *  es el preferido; el resto se usan como respaldo si el principal no responde. */
+export const GNULLAHD_STATIC_DOMAINS = ['https://ww3.gnulahd.nu', 'https://gnulahd.click', 'https://gnulahd.bid'] as const;
+
+/** Se mantiene por compatibilidad (equivalente al dominio preferido). */
+export const GNULLAHD_BASE_URL = GNULLAHD_STATIC_DOMAINS[0];
+
+const ACTIVE_DOMAIN_TTL = 10 * 60_000;
+const DISCOVER_TTL_MS = 6 * 60 * 60 * 1000;
+
+let activeBase: string | null = null;
+let activeBaseExpires = 0;
+let discoveredDomains: string[] = [];
+let discoveredAt = 0;
+
+function normalizeGnulahdDomain(base: string): string {
+  return base.trim().replace(/\/+$/, '');
+}
+
+/** Descubre dominios oficiales desde dominiosgnulahd.com (best effort, cacheado
+ *  6 h). Si la página no responde, se usan solo los dominios estáticos. */
+async function discoverGnulahdDomains(): Promise<string[]> {
+  if (discoveredDomains.length > 0 && Date.now() - discoveredAt < DISCOVER_TTL_MS) return discoveredDomains;
+  const found: string[] = [];
+  try {
+    const response = await httpClient.get('https://dominiosgnulahd.com', { timeout: 12000 });
+    const html = response.data as string;
+    // Las "puertas" son <a class="door" href="https://.../">; algunas pueden
+    // apuntar a otros esquemas/subdominios que el propio sitio lista.
+    const re = /href="(https:\/\/[a-z0-9.-]+(?::\d+)?\/?)"/gi;
+    let match: RegExpExecArray | null;
+    while ((match = re.exec(html))) {
+      const domain = normalizeGnulahdDomain(match[1]);
+      if (domain && /gnulahd\./i.test(domain) && !found.includes(domain)) found.push(domain);
+    }
+  } catch {
+    /* sin descubrimiento: se usan los dominios estáticos */
+  }
+  discoveredDomains = found;
+  discoveredAt = Date.now();
+  return discoveredDomains;
+}
+
+/** Lista completa de dominios candidatos (estáticos + descubiertos), sin duplicados. */
+async function getGnulahdDomains(): Promise<string[]> {
+  const discovered = await discoverGnulahdDomains();
+  const list: string[] = [];
+  for (const raw of [...GNULLAHD_STATIC_DOMAINS, ...discovered]) {
+    const domain = normalizeGnulahdDomain(raw);
+    if (domain && !list.includes(domain)) list.push(domain);
+  }
+  return list;
+}
+
+/** Devuelve la base activa, validando los dominios cuando la caché venció o al
+ *  arrancar (proceso nuevo). Ante un fallo del activo se prueba el siguiente. */
+async function getGnulahdBase(force = false): Promise<string> {
+  if (!force && activeBase && Date.now() < activeBaseExpires) return activeBase;
+
+  // Arranque/proceso nuevo: reutilizar el último dominio bueno persistido
+  if (!force && !activeBase) {
+    const stored = await getRow<string>('gnulahd:domain');
+    if (stored && (GNULLAHD_STATIC_DOMAINS as readonly string[]).includes(stored)) {
+      activeBase = stored;
+      activeBaseExpires = Date.now() + 30_000;
+      return stored;
+    }
+  }
+
+  const domains = await getGnulahdDomains();
+  for (const base of domains) {
+    try {
+      const html = await fetchHTMLWithCookies(`${base}/`);
+      if (isGnulahdHTMLUsable(html)) {
+        activeBase = base;
+        activeBaseExpires = Date.now() + ACTIVE_DOMAIN_TTL;
+        void setRow('gnulahd:domain', base).catch(() => {});
+        return base;
+      }
+      // Interstitial de DDoS-Guard en el dominio: intentar obtener el pase.
+      if (/gnm=1|ddos-guard|__ddg/i.test(html)) {
+        await fetchHTMLWithCookies(`${base}/?gnm=1`, `${base}/`);
+        const again = await fetchHTMLWithCookies(`${base}/`);
+        if (isGnulahdHTMLUsable(again)) {
+          activeBase = base;
+          activeBaseExpires = Date.now() + ACTIVE_DOMAIN_TTL;
+          void setRow('gnulahd:domain', base).catch(() => {});
+          return base;
+        }
+      }
+    } catch {
+      /* siguiente dominio */
+    }
+  }
+  // Ninguno respondió: usar el preferido y volver a validar pronto.
+  activeBase = GNULLAHD_STATIC_DOMAINS[0];
+  activeBaseExpires = Date.now() + 30_000;
+  return activeBase;
+}
 
 export type GnulahdKind = 'peliculas' | 'series' | 'anime';
 
@@ -31,12 +129,17 @@ export interface GnulahdHomeData {
 
 interface GnrdPlayerData {
   t?: string;
-  langs?: { label: string; flag?: string; servers: { title: string; src: string }[] }[];
+  /** GNULA devuelve `langs` como objeto clave→idioma (p.ej. {lat:{label:'Latino',...}}) */
+  langs?: Record<string, { label: string; flag?: string; servers: { title: string; src: string }[] }>;
   dl?: { name: string; lang?: string; qual?: string; url: string }[];
 }
 
 const GNRD_XOR_KEY = [103, 78, 55, 100];
 const LIST_CACHE_TTL = 10 * 60_000;
+/** Episodios máximos por serie que se resuelven durante un sync (el resto se
+ *  resuelve bajo demanda al abrir el título). Evita que series de cientos de
+ *  episodios bloqueen el prefetch del home. */
+const MAX_EPISODES_SCRAPE = 60;
 
 /** Una respuesta 200 pero vacía/corta o sin los marcadores de GNULA suele ser
  *  un challenge anti-bot o bloqueo del datacenter (no un catálogo vacío de
@@ -49,21 +152,64 @@ function isGnulahdHTMLUsable(html: string): boolean {
   return /gnrd-card|gnrdHero|gnrd-grid|gnrd-pg-seo|wp-content/i.test(text);
 }
 
-/** El DNS del sitio es inestable Y puede responder con un challenge anti-bot:
- *  reintenta el fetch varias veces con backoff y solo devuelve HTML que parece
- *  un catálogo real de GNULA. */
-async function fetchGnulahdHTML(url: string): Promise<string> {
+/** El sitio está tras DDoS-Guard: a veces responde el interstitial (HTML corto
+ *  que redirige a /?gnm=1) y a veces el contenido real. Reintenta varias veces
+ *  con backoff, y si detecta el interstitial intenta "pasar" haciendo /?gnm=1
+ *  con las cookies que DDoS-Guard deja en la primera respuesta. */
+async function fetchGnulahdHTMLFromHost(base: string, pathAndQuery: string, referer?: string): Promise<string> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= 4; attempt++) {
     try {
-      const html = await fetchHTML(url);
+      let html = await fetchHTMLWithCookies(`${base}${pathAndQuery}`, referer);
       if (isGnulahdHTMLUsable(html)) return html;
+
+      // Interstitial de DDoS-Guard: visitar /?gnm=1 con las cookies para
+      // obtener el pase y reintentar la URL original.
+      if (html.includes('gnm=1') || /ddos-guard|__ddg/i.test(html)) {
+        await fetchHTMLWithCookies(`${base}/?gnm=1`, `${base}${pathAndQuery}`);
+        html = await fetchHTMLWithCookies(`${base}${pathAndQuery}`);
+        if (isGnulahdHTMLUsable(html)) return html;
+      }
+
       lastError = new Error('HTML de GNULA no utilizable (posible anti-bot o vacío)');
       if (attempt >= 4) break;
     } catch (error) {
       lastError = error;
     }
-    await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+    await new Promise((resolve) => setTimeout(resolve, 800 * attempt));
+  }
+  throw lastError;
+}
+
+/** Fetch de páginas GNULA con respaldo de dominios: si el dominio que sirve la
+ *  URL falla (anti-bot, bloqueo, DNS), se reintenta el mismo path en los demás
+ *  dominios oficiales y se promueve el que responda. */
+async function fetchGnulahdHTML(url: string): Promise<string> {
+  const parsed = new URL(url);
+  const preferred = `${parsed.protocol}//${parsed.host}`;
+  const pathAndQuery = parsed.pathname + parsed.search;
+
+  const candidates: string[] = [];
+  for (const base of [preferred, ...(await getGnulahdDomains())]) {
+    const normalized = normalizeGnulahdDomain(base);
+    if (normalized && !candidates.includes(normalized)) candidates.push(normalized);
+  }
+
+  let lastError: unknown;
+  for (const base of candidates) {
+    try {
+      const html = await fetchGnulahdHTMLFromHost(base, pathAndQuery, preferred);
+      if (base !== preferred && candidates.indexOf(base) > 0) {
+        // El dominio pedido dejó de responder: promover el que sí funcionó
+        activeBase = base;
+        activeBaseExpires = Date.now() + ACTIVE_DOMAIN_TTL;
+        void setRow('gnulahd:domain', base).catch(() => {});
+        logger.warn({ preferred, promovido: base }, 'Gnulahd: dominio promovido tras fallo del principal');
+      }
+      return html;
+    } catch (error) {
+      lastError = error;
+    }
   }
   throw lastError;
 }
@@ -200,24 +346,49 @@ function extractPlayerVars(html: string): { pid: number; tok: string } | null {
 }
 
 async function fetchGnrdPlayer(pid: number, tok: string, referer: string): Promise<GnrdPlayerData> {
-  const url = `${GNULLAHD_BASE_URL}/wp-json/gnrd/v1/player?id=${pid}&t=${encodeURIComponent(tok)}`;
-  try {
+  const url = `${await getGnulahdBase()}/wp-json/gnrd/v1/player?id=${pid}&t=${encodeURIComponent(tok)}`;
+  const cacheKey = `gnrd:player:${url}`;
+  const cached = memoryCache.get<GnrdPlayerData>(cacheKey);
+  if (cached) return cached;
+
+  const attempt = async (): Promise<GnrdPlayerData> => {
     const response = await httpClient.get(url, {
-      headers: { Referer: referer, 'X-Requested-With': 'XMLHttpRequest' },
-      timeout: 20000,
+      headers: {
+        Referer: referer,
+        'X-Requested-With': 'XMLHttpRequest',
+        ...(cookieHeader() ? { Cookie: cookieHeader() } : {}),
+      },
+      timeout: 12000,
     });
     const body = response.data as { p?: string };
     if (!body || typeof body.p !== 'string') return {};
     return gnrdUnpack(body.p);
+  };
+
+  try {
+    const data = await attempt();
+    if (Object.keys(data).length > 0) {
+      memoryCache.set(cacheKey, data, 120_000);
+    }
+    return data;
   } catch (error) {
-    logger.warn({ error: (error as Error).message, pid }, 'Gnulahd player API failed');
-    return {};
+    // Un 502/red puede ser rate-limit puntual: un reintento tras ~700ms suele
+    // pasar. Si vuelve a fallar, se devuelve vacío (el caller continúa).
+    logger.warn({ error: (error as Error).message, pid }, 'Gnulahd player API failed, reintentando...');
+    try {
+      return await attempt();
+    } catch (error2) {
+      logger.warn({ error: (error2 as Error).message, pid }, 'Gnulahd player API failed');
+      return {};
+    }
   }
 }
 
 function toVideoLanguages(data: GnrdPlayerData): VideoLanguage[] {
-  if (!Array.isArray(data.langs)) return [];
-  return data.langs
+  const raw = data.langs;
+  if (!raw || typeof raw !== 'object') return [];
+  const list = Array.isArray(raw) ? raw : Object.values(raw);
+  return list
     .filter((l) => l && l.label && Array.isArray(l.servers))
     .map((l) => ({
       language: l.label,
@@ -308,7 +479,7 @@ function parseHomeRow($: cheerio.CheerioAPI, el: AnyNode): Section | null {
 }
 
 export async function scrapeGnulahdHome(): Promise<GnulahdHomeData> {
-  const html = await fetchGnulahdHTML(`${GNULLAHD_BASE_URL}/`);
+  const html = await fetchGnulahdHTML(`${await getGnulahdBase()}/`);
   const $ = cheerio.load(html);
 
   const banners: BannerItem[] = [];
@@ -359,7 +530,8 @@ export async function scrapeGnulahdList(
   const cached = memoryCache.get<{ items: MediaItem[]; totalPages: number; totalItems: number }>(cacheKey);
   if (cached) return cached;
 
-  const url = page > 1 ? `${GNULLAHD_BASE_URL}/ver/${kind}?page=${page}` : `${GNULLAHD_BASE_URL}/ver/${kind}`;
+  const base = await getGnulahdBase();
+  const url = page > 1 ? `${base}/ver/${kind}?page=${page}` : `${base}/ver/${kind}`;
   const html = await fetchGnulahdHTML(url);
   const $ = cheerio.load(html);
 
@@ -393,7 +565,7 @@ export async function searchGnulahd(query: string): Promise<{ items: MediaItem[]
   const cached = memoryCache.get<{ items: MediaItem[]; total: number }>(cacheKey);
   if (cached) return cached;
 
-  const url = `${GNULLAHD_BASE_URL}/?s=${encodeURIComponent(query)}`;
+  const url = `${await getGnulahdBase()}/?s=${encodeURIComponent(query)}`;
   const html = await fetchGnulahdHTML(url);
   const $ = cheerio.load(html);
 
@@ -465,8 +637,16 @@ function parseEpisodes($: cheerio.CheerioAPI, seriesId: string): { season: numbe
 }
 
 async function fillEpisodeVideos(parsed: { season: number; episode: Episode; url: string }[]): Promise<void> {
-  for (let i = 0; i < parsed.length; i += 5) {
-    const batch = parsed.slice(i, i + 5);
+  // Límite por serie en el sync: las series largas (p.ej. 1000 episodios)
+  // bloquearían el prefetch del home. Solo se resuelven los primeros N
+  // episodios; el resto se resuelve bajo demanda al abrir el título
+  // (getGnulahdDetailContent → heal on read).
+  const limit = Math.min(parsed.length, MAX_EPISODES_SCRAPE);
+  const limited = parsed.slice(0, limit);
+  // Concurrencia 2 + delay: la player API de GNULA responde 502 cuando se
+  // martilla con requests en paralelo (rate-limit por IP de datacenter).
+  for (let i = 0; i < limited.length; i += 2) {
+    const batch = limited.slice(i, i + 2);
     await Promise.allSettled(
       batch.map(async (entry) => {
         try {
@@ -481,6 +661,9 @@ async function fillEpisodeVideos(parsed: { season: number; episode: Episode; url
         }
       }),
     );
+    if (i + 2 < limited.length) {
+      await new Promise((resolve) => setTimeout(resolve, 800));
+    }
   }
 }
 
@@ -504,7 +687,7 @@ export async function scrapeGnulahdDetail(id: string): Promise<ContentDetail | n
   if (!prefix) return null;
   const isSeries = prefix !== 'gmov_';
   const slug = id.slice(prefix.length);
-  const url = `${GNULLAHD_BASE_URL}/ver/${slug}/`;
+  const url = `${await getGnulahdBase()}/ver/${slug}/`;
 
   let html: string;
   try {
