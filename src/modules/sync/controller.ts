@@ -690,19 +690,35 @@ const result: SyncSeries = {
 
 /** Ejecuta el sync del home GNULA en segundo plano (usado por el handler y el autosync).
  *  Devuelve true si la sincronización arrancó (false si ya había una en curso). */
-export async function runGnulahdHomeSync(): Promise<boolean> {
+export async function runGnulahdHomeSync(resume = false): Promise<boolean> {
   const type = 'gnulahdHome';
   if (!startSync(type)) {
     pushLog(type, '⏳ Ya hay una sincronización del home GNULA en curso, omitiendo...');
     return false;
   }
   runBackgroundSync(type, async () => {
-    updateSyncProgress(type, 0, 'Scrapeando home de gnulahd.nu...');
-    const { scrapeGnulahdHome, saveGnulahdHomeData } = await import('../../providers/gnulahd');
+    updateSyncProgress(type, 0, resume ? 'Reanudando sync del home GNULA...' : 'Scrapeando home de gnulahd.nu...');
+    const { scrapeGnulahdHome, saveGnulahdHomeData, loadGnulahdHomeData } = await import('../../providers/gnulahd');
     const { prefetchGnulahdDetails } = await import('../../services/gnulahd-content');
-    const data = await scrapeGnulahdHome();
+    const { isContentFresh } = await import('../../services/gnulahd-content');
+
+    let data: import('../../providers/gnulahd').GnulahdHomeData;
+    if (resume) {
+      const existing = await loadGnulahdHomeData();
+      if (existing && isContentFresh(existing.updatedAt)) {
+        data = existing;
+        updateSyncProgress(type, 0, `Home existente reutilizado (${data.banners.length} banners, ${data.sections.length} secciones, ${Math.round((Date.now() - data.updatedAt) / 60000)} min)`);
+      } else {
+        updateSyncProgress(type, 0, 'Home sin datos o vencido, scrapeando...');
+        data = await scrapeGnulahdHome();
+        await saveGnulahdHomeData(data);
+      }
+    } else {
+      data = await scrapeGnulahdHome();
+      await saveGnulahdHomeData(data);
+    }
+
     const ids = [...data.banners, ...data.sections.flatMap((section) => section.items)].map((item) => item.id);
-    await saveGnulahdHomeData(data);
     updateSyncProgress(type, 0, `${ids.length} ítems encontrados, actualizando contenidos...`);
     // Actualiza el content de cada ítem del home: reutiliza el vigente (<24h) y
     // re-escarepea el faltante/vencido. Conc=2 + delay para no martillar la

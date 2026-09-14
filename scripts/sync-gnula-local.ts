@@ -18,6 +18,8 @@
  *   npx tsx scripts/sync-gnula-local.ts --anime          # solo anime
  *   npx tsx scripts/sync-gnula-local.ts --anime --pages=1-3
  *   npx tsx scripts/sync-gnula-local.ts --replace        # reemplaza (vacía y re-sincroniza)
+ *   npx tsx scripts/sync-gnula-local.ts --home --resume  # reanuda desde el último checkpoint
+ *   npx tsx scripts/sync-gnula-local.ts --home --timeout=3600  # timeout de 1 hora
  */
 
 import { ensureStoreTable, storeEnabled } from '../src/services/store';
@@ -79,7 +81,10 @@ async function main() {
   const args = process.argv.slice(2);
   const want = (name: string) => args.includes(name);
   const replace = want('--replace');
+  const resume = want('--resume');
   const pagesArg = args.find((a) => a.startsWith('--pages='))?.split('=')[1];
+  const timeoutArg = args.find((a) => a.startsWith('--timeout='));
+  const timeoutMs = timeoutArg ? parseInt(timeoutArg.split('=')[1], 10) * 1000 : 40 * 60 * 1000;
   const hasPages = pagesArg !== undefined;
   const pages = parsePages(pagesArg);
 
@@ -90,14 +95,14 @@ async function main() {
   }
 
   await ensureStoreTable();
-  console.log('✅ Conectado a la base. Tabla store verificada.\n');
+  console.log(`✅ Conectado a la base. Tabla store verificada.${resume ? ' (modo resume)' : ''}\n`);
 
   const only = ['--home', '--movies', '--series', '--anime'].find((f) => want(f));
   interface Task { label: string; type: SyncType; run: () => Promise<boolean>; }
   const tasks: Task[] = [];
 
   if (!only || only === '--home') {
-    tasks.push({ label: 'HOME', type: 'gnulahdHome', run: () => runGnulahdHomeSync() });
+    tasks.push({ label: 'HOME', type: 'gnulahdHome', run: () => runGnulahdHomeSync(resume) });
   }
   if (!only || only === '--movies') {
     tasks.push({
@@ -127,7 +132,7 @@ async function main() {
         console.warn(`⚠️  ${task.label}: ya había una sincronización en curso, omitiendo...`);
         continue;
       }
-      const result = await waitForCompletion(task.type);
+      const result = await waitForCompletion(task.type, timeoutMs);
       if (result.status === 'failed') {
         console.error(`❌ ${task.label}: falló → ${result.error || 'error desconocido'}`);
         failed++;

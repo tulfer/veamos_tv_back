@@ -312,6 +312,10 @@ export async function prefetchGnulahdDetails(
     }
   }
 
+  if (reused > 0 || needsScrape.length > 0) {
+    pushLog(logType, `Prefetch: ${reused} contenidos vigentes reutilizados, ${needsScrape.length} pendientes de scrapear`);
+  }
+
   const CONC = 2;
   for (let i = 0; i < needsScrape.length; i += CONC) {
     const batch = needsScrape.slice(i, i + CONC);
