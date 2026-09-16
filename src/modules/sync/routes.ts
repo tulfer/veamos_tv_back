@@ -35,6 +35,7 @@ import {
   setGnulahdAutoSyncHandler,
   listGnulahdItemsHandler,
   syncGnulahdItemHandler,
+  ingestSyncHandler,
   listBackupsHandler,
   createBackupHandler,
   downloadBackupHandler,
@@ -96,6 +97,7 @@ export async function syncRoutes(app: FastifyInstance) {
   app.post('/sync/gnulahd/auto', setGnulahdAutoSyncHandler);
   app.get('/sync/gnulahd/items', listGnulahdItemsHandler);
   app.post('/sync/gnulahd/item', syncGnulahdItemHandler);
+  app.post('/sync/ingest', ingestSyncHandler);
   app.get('/sync/backups', listBackupsHandler);
   app.post('/sync/backups', createBackupHandler);
   app.get('/sync/backups/download', downloadBackupHandler);

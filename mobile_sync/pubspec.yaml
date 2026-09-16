@@ -1,0 +1,31 @@
+name: veamos_sync
+description: veamosTVSync - App de sincronización de GNULA HD para Veamos TV. Scrapea desde la IP residencial del celular y sube los datos al backend.
+publish_to: 'none'
+version: 0.1.0
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  html: ^0.15.4
+  wakelock_plus: ^1.2.8
+  shared_preferences: ^2.3.2
+
+dev_dependencies:
+  flutter_lints: ^4.0.0
+  flutter_test:
+    sdk: flutter
+  flutter_launcher_icons: ^0.14.1
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/icons/app_icon.png"
+  remove_alpha_ios: true
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/icons/app_icon.png

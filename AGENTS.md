@@ -16,6 +16,11 @@
 - **"refresh por proveedor"** = `POST /live/channels/refresh-provider/:provider`
   (en `src/modules/live-tv/controller.ts`), resuelve de nuevo la URL de stream
   de canales guardados con `refreshUrl` + `proveedor`.
+- **"ingesta móvil"** = la app Flutter en `mobile_sync/` scrapea GNULA desde la
+  IP residencial del celular (DDoS-Guard bloquea datacenters) y sube a
+  `POST /sync/ingest` (auth por header `X-Sync-Token`, env `SYNC_INGEST_TOKEN`).
+  El backend guarda en las colecciones v2 y, si `enrich=true`, mezcla los demás
+  proveedores (PelisPlus/PelisPedia/JKAnime/Latanime), que sí aceptan dokploy.
 
 ## Comandos
 
@@ -23,6 +28,8 @@
 - Build del frontend (Vite multi-página → `public/dashboard`): `npm run build:client`
 - El store local es no-op sin `DATABASE_URL`; la persistencia real se prueba tras
   desplegar en dokploy.
+- La app Flutter NO se compila aquí (no hay Flutter SDK): tras cambios, correr
+  `cd mobile_sync && flutter analyze` en una máquina con Flutter.
 
 ## Flujos clave
 

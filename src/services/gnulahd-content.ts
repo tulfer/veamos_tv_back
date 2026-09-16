@@ -19,7 +19,7 @@ import { pushLog } from './sync-status';
  */
 
 type GnulahdCollection = 'gnulahd-movies' | 'gnulahd-series' | 'gnulahd-anime';
-type GnulahdLogType = 'gnulahdHome' | 'gnulahdMovies' | 'gnulahdSeries' | 'gnulahdAnime' | 'gnulahdItem';
+export type GnulahdLogType = 'gnulahdHome' | 'gnulahdMovies' | 'gnulahdSeries' | 'gnulahdAnime' | 'gnulahdItem';
 
 /** Los contenidos cacheados más viejos que esto se re-resuelven para
  *  refrescar capítulos (TTL de 24h). */

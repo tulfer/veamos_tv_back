@@ -35,6 +35,11 @@ const envSchema = z.object({
   FALLBACK_EXTRACT_KEY: z.string().optional(),
 
   SCRAPE_INTERVAL_MINUTES: z.coerce.number().default(30),
+
+  // Token de la API de ingesta móbil (app Flutter → POST /sync/ingest). La app
+  // scrapea GNULA desde la IP residencial del celular (DDoS-Guard bloquea
+  // datacenters) y el backend guarda/mezcla y enriquece con los demás proveedores.
+  SYNC_INGEST_TOKEN: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);

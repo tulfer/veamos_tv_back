@@ -10,7 +10,9 @@ import { fetchLiveChannels, parseM3U, validateBatch, M3UParsedChannel } from '..
 import { fetchHTML, httpClient } from '../../utils/http';
 import { logger } from '../../utils/logger';
 import { memoryCache } from '../../cache/memory';
-import { SyncMovie, SyncSeries, SyncData, LiveChannel, VideoLanguage, Season } from '../../types';
+import { SyncMovie, SyncSeries, SyncData, LiveChannel, VideoLanguage, Season, ContentDetail } from '../../types';
+import { env } from '../../config/env';
+import { GnulahdLogType } from '../../services/gnulahd-content';
 import type { ScrapeChannelItem } from '../../providers/channel-list';
 import { startSync, completeSync, failSync, updateSyncProgress, getLogs, clearLogs, pushLog, SyncType, getSyncStatus } from '../../services/sync-status';
 import { firestoreMigrationStatus, getFirestoreMigrationStatus, runFirestoreToSupabase, FirestoreMigrationStatus } from '../../services/firestore-migrate';
@@ -3655,6 +3657,127 @@ export async function runFirestoreToSupabaseHandler(_request: FastifyRequest, re
 export async function firestoreToSupabaseStatusHandler(_request: FastifyRequest, reply: FastifyReply) {
   return reply.send(getFirestoreMigrationStatus());
 }
+
+/* ───── Ingesta desde la app móvil (Flutter) ─────
+ * La app scrapea GNULA desde la IP residencial del celular (DDoS-Guard bloquea
+ * datacenters) y sube los ítems a este endpoint. El backend guarda en las
+ * colecciones v2 y, si enrich=true, mezcla los demás proveedores (PelisPlus /
+ * PelisPedia / JKAnime / Latanime) que sí aceptan la IP de dokploy.
+ * Auth: header X-Sync-Token con env.SYNC_INGEST_TOKEN. */
+
+interface IngestItemPayload {
+  id: string;
+  title?: string;
+  poster?: string;
+  rating?: number;
+  year?: number;
+  description?: string;
+  genres?: string[];
+  type?: string;
+  content?: unknown;
+  contentUpdatedAt?: number;
+}
+
+interface IngestRequestBody {
+  type: 'home' | 'movies' | 'series' | 'anime';
+  home?: import('../../providers/gnulahd').GnulahdHomeData;
+  items?: IngestItemPayload[];
+  enrich?: boolean;
+}
+
+const MAX_INGEST_ITEMS = 500;
+const INGEST_ENRICH_CONC = 3;
+const INGEST_BATCH_DELAY_MS = 600;
+
+const INGEST_LOG_TYPE: Record<string, GnulahdLogType> = {
+  movies: 'gnulahdMovies',
+  series: 'gnulahdSeries',
+  anime: 'gnulahdAnime',
+};
+
+export async function ingestSyncHandler(request: FastifyRequest, reply: FastifyReply) {
+  const expected = env.SYNC_INGEST_TOKEN;
+  if (!expected) {
+    return reply.status(503).send({ ok: false, error: 'SYNC_INGEST_TOKEN no configurado en el servidor' });
+  }
+  const received = request.headers['x-sync-token'];
+  if (typeof received !== 'string' || received !== expected) {
+    return reply.status(401).send({ ok: false, error: 'Token de ingesta inválido' });
+  }
+
+  const body = (request.body ?? {}) as IngestRequestBody;
+  const { type, enrich } = body;
+
+  try {
+    if (type === 'home') {
+      const home = body.home;
+      if (!home || !Array.isArray(home.banners) || !Array.isArray(home.sections)) {
+        return reply.status(422).send({ ok: false, error: 'home debe incluir banners y sections' });
+      }
+      const { saveGnulahdHomeData } = await import('../../providers/gnulahd');
+      await saveGnulahdHomeData(home);
+      logger.info({ banners: home.banners.length, sections: home.sections.length }, 'Ingesta móvil: home guardado');
+      return reply.send({ ok: true, type, saved: { home: true } });
+    }
+
+    const collection = type === 'movies' ? 'gnulahd-movies' : type === 'series' ? 'gnulahd-series' : type === 'anime' ? 'gnulahd-anime' : null;
+    if (!collection) {
+      return reply.status(422).send({ ok: false, error: `type desconocido: ${String(type)}` });
+    }
+    const rawItems = Array.isArray(body.items) ? body.items : [];
+    if (rawItems.length === 0) {
+      return reply.status(422).send({ ok: false, error: 'items vacío' });
+    }
+    if (rawItems.length > MAX_INGEST_ITEMS) {
+      return reply.status(422).send({ ok: false, error: `demasiados ítems (máx ${MAX_INGEST_ITEMS})` });
+    }
+    const bad = rawItems.find((item) => !item.id);
+    if (bad) {
+      return reply.status(422).send({ ok: false, error: 'todos los ítems deben incluir id' });
+    }
+
+    let items = rawItems;
+    if (enrich) {
+      // El detalle base viene scrapeado por la app; se enriquecen aquí los que
+      // tengan content para que quede con servidores de todos los proveedores.
+      const { enrichGnulahdDetail } = await import('../../services/gnulahd-content');
+      const logType = INGEST_LOG_TYPE[type];
+      let enriched = 0;
+      for (let start = 0; start < items.length; start += INGEST_ENRICH_CONC) {
+        const results = await Promise.all(
+          items.slice(start, start + INGEST_ENRICH_CONC).map(async (item) => {
+            if (!item.content) return item;
+            try {
+              item.content = await enrichGnulahdDetail({ ...(item.content as ContentDetail), id: item.id }, logType);
+              enriched += 1;
+            } catch (error) {
+              logger.warn({ error: (error as Error).message, id: item.id }, 'Ingesta móvil: enriquecimiento falló; se guarda el detalle base');
+            }
+            return item;
+          }),
+        );
+        for (let i = 0; i < results.length; i++) {
+          items[start + i] = results[i];
+        }
+        if (start + INGEST_ENRICH_CONC < items.length) {
+          await new Promise((resolve) => setTimeout(resolve, INGEST_BATCH_DELAY_MS));
+        }
+      }
+      if (enriched > 0) {
+        logger.info({ enriched, collection }, 'Ingesta móvil: detalles enriquecidos');
+      }
+    }
+
+    await upsertItemsByCol(collection, items as Array<Record<string, unknown> & { id: string }>);
+    memoryCache.del('sync:data');
+    logger.info({ count: items.length, collection }, 'Ingesta móvil guardada');
+    return reply.send({ ok: true, type, saved: items.length });
+  } catch (error) {
+    logger.error({ error: (error as Error).message, type }, 'Ingesta móvil falló');
+    return reply.status(500).send({ ok: false, error: (error as Error).message });
+  }
+}
+
 /*
 -->
 <a href="/sync/status?code=1992">â† Volver al Dashboard</a>
