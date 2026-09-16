@@ -5,6 +5,7 @@ import 'package:html/parser.dart' as html_parser;
 import 'package:html/dom.dart';
 
 import '../models.dart';
+import 'doh_resolver.dart';
 
 /// Cliente del scraper de GNULA HD, portado del proveedor TS
 /// (`src/providers/gnulahd.ts`). Sacrifica parte de la robustez del backend
@@ -35,14 +36,79 @@ class GnulaClient {
   final Set<String> _deadHosts = {};
   final Map<String, Map<String, String>> _cookieJar = {};
   late final HttpClient _client;
+  late final DohResolver _resolver;
 
   GnulaClient({required this.staticDomains, LogFn? log}) : _log = log {
-    _client = HttpClient()..connectionTimeout = const Duration(seconds: 15);
+    _resolver = DohResolver(log: _info);
+    _client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 15)
+      ..connectionFactory = _connectViaResolver;
   }
 
   void _info(String message) => _log?.call('[gnula] $message');
 
   String get activeBase => _activeBase;
+
+  /// Conecta usando [DohResolver] (DNS-over-HTTPS) en lugar del resolver del
+  /// sistema, que en Android puede no usar el DNS de la red. Para HTTPS se hace
+  /// el handshake TLS aquí con el host original (SNI), porque cuando se usa
+  /// [HttpClient.connectionFactory] el cliente NO lo hace por sí mismo.
+  Future<ConnectionTask<Socket>> _connectViaResolver(
+    Uri url,
+    String? proxyHost,
+    int? proxyPort,
+  ) async {
+    final host = url.host;
+    final isSecure = url.scheme == 'https' || url.scheme == 'wss';
+    final port = url.hasPort ? url.port : (isSecure ? 443 : 80);
+
+    Socket? raw;
+    try {
+      final addresses = await _resolver.lookup(host);
+      if (addresses.isEmpty) throw SocketException('Sin dirección para $host');
+      Object? lastError;
+      for (final address in addresses) {
+        try {
+          raw = await Socket.connect(address, port,
+              timeout: const Duration(seconds: 15));
+          break;
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      if (raw == null) throw lastError ?? SocketException('No se pudo conectar a $host');
+      if (!isSecure) {
+        return ConnectionTask.fromSocket(Future.value(raw), () {
+          try {
+            raw?.destroy();
+          } catch (_) {}
+        });
+      }
+      final secure = await SecureSocket.secure(
+        raw,
+        host: host,
+        onBadCertificate: (cert) {
+          _info('certificado no válido para $host: ${cert.issuer} -> ${cert.subject}');
+          return false;
+        },
+      ).timeout(const Duration(seconds: 20));
+      return ConnectionTask.fromSocket(Future.value(secure), () {
+        try {
+          secure.destroy();
+        } catch (_) {}
+      });
+    } catch (error) {
+      try {
+        raw?.destroy();
+      } catch (_) {}
+      if (error is SocketException && error.osError?.errorCode == 7) {
+        _info('DNS del sistema falló para $host (${error.message}); probando DoH…');
+      } else {
+        _info('error de conexión a $host: $error');
+      }
+      rethrow;
+    }
+  }
 
   // ── Transporte ────────────────────────────────────────────────────────────
 
@@ -130,7 +196,9 @@ class GnulaClient {
   /// Resuelve la base activa probando dominios estáticos + descubiertos.
   Future<void> ensureBase() async {
     if (_activeBase.isNotEmpty) return;
-    for (final base in await _candidateDomains()) {
+    final candidates = await _candidateDomains();
+    Object? lastError;
+    for (final base in candidates) {
       try {
         final html = await _fetchFromHost(base, '/');
         if (isUsable(html)) {
@@ -138,17 +206,24 @@ class GnulaClient {
           _info('dominio activo: $base');
           return;
         }
-      } catch (_) {
-        // siguiente dominio
+      } catch (error) {
+        lastError = error;
+        _info('$base no respondió: $error');
       }
     }
     _activeBase = staticDomains.first;
     _info('ningún dominio respondió, usando: $_activeBase');
+    if (lastError != null) _info('último error: $lastError');
   }
 
   Future<String> fetchPage(String pathAndQuery) async {
     await ensureBase();
-    final candidates = await _candidateDomains();
+    var candidates = await _candidateDomains();
+    if (candidates.isEmpty) {
+      // Puede ocurrir si el host principal (y todos) se marcaron muertos en la
+      // sesión: se reintenta la lista completa en vez de fallar sin probar.
+      candidates = await _candidateDomains(includeDead: true);
+    }
     Object? lastError;
     for (final base in candidates) {
       try {
@@ -177,7 +252,9 @@ class GnulaClient {
       final re = RegExp(r'href="(https://[a-z0-9.-]+(?::\d+)?/?)"', caseSensitive: false);
       for (final m in re.allMatches(html)) {
         final domain = m.group(1)!.trim().replaceAll(RegExp(r'/+$'), '');
-        if (domain.contains('gnulahd.') && !found.contains(domain)) found.add(domain);
+        if (domain.contains('gnulahd.') && !domain.contains('dominiosgnulahd.com') && !found.contains(domain)) {
+          found.add(domain);
+        }
       }
     } catch (_) {
       // sin descubrimiento: se usan los dominios estáticos
@@ -187,14 +264,14 @@ class GnulaClient {
     return _discovered;
   }
 
-  Future<List<String>> _candidateDomains() async {
+  Future<List<String>> _candidateDomains({bool includeDead = false}) async {
     final discovered = await _discoverDomains();
     final list = <String>[];
     for (final raw in [_activeBase, ...staticDomains, ...discovered]) {
       final domain = raw.trim().replaceAll(RegExp(r'/+$'), '');
-      if (domain.isEmpty || list.contains(domain)) continue;
+      if (domain.isEmpty || domain.contains('dominiosgnulahd.com') || list.contains(domain)) continue;
       try {
-        if (_deadHosts.contains(Uri.parse(domain).host)) continue;
+        if (!includeDead && _deadHosts.contains(Uri.parse(domain).host)) continue;
       } catch (_) {
         // dominio malformado: se incluye, el fetch fallará y se marcará muerto
       }

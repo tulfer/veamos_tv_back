@@ -3696,7 +3696,7 @@ const INGEST_LOG_TYPE: Record<string, GnulahdLogType> = {
 };
 
 export async function ingestSyncHandler(request: FastifyRequest, reply: FastifyReply) {
-  const expected = env.SYNC_INGEST_TOKEN;
+  const expected = env.SYNC_INGEST_TOKEN?.trim();
   if (!expected) {
     return reply.status(503).send({ ok: false, error: 'SYNC_INGEST_TOKEN no configurado en el servidor' });
   }
