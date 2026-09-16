@@ -32,6 +32,53 @@ function patch(file, run) {
   console.log(`  - OK: ${file}`);
 }
 
+// Busca MainActivity en su carpeta original (kotlin o java) y la mueve al
+// directorio del paquete destino, actualizando su declaración `package`.
+function relocateMainActivity(lang) {
+  const srcRoot = path.join(ROOT, 'android', 'app', 'src', 'main', lang);
+  if (!fs.existsSync(srcRoot)) return false;
+  let srcFile = null;
+  for (const entry of fs.readdirSync(srcRoot, { recursive: true })) {
+    const p = entry.toString().replaceAll('\\', '/');
+    if (p.endsWith('/MainActivity.kt') || p.endsWith('/MainActivity.java')) {
+      srcFile = path.join(srcRoot, entry);
+      break;
+    }
+  }
+  if (!srcFile) return false;
+  const rel = path.relative(srcRoot, srcFile).replaceAll('\\', '/');
+  if (rel === `com/veamos/tv/sync/MainActivity.${lang === 'java' ? 'java' : 'kt'}`) return true;
+
+  const text = fs.readFileSync(srcFile, 'utf8');
+  if (lang !== 'java') {
+    fs.writeFileSync(srcFile, text.replace(/^package\s+\S+\s*$/m, `package ${BUNDLE_ID}`));
+  } else {
+    fs.writeFileSync(srcFile, text.replace(/^package\s+\S+\s*$/m, `package ${BUNDLE_ID};`));
+  }
+  const destDir = path.join(srcRoot, 'com', 'veamos', 'tv', 'sync');
+  fs.mkdirSync(destDir, { recursive: true });
+  const ext = lang === 'java' ? 'java' : 'kt';
+  const destFile = path.join(destDir, `MainActivity.${ext}`);
+  fs.renameSync(srcFile, destFile);
+  removeEmptyParents(srcFile, srcRoot);
+  changed = true;
+  console.log(`  - OK: MainActivity.${ext} ≈> ${BUNDLE_ID}.MainActivity`);
+  return true;
+}
+
+// Elimina carpetas intermedias vacías hacia arriba del archivo movido.
+function removeEmptyParents(file, stopRoot) {
+  let dir = path.dirname(file);
+  while (dir.startsWith(stopRoot) && dir !== stopRoot) {
+    try {
+      fs.rmdirSync(dir);
+    } catch {
+      break;
+    }
+    dir = path.dirname(dir);
+  }
+}
+
 console.log('Aplicando branding veamosTVSync / com.veamos.tv.sync...');
 
 // Android
@@ -47,6 +94,13 @@ patch('android/app/build.gradle', (t) =>
     .replace(/(applicationId\s+)".*?"/g, `$1"${BUNDLE_ID}"`),
 );
 patch('android/app/src/main/AndroidManifest.xml', (t) => t.replace(/android:label="[^"]*"/g, `android:label="${APP_NAME}"`));
+
+// Android: MainActivity.kt — el namespace/applicationId cambió, pero la clase
+// sigue en el paquete original de `flutter create`; la reubicamos para que el
+// runtime encuentre com.veamos.tv.sync.MainActivity.
+console.log('Android MainActivity:');
+const ktReloc = relocateMainActivity('kotlin') || relocateMainActivity('java');
+if (!ktReloc) console.log('  - sin cambios (MainActivity no encontrada)');
 
 // iOS
 console.log('iOS:');

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../config.dart';
@@ -244,11 +245,35 @@ class _SyncScreenState extends State<SyncScreen> {
             style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline)),
       );
     }
-    return ListView.builder(
-      controller: _scroll,
-      padding: const EdgeInsets.all(12),
-      itemCount: _log.length,
-      itemBuilder: (context, index) => Text(_log[index], style: theme.textTheme.bodySmall),
+    return Column(
+      children: [
+        Align(
+          alignment: Alignment.centerRight,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            child: TextButton.icon(
+              onPressed: () async {
+                await Clipboard.setData(ClipboardData(text: _log.join('\n')));
+                if (mounted) {
+                  ScaffoldMessenger.of(context)
+                      .showSnackBar(const SnackBar(content: Text('Log copiado al portapapeles')));
+                }
+              },
+              icon: const Icon(Icons.copy, size: 18),
+              label: const Text('Copiar log'),
+            ),
+          ),
+        ),
+        Expanded(
+          child: ListView.builder(
+            controller: _scroll,
+            padding: const EdgeInsets.all(12),
+            itemCount: _log.length,
+            itemBuilder: (context, index) => SelectableText(_log[index],
+                style: theme.textTheme.bodySmall),
+          ),
+        ),
+      ],
     );
   }
 }

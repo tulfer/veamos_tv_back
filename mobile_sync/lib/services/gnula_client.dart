@@ -24,10 +24,15 @@ const String _defaultUa =
 const int maxEpisodesScrape = 60;
 
 class GnulaClient {
+  static const String _discoverUrl = 'https://dominiosgnulahd.com';
+
   final List<String> staticDomains;
   final LogFn? _log;
 
   String _activeBase = '';
+  List<String> _discovered = const [];
+  DateTime _discoveredAt = DateTime.fromMillisecondsSinceEpoch(0);
+  final Set<String> _deadHosts = {};
   final Map<String, Map<String, String>> _cookieJar = {};
   late final HttpClient _client;
 
@@ -101,6 +106,12 @@ class GnulaClient {
 
         lastError = Exception('HTML de GNULA no utilizable (posible anti-bot o vacío)');
       } catch (error) {
+        if (error is SocketException) {
+          // Fallo de DNS/red: introducir el host en la lista negra y salir ya,
+          // no vale la pena reintentar dentro de la misma sesión.
+          _markDead(base);
+          rethrow;
+        }
         lastError = error;
       }
       await Future<void>.delayed(Duration(milliseconds: 600 * attempt));
@@ -108,10 +119,18 @@ class GnulaClient {
     throw lastError ?? Exception('Fallo de GNULA');
   }
 
+  void _markDead(String base) {
+    try {
+      _deadHosts.add(Uri.parse(base).host);
+    } catch (_) {
+      _deadHosts.add(base);
+    }
+  }
+
   /// Resuelve la base activa probando dominios estáticos + descubiertos.
   Future<void> ensureBase() async {
     if (_activeBase.isNotEmpty) return;
-    for (final base in _normalizeDomains()) {
+    for (final base in await _candidateDomains()) {
       try {
         final html = await _fetchFromHost(base, '/');
         if (isUsable(html)) {
@@ -129,7 +148,7 @@ class GnulaClient {
 
   Future<String> fetchPage(String pathAndQuery) async {
     await ensureBase();
-    final candidates = _normalizeDomains();
+    final candidates = await _candidateDomains();
     Object? lastError;
     for (final base in candidates) {
       try {
@@ -146,11 +165,40 @@ class GnulaClient {
     throw lastError ?? Exception('Fallo de GNULA');
   }
 
-  List<String> _normalizeDomains() {
+  /// Descubre los dominios oficiales actuales desde dominiosgnulahd.com
+  /// (best effort, cacheado 6 h). Si no responde, quedan los estáticos.
+  Future<List<String>> _discoverDomains() async {
+    if (_discovered.isNotEmpty && DateTime.now().difference(_discoveredAt) < const Duration(hours: 6)) {
+      return _discovered;
+    }
+    final found = <String>[];
+    try {
+      final html = await _get(_discoverUrl);
+      final re = RegExp(r'href="(https://[a-z0-9.-]+(?::\d+)?/?)"', caseSensitive: false);
+      for (final m in re.allMatches(html)) {
+        final domain = m.group(1)!.trim().replaceAll(RegExp(r'/+$'), '');
+        if (domain.contains('gnulahd.') && !found.contains(domain)) found.add(domain);
+      }
+    } catch (_) {
+      // sin descubrimiento: se usan los dominios estáticos
+    }
+    _discovered = found;
+    _discoveredAt = DateTime.now();
+    return _discovered;
+  }
+
+  Future<List<String>> _candidateDomains() async {
+    final discovered = await _discoverDomains();
     final list = <String>[];
-    for (final raw in [_activeBase, ...staticDomains]) {
+    for (final raw in [_activeBase, ...staticDomains, ...discovered]) {
       final domain = raw.trim().replaceAll(RegExp(r'/+$'), '');
-      if (domain.isNotEmpty && !list.contains(domain)) list.add(domain);
+      if (domain.isEmpty || list.contains(domain)) continue;
+      try {
+        if (_deadHosts.contains(Uri.parse(domain).host)) continue;
+      } catch (_) {
+        // dominio malformado: se incluye, el fetch fallará y se marcará muerto
+      }
+      list.add(domain);
     }
     return list;
   }

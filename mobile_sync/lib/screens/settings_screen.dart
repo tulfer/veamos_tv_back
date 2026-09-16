@@ -42,7 +42,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         .where((d) => d.isNotEmpty)
         .toList();
     if (widget.config.gnulaDomains.isEmpty) {
-      widget.config.gnulaDomains = const ['https://ww3.gnulahd.nu', 'https://gnulahd.click', 'https://gnulahd.bid'];
+      widget.config.gnulaDomains = const ['https://ww3.gnulahd.nu', 'https://gnulahd.nu', 'https://gnulahd.click'];
     }
     await widget.config.save();
     setState(() => _message = 'Guardado. El backend es ${_backend.text.trim().isEmpty ? '—' : _backend.text.trim()}.');

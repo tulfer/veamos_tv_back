@@ -9,7 +9,7 @@ class AppConfig {
 
   String backendUrl = '';
   String syncToken = '';
-  List<String> gnulaDomains = const ['https://ww3.gnulahd.nu', 'https://gnulahd.click', 'https://gnulahd.bid'];
+  List<String> gnulaDomains = const ['https://ww3.gnulahd.nu', 'https://gnulahd.nu', 'https://gnulahd.click'];
 
   final SharedPreferences _prefs;
 
@@ -21,7 +21,7 @@ class AppConfig {
       gnulaDomains = domains.split('\n').map((d) => d.trim()).where((d) => d.isNotEmpty).toList();
     }
     if (gnulaDomains.isEmpty) {
-      gnulaDomains = const ['https://ww3.gnulahd.nu', 'https://gnulahd.click', 'https://gnulahd.bid'];
+      gnulaDomains = const ['https://ww3.gnulahd.nu', 'https://gnulahd.nu', 'https://gnulahd.click'];
     }
   }
 
