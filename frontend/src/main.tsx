@@ -23,6 +23,7 @@ const providers = ['wsdeportes', 'cablevisionhd', 'tvporinternet2', 'tvenvivo2',
 const gnulahdTasks = ['gnulahdHome', 'gnulahdMovies', 'gnulahdSeries', 'gnulahdAnime'];
 const gnulahdTaskNames: Record<string, string> = { gnulahdHome: 'Home', gnulahdMovies: 'Películas', gnulahdSeries: 'Series', gnulahdAnime: 'Anime' };
 const gnulahdTaskKinds: Record<string, string> = { gnulahdMovies: 'movies', gnulahdSeries: 'series', gnulahdAnime: 'anime', gnulahdHome: 'home' };
+const remKindLabels: Record<string, string> = { home: '🏠 Home', movies: '🎬 Películas', series: '📺 Series', anime: '🎌 Anime' };
 const pretty = (p: string) => p === 'tvenvivo2' ? 'TVEnVivo2' : p;
 const defs: Def[] = [
   ['movies', 'Películas', '/sync/movies', ['pages', 'replace']], ['series', 'Series', '/sync/series', ['pages', 'replace']], ['all', 'Todo (Películas + Series)', '/sync/all', ['pages', 'replace']],
@@ -73,6 +74,15 @@ function App() {
   const [spSearch, setSpSearch] = useState('');
   const [spMsg, setSpMsg] = useState('');
   const [spLogs, setSpLogs] = useState<string[]>([]);
+  const [remUrl, setRemUrl] = useState('https://sincronizarveamostv.86.48.23.214.nip.io');
+  const [remToken, setRemToken] = useState(localStorage.getItem('remSyncToken') || '');
+  const [remPages, setRemPages] = useState('1-20');
+  const [remReplace, setRemReplace] = useState(false);
+  const [remStatus, setRemStatus] = useState<Record<string, Job> | null>(null);
+  const [remLogs, setRemLogs] = useState<Record<string, string[]>>({});
+  const [remMsg, setRemMsg] = useState('');
+  const [remBusy, setRemBusy] = useState<string | null>(null);
+  const remBase = remUrl.trim().replace(/\/+$/, '');
 
   useEffect(() => {
     const loadStatus = () => fetch('/sync/status').then(r => r.json()).then(setStatus).catch(() => {});
@@ -102,6 +112,25 @@ function App() {
     es.onmessage = e => { const ev = JSON.parse(e.data); if (ev.type === 'status') setStatus(ev.status); if (ev.type === 'provider-status') { setActiveThreads(ev.active); if (ev.running && ev.provider) setThreads(v => ({ ...v, [ev.provider]: {} })); } if (ev.type === 'log' && ev.syncType === 'refreshOne') setOneLogs(v => [...v, ev.message].slice(-300)); if (ev.type === 'log' && ev.syncType === 'gnulahdItem') setItemLogs(v => [...v, ev.message].slice(-300)); if (ev.type === 'log' && ev.provider && ev.threadId) setThreads(v => ({ ...v, [ev.provider]: { ...(v[ev.provider] || {}), [ev.threadId]: [...((v[ev.provider] || {})[ev.threadId] || []), ev.message].slice(-199) } })); };
     return () => { es.close(); window.clearInterval(logTimer); window.clearInterval(statusTimer); window.clearInterval(itemLogTimer); window.clearInterval(spLogTimer); };
   }, []);
+  useEffect(() => {
+    if (!remBase || !remToken.trim()) return;
+    const load = () => fetch(remBase + '/status', { headers: { 'X-Sync-Token': remToken.trim() } }).then(r => r.json()).then(setRemStatus).catch(() => {});
+    load();
+    const t = window.setInterval(load, 3000);
+    return () => window.clearInterval(t);
+  }, [remBase, remToken]);
+  useEffect(() => {
+    if (!remBase || !remToken.trim()) return;
+    const load = () => Promise.all(gnulahdTasks.map(async k => {
+      try {
+        const r = await fetch(remBase + '/logs/' + k, { headers: { 'X-Sync-Token': remToken.trim() } });
+        return [k, r.ok ? ((await r.json()).logs || []) : []] as const;
+      } catch { return [k, []] as const; }
+    })).then(entries => setRemLogs(Object.fromEntries(entries)));
+    load();
+    const t = window.setInterval(load, 3000);
+    return () => window.clearInterval(t);
+  }, [remBase, remToken]);
   const loadGitems = () => fetch('/sync/gnulahd/items?kind=' + gitemKind).then(r => r.json()).then(d => { setGitems(d.items || []); setGitemId(v => (d.items || []).some((i: GItem) => i.id === v) ? v : ''); }).catch(() => {});
   useEffect(() => { loadGitems(); }, [gitemKind]);
   const loadBackups = () => fetch('/sync/backups').then(r => r.json()).then(d => setBackups(d.items || [])).catch(() => {});
@@ -185,6 +214,20 @@ function App() {
   const updateField = async () => { if (!selectedIds.length) return setMessage('Selecciona uno o varios canales'); if (!editValue) return setMessage('Escribe un valor'); for (const id of selectedIds) await fetch('/live/channels/' + encodeURIComponent(id), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ [editField]: editField === 'online' ? editValue === 'true' : editValue }) }); setMessage('Campo actualizado correctamente'); };
   const add = async () => { if (!form.param || form.provider !== 'chatytv' && !form.title) return; const req = { ...form }, id = Date.now() + '-' + Math.random().toString(36).slice(2, 7); setJobs(v => [{ id, provider: req.provider, param: req.param, state: 'running', message: 'Agregando...' }, ...v].slice(0, 12)); setForm(v => ({ ...v, param: '', title: '', logo: '' })); const body: Record<string, string> = {}; Object.entries(req).forEach(([k, v]) => { if (k !== 'provider' && k !== 'param' && v) body[k] = v; }); try { const r = await fetch('/live/channels/add/' + req.provider + '/' + encodeURIComponent(req.param), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); setJobs(v => v.map(j => j.id === id ? { ...j, state: r.ok ? 'success' : 'error', message: r.ok ? 'Terminado correctamente' : 'Error al agregar' } : j)); } catch { setJobs(v => v.map(j => j.id === id ? { ...j, state: 'error', message: 'Error de red' } : j)); } };
 
+  const remLines = gnulahdTasks.flatMap(k => remLogs[k] || []).slice(-120);
+  const runRemSync = async (kind: string) => {
+    setRemBusy(kind); setRemMsg('');
+    try {
+      const body: Record<string, unknown> = {};
+      if (kind !== 'home') { body.pages = remPages || '1'; body.replace = remReplace; }
+      const r = await fetch(remBase + '/sync/' + kind, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Sync-Token': remToken.trim() }, body: JSON.stringify(body) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || 'Error HTTP ' + r.status);
+      setRemMsg('✔ ' + (d.message || 'Sincronización iniciada'));
+    } catch (e: any) { setRemMsg('✖ ' + (e.message || 'Error de red')); }
+    finally { setRemBusy(null); }
+  };
+
   return <div className={'shell ' + (collapsed ? 'sidebar-collapsed' : '')}><aside><div className="brand"><span className="brand-mark">◆</span>{!collapsed && <span>Panel de Sincronización</span>}<button className="collapse-button" onClick={() => setCollapsed(!collapsed)}>{collapsed ? '›' : '‹'}</button></div><nav><a className="active">▦ {!collapsed && <span>Resumen</span>}</a><a href="/player">◉ {!collapsed && <span>Canales</span>}</a><a href="/sync/detail/refreshProvider">▤ {!collapsed && <span>Registros</span>}</a></nav><div className="system">● {!collapsed && <><b>Sistema</b><small>Tiempo real</small></>}</div></aside><main>
     <header><div><span className="eyebrow">DASHBOARD</span><h1>Resumen operativo</h1><p>Control central de sincronizaciones y canales.</p></div><span className="live-pill">● Tiempo real</span></header>
     <section className="metrics"><Metric title="Procesos" value={defs.length} tone="purple" /><Metric title="Hilos activos" value={activeThreads || running} tone="green" /><Metric title="Completados" value={completed} tone="blue" /><Metric title="Con errores" value={failed} tone="red" /></section>
@@ -196,6 +239,7 @@ function App() {
     <section className="panel backup-card"><PanelTitle title="Backup de base de datos" subtitle="Crea un respaldo completo, descarga el último o restaura todo o solo las colecciones que elijas." /><div className="bk-row"><button className="primary-button" onClick={runBackup} disabled={bkBusy}>{bkBusy ? '⟳ Trabajando...' : '💾 Realizar backup'}</button><a className="bk-download" href="/sync/backups/download" download={backups[0] ? 'backup-' + backups[0].createdAt + '.json' : 'backup.json'}>⬇ Descargar último backup</a></div><div className="bk-cols-head"><strong>Restaurar</strong><small>Elige la fuente (backup de la BD o el archivo descargado) y qué colecciones restaurar.</small></div><div className="gitem-row"><Field label="Backup disponible (BD)"><select value={bkId} onChange={e => { setBkId(e.target.value); setBkFile(null); }}><option value="">— Selecciona un backup —</option>{backups.map(b => <option key={b.id} value={b.id}>{new Date(b.createdAt).toLocaleString('es-CO', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} · {Object.values(b.counts).reduce((a, c) => a + c, 0)} items</option>)}</select></Field><Field label="O archivo descargado (.json)"><input type="file" accept=".json,application/json" onChange={e => { setBkFile(e.target.files?.[0] || null); setBkId(''); }} /></Field></div><div className="bk-cols"><label className="bk-col"><input type="checkbox" checked={bkCols.length === backupCols.length} onChange={e => setAllBkCols(e.target.checked)} /> Restaurar todo</label>{backupCols.map(([k, l]) => <label className="bk-col" key={k}><input type="checkbox" checked={bkCols.includes(k)} onChange={() => toggleBkCol(k)} /> {l}</label>)}</div><div className="bk-row"><button className="primary-button" onClick={doRestore} disabled={bkBusy || (!bkId && !bkFile)}>{bkBusy ? '⟳ Trabajando...' : '↺ Restaurar'}</button><button className="secondary-button" onClick={loadBackups} disabled={bkBusy}>↻ Recargar backups</button></div>{bkMsg && <div className="form-message">{bkMsg}</div>}</section>
     <section className="panel gitem-card"><PanelTitle title="Sincronizar ítem GNULA" subtitle="Selecciona un slug de la base de datos o agrega uno nuevo; los pasos y los servidores de cada proveedor se registran en vivo." /><div className="gitem-row"><Field label="Tipo"><select value={gitemKind} onChange={e => { setGitemKind(e.target.value); setGitemId(''); }}><option value="movies">Películas</option><option value="series">Series</option><option value="anime">Anime</option></select></Field><button className="icon-button" title="Recargar lista" onClick={loadGitems}>↻</button></div><div className="gitem-row"><Field label="Slug en base de datos"><Combobox options={gitems} value={gitemId} onChange={setGitemId} placeholder="Escribe para buscar por título o slug..." /></Field><button className="primary-button" onClick={runItem} disabled={!gitemId || itemRunning}>{itemRunning ? '⟳ Sincronizando...' : '▶ Sincronizar'}</button></div><div className="gitem-divider">＋ Agregar un ítem nuevo por slug (no necesita estar en BD)</div><div className="gitem-row"><Field label="Slug nuevo"><input value={gnewSlug} onChange={e => setGnewSlug(e.target.value)} placeholder="ej: silo" onKeyDown={e => { if (e.key === 'Enter') addItem(); }} /></Field><button className="primary-button" onClick={addItem} disabled={!gnewSlug.trim() || itemRunning}>{itemRunning ? '⟳ Sincronizando...' : '＋ Agregar y sincronizar'}</button></div><div className="one-log-head"><div><h2>Log de sincronización</h2><span>{itemLogs.length ? `${itemLogs.length} registros` : 'Sin ejecución reciente'}</span></div><button className="copy-log" onClick={copyItemLogs} disabled={!itemLogs.length}>Copiar log</button></div><div className="process-log">{itemLogs.length ? itemLogs.map((line, i) => <div key={i}>{line}</div>) : <span>Selecciona un ítem o escribe un slug para ver el progreso.</span>}</div></section>
     <section className="panel scrape-card"><PanelTitle title="Importar canales de sitios web" subtitle="Escanea el sitio, valida los streams (igual que el refresh por proveedor) y elige cuáles importar. El proveedor se guarda en cada canal." /><ScrapeImportPanel provider={spProvider} setProvider={setSpProvider} section={spSection} setSection={setSpSection} result={spResult} setResult={setSpResult} sel={spSel} setSel={setSpSel} search={spSearch} setSearch={setSpSearch} running={spRunning} importing={spImporting} msg={spMsg} logs={spLogs} existingTitles={existingTitles} onScan={runScrape} onImport={doImportScrape} /></section>
+    <section className="panel remote-card"><PanelTitle title="Sincronizar (servidor remoto)" subtitle="Ejecuta syncs GNULA en un proceso separado (sincronizarveamostv.86.48.23.214.nip.io) que comparte la misma base de datos." /><div className="gitem-row"><Field label="URL del servidor"><input value={remUrl} onChange={e => setRemUrl(e.target.value)} /></Field><Field label="Token (X-Sync-Token)"><input type="password" value={remToken} onChange={e => { setRemToken(e.target.value); localStorage.setItem('remSyncToken', e.target.value); }} /></Field></div><div className="gitem-row">{(['home', 'movies', 'series', 'anime'] as const).map(k => <button key={k} type="button" className="primary-button" onClick={() => runRemSync(k)} disabled={remBusy !== null}>{remBusy === k ? '⟳ ...' : remKindLabels[k]}</button>)}</div><div className="gitem-row"><Field label="Páginas (ej: 1-20)"><input value={remPages} onChange={e => setRemPages(e.target.value)} /></Field><label className="switch-row"><input type="checkbox" checked={remReplace} onChange={e => setRemReplace(e.target.checked)} /> Reemplazar datos</label></div>{remMsg && <div className="form-message">{remMsg}</div>}{remStatus && <div className="channel-jobs">{gnulahdTasks.filter(k => remStatus[k]).map(k => { const st = remStatus[k]; return <div className="channel-job" key={k}><StatusBadge status={st?.status || 'idle'} /><b>{gnulahdTaskNames[k]}</b><small>{st?.progress?.message || st?.error || 'Sin ejecución reciente'}</small></div>; })}</div>}{(!remBase || !remToken.trim()) && <div className="form-message">Configura la URL y el token para ver el estado y lanzar syncs.</div>}<div className="one-log-head"><div><h2>Log del servidor remoto</h2><span>{remLines.length} registros</span></div></div><div className="process-log">{remLines.length ? remLines.map((line, i) => <div key={i}>{line}</div>) : <span>Sin logs todavía.</span>}</div></section>
   </main>{selected && <Modal def={selected} params={params} setParams={setParams} close={() => setSelected(null)} execute={() => execute(selected)} executing={executing} />}</div>;
 }
 function Field({ label, children }: { label: string; children: React.ReactNode }) { return <label className="field"><span>{label}</span>{children}</label>; }

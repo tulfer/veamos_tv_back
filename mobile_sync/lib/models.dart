@@ -182,6 +182,20 @@ class MediaItem {
     this.description,
   });
 
+  /// Reconstruye un ítem desde el listado ligero del backend
+  /// (`GET /sync/gnulahd/items`), suficiente para scrapear su detalle.
+  factory MediaItem.fromExistingJson(Map<String, dynamic> json) => MediaItem(
+        id: json['id'] as String? ?? '',
+        title: json['title'] as String? ?? json['id'] as String? ?? '',
+        poster: json['poster'] as String?,
+        backdrop: json['backdrop'] as String?,
+        rating: (json['rating'] as num?)?.toDouble(),
+        year: (json['year'] as num?)?.toInt(),
+        type: json['type'] as String? ?? 'movie',
+        genres: (json['genres'] as List?)?.cast<String>(),
+        description: json['description'] as String?,
+      );
+
   Map<String, dynamic> toCatalogJson() => {
         'id': id,
         'title': title,

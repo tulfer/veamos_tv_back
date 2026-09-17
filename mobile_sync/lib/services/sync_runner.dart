@@ -38,7 +38,16 @@ class SyncOptions {
   /// Scrapea el detalle (`content`) de cada ítem y lo sube enriquecido.
   final bool fetchContent;
 
-  const SyncOptions({this.pages = 1, this.replace = false, this.fetchContent = true});
+  /// Sólo actualiza el `content` de los ítems que ya existen en el backend
+  /// (no lista páginas ni agrega títulos nuevos).
+  final bool updateExisting;
+
+  const SyncOptions({
+    this.pages = 1,
+    this.replace = false,
+    this.fetchContent = true,
+    this.updateExisting = false,
+  });
 
   /// Tope de páginas (el backend acepta hasta 500 ítems por lote).
   static const int maxPages = 15;
@@ -47,6 +56,7 @@ class SyncOptions {
         'pages': pages,
         'replace': replace,
         'fetchContent': fetchContent,
+        'updateExisting': updateExisting,
       };
 
   factory SyncOptions.fromJson(Map<String, dynamic>? json) {
@@ -56,6 +66,7 @@ class SyncOptions {
       pages: raw < 1 ? 1 : (raw > maxPages ? maxPages : raw),
       replace: json['replace'] == true,
       fetchContent: json['fetchContent'] != false,
+      updateExisting: json['updateExisting'] == true,
     );
   }
 }
@@ -108,6 +119,7 @@ class _DetailJob {
   final int pages;
   final bool replace;
   final bool fetchContent;
+  final bool updateExisting;
 
   _DetailJob({
     required this.id,
@@ -118,6 +130,7 @@ class _DetailJob {
     this.pages = 1,
     this.replace = false,
     this.fetchContent = true,
+    this.updateExisting = false,
   });
 }
 
@@ -247,6 +260,7 @@ class SyncRunner {
           pages: _options.pages,
           replace: _options.replace,
           fetchContent: _options.fetchContent,
+          updateExisting: _options.updateExisting,
         ));
       }
     } else if (wantsHome) {
@@ -264,6 +278,7 @@ class SyncRunner {
             pages: _options.pages,
             replace: _options.replace,
             fetchContent: _options.fetchContent,
+            updateExisting: _options.updateExisting,
           ));
         }
       }
@@ -280,6 +295,18 @@ class SyncRunner {
       List<MediaItem> items;
       if (job.items != null) {
         items = job.items!;
+      } else if (job.updateExisting) {
+        // Modo "solo content": los ítems salen del backend (no se listean
+        // páginas ni se agregan títulos nuevos).
+        _log('═══ Actualizando content de ${job.label} (solo existentes) ═══');
+        items = await _fetchExisting(job.kind!);
+        if (items.isEmpty) {
+          _log('⚠️ No hay ítems guardados de ${job.kind} en el backend. Nada que actualizar.');
+          _doneJobs.add(job.id);
+          await _saveCheckpoint();
+          continue;
+        }
+        _log('Existentes en el backend: ${items.length} ítems.');
       } else {
         _log('═══ Sincronizando ${job.label} ═══');
         items = await _scrapePages(job.kind!, job.pages);
@@ -293,8 +320,9 @@ class SyncRunner {
       }
 
       // Catálogo sin detalle: reemplaza o sube los ítems tal cual (rápido).
-      // Aplica a los listados, no a los ítems del home (siempre con content).
-      if (job.items == null && (job.replace || !job.fetchContent) && !catalogDone) {
+      // Aplica a los listados, no a los ítems del home (siempre con content)
+      // ni al modo "solo content" (no debe tocar el catálogo).
+      if (job.items == null && !job.updateExisting && (job.replace || !job.fetchContent) && !catalogDone) {
         await _sendCatalog(job, items);
         catalogDone = true;
         _currentJob = {'jobId': job.id, 'doneCount': 0, 'catalogDone': true};
@@ -340,6 +368,18 @@ class SyncRunner {
         }
       }
       _log('$kind pág. $page: $added nuevos');
+    }
+    return items;
+  }
+
+  /// Descarga los ítems ya guardados en el backend (sin `content`) para poder
+  /// re-scrapear únicamente su detalle ("solo actualizar lo existente").
+  Future<List<MediaItem>> _fetchExisting(String kind) async {
+    final raw = await _api.fetchExisting(_kindToType(kind));
+    final items = <MediaItem>[];
+    for (final e in raw) {
+      final item = MediaItem.fromExistingJson(e);
+      if (item.id.isNotEmpty) items.add(item);
     }
     return items;
   }
@@ -456,7 +496,7 @@ class SyncRunner {
         }
       }
     }
-    _log('${job.label} (${job.type}): $sent/${items.length} guardadas en el backend.');
+    _log('${job.label} (${job.type}): $sent/${items.length} ítems ${job.updateExisting ? 'actualizados' : 'guardadas'} en el backend.');
   }
 
   Future<void> close() async {

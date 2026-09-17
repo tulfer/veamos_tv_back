@@ -19,6 +19,31 @@ class IngestApi {
 
   String get _ingestUrl => '$baseUrl/sync/ingest';
 
+  /// Lista los ítems ya guardados en el backend para un tipo de catálogo
+  /// (movies/series/anime) sin su `content`. Endpoint ligero: `GET
+  /// /sync/gnulahd/items?kind=...`.
+  Future<List<Map<String, dynamic>>> fetchExisting(String type) async {
+    final uri = Uri.parse('$baseUrl/sync/gnulahd/items?kind=$type');
+    final request = await _client.getUrl(uri);
+    request.headers.set(HttpHeaders.acceptHeader, 'application/json');
+    final response = await request.close().timeout(const Duration(seconds: 90));
+    final raw = await response.transform(utf8.decoder).join().timeout(const Duration(seconds: 90));
+    if (response.statusCode >= 300) {
+      String detail = raw;
+      try {
+        detail = (jsonDecode(raw) as Map<String, dynamic>)['error'] as String? ?? raw;
+      } catch (_) {}
+      throw HttpException('HTTP ${response.statusCode}: $detail');
+    }
+    Map<String, dynamic> data;
+    try {
+      data = jsonDecode(raw) as Map<String, dynamic>;
+    } catch (_) {
+      return const [];
+    }
+    return ((data['items'] as List?) ?? const []).cast<Map<String, dynamic>>();
+  }
+
   Future<Map<String, dynamic>> _post(Map<String, dynamic> body) async {
     final uri = Uri.parse(_ingestUrl);
     final request = await _client.postUrl(uri);

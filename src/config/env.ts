@@ -40,6 +40,10 @@ const envSchema = z.object({
   // scrapea GNULA desde la IP residencial del celular (DDoS-Guard bloquea
   // datacenters) y el backend guarda/mezcla y enriquece con los demás proveedores.
   SYNC_INGEST_TOKEN: z.string().optional(),
+
+  // Token de la API del servicio independiente "sincronizar" (X-Sync-Token).
+  // Si no está configurado, ese servicio usa SYNC_INGEST_TOKEN como fallback.
+  SINCRONIZAR_TOKEN: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);

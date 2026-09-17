@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-sincronizar/
 .env
 .env.local
 *.log
@@ -8,3 +9,4 @@ coverage/
 .idea/
 .vscode/
 *.tsbuildinfo
+sincronizar/

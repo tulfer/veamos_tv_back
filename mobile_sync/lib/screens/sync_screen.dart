@@ -206,6 +206,7 @@ class _SyncScreenState extends State<SyncScreen> {
     var pages = 1;
     var replace = false;
     var fetchContent = true;
+    var updateExisting = false;
     return showDialog<SyncOptions>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
@@ -216,20 +217,43 @@ class _SyncScreenState extends State<SyncScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Páginas a listar: $pages  (≈ ${pages * 32} ítems)'),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  value: updateExisting,
+                  onChanged: (value) => setDialogState(() {
+                    updateExisting = value;
+                    if (value) {
+                      replace = false;
+                      fetchContent = true;
+                    }
+                  }),
+                  title: const Text('Solo actualizar el content de lo ya guardado'),
+                  subtitle: const Text('No lista páginas ni agrega títulos: rescrapea el detalle de lo que ya existe'),
+                ),
+                const Divider(height: 12),
+                Text(
+                  updateExisting
+                      ? 'Se actualizarán los ítems existentes en el backend.'
+                      : 'Páginas a listar: $pages  (≈ ${pages * 32} ítems)',
+                ),
                 Slider(
                   value: pages.toDouble(),
                   min: 1,
                   max: SyncOptions.maxPages.toDouble(),
                   divisions: SyncOptions.maxPages - 1,
                   label: '$pages',
-                  onChanged: (value) => setDialogState(() => pages = value.round()),
+                  onChanged: updateExisting
+                      ? null
+                      : (value) => setDialogState(() => pages = value.round()),
                 ),
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
                   dense: true,
                   value: replace,
-                  onChanged: (value) => setDialogState(() => replace = value),
+                  onChanged: updateExisting
+                      ? null
+                      : (value) => setDialogState(() => replace = value),
                   title: const Text('Reemplazar el contenido'),
                   subtitle: const Text('La colección queda solo con lo que venga en el listado'),
                 ),
@@ -237,7 +261,9 @@ class _SyncScreenState extends State<SyncScreen> {
                   contentPadding: EdgeInsets.zero,
                   dense: true,
                   value: fetchContent,
-                  onChanged: (value) => setDialogState(() => fetchContent = value),
+                  onChanged: updateExisting
+                      ? null
+                      : (value) => setDialogState(() => fetchContent = value),
                   title: const Text('Cargar el content de cada ítem'),
                   subtitle: const Text('Scrapea el detalle (lento) y lo sube enriquecido'),
                 ),
@@ -252,7 +278,12 @@ class _SyncScreenState extends State<SyncScreen> {
             FilledButton(
               onPressed: () => Navigator.pop(
                 dialogContext,
-                SyncOptions(pages: pages, replace: replace, fetchContent: fetchContent),
+                SyncOptions(
+                  pages: pages,
+                  replace: replace,
+                  fetchContent: updateExisting ? true : fetchContent,
+                  updateExisting: updateExisting,
+                ),
               ),
               child: const Text('Iniciar'),
             ),
