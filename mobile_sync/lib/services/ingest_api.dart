@@ -49,10 +49,21 @@ class IngestApi {
   }
 
   /// Envía un lote de ítems del catálogo (con su `content` de GNULA ya
-  /// scrapeado). Devuelve cuántos guardó el backend.
-  Future<int> sendItems(String type, List<Map<String, dynamic>> items, {bool enrich = true}) async {
+  /// scrapeado). Con `replace` el backend reemplaza la colección completa.
+  /// Devuelve cuántos guardó el backend.
+  Future<int> sendItems(
+    String type,
+    List<Map<String, dynamic>> items, {
+    bool enrich = true,
+    bool replace = false,
+  }) async {
     if (items.isEmpty) return 0;
-    final result = await _post({'type': type, 'items': items, 'enrich': enrich});
+    final result = await _post({
+      'type': type,
+      'items': items,
+      'enrich': enrich,
+      if (replace) 'replace': true,
+    });
     _log?.call('[ingest] $type: ${result['saved'] ?? items.length} items guardados');
     return result['saved'] as int? ?? items.length;
   }

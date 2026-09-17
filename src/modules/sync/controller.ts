@@ -3683,6 +3683,8 @@ interface IngestRequestBody {
   home?: import('../../providers/gnulahd').GnulahdHomeData;
   items?: IngestItemPayload[];
   enrich?: boolean;
+  /** Reemplaza la colección completa en vez de mezclar por id. */
+  replace?: boolean;
 }
 
 const MAX_INGEST_ITEMS = 500;
@@ -3706,7 +3708,7 @@ export async function ingestSyncHandler(request: FastifyRequest, reply: FastifyR
   }
 
   const body = (request.body ?? {}) as IngestRequestBody;
-  const { type, enrich } = body;
+  const { type, enrich, replace } = body;
 
   try {
     if (type === 'home') {
@@ -3768,10 +3770,17 @@ export async function ingestSyncHandler(request: FastifyRequest, reply: FastifyR
       }
     }
 
-    await upsertItemsByCol(collection, items as Array<Record<string, unknown> & { id: string }>);
-    memoryCache.del('sync:data');
-    logger.info({ count: items.length, collection }, 'Ingesta móvil guardada');
-    return reply.send({ ok: true, type, saved: items.length });
+    if (replace) {
+      // Reemplazo total: la colección queda exactamente con este lote (se usa
+      // para "Reemplazar el catálogo" desde la app, sin acumular restos viejos).
+      await replaceCollection(collection, items as Array<Record<string, unknown> & { id: string }>);
+      logger.info({ count: items.length, collection }, 'Ingesta móvil: colección reemplazada');
+    } else {
+      await upsertItemsByCol(collection, items as Array<Record<string, unknown> & { id: string }>);
+      memoryCache.del('sync:data');
+      logger.info({ count: items.length, collection }, 'Ingesta móvil guardada');
+    }
+    return reply.send({ ok: true, type, saved: items.length, replaced: replace === true });
   } catch (error) {
     logger.error({ error: (error as Error).message, type }, 'Ingesta móvil falló');
     return reply.status(500).send({ ok: false, error: (error as Error).message });

@@ -79,6 +79,37 @@ function removeEmptyParents(file, stopRoot) {
   }
 }
 
+// Permisos y foreground service que `flutter create` no genera pero que la app
+// necesita (sync en segundo plano). Se re-inyectan tras cada `flutter create`.
+const ANDROID_PERMISSIONS = [
+  'android.permission.INTERNET',
+  'android.permission.FOREGROUND_SERVICE',
+  'android.permission.FOREGROUND_SERVICE_DATA_SYNC',
+  'android.permission.POST_NOTIFICATIONS',
+  'android.permission.WAKE_LOCK',
+];
+
+function ensureAndroidPermissions(text) {
+  let next = text;
+  for (const permission of ANDROID_PERMISSIONS) {
+    const tag = `<uses-permission android:name="${permission}"/>`;
+    if (!next.includes(tag)) {
+      next = next.replace(/(<manifest[^>]*>\s*\n)/, `$1    ${tag}\n`);
+    }
+  }
+  return next;
+}
+
+function ensureForegroundService(text) {
+  const name = 'com.pravera.flutter_foreground_task.service.ForegroundService';
+  if (text.includes(name)) return text;
+  const service =
+    `        <service\n            android:name="${name}"\n` +
+    '            android:foregroundServiceType="dataSync"\n' +
+    '            android:exported="false" />\n';
+  return text.replace(/(\n\s*<\/application>)/, `\n${service}$1`);
+}
+
 console.log('Aplicando branding veamosTVSync / com.veamos.tv.sync...');
 
 // Android
@@ -93,7 +124,11 @@ patch('android/app/build.gradle', (t) =>
     .replace(/(namespace\s+)".*?"/g, `$1"${BUNDLE_ID}"`)
     .replace(/(applicationId\s+)".*?"/g, `$1"${BUNDLE_ID}"`),
 );
-patch('android/app/src/main/AndroidManifest.xml', (t) => t.replace(/android:label="[^"]*"/g, `android:label="${APP_NAME}"`));
+patch('android/app/src/main/AndroidManifest.xml', (t) =>
+  ensureForegroundService(
+    ensureAndroidPermissions(t.replace(/android:label="[^"]*"/g, `android:label="${APP_NAME}"`)),
+  ),
+);
 
 // Android: MainActivity.kt — el namespace/applicationId cambió, pero la clase
 // sigue en el paquete original de `flutter create`; la reubicamos para que el

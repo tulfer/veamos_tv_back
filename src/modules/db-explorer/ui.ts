@@ -570,7 +570,7 @@ function renderDetailBody() {
     closeDetail();
     return;
   }
-  renderNode(node, [state.detail.idx], null, body, true);
+  renderNode(node, [state.detail.idx], null, body, true, false);
 }
 
 function editDetailJson() {
@@ -602,7 +602,7 @@ function render() {
     renderTable();
   } else {
     container.className = 'tree';
-    renderNode(state.data, [], null, container, true);
+    renderNode(state.data, [], null, container, true, true);
   }
   renderDetailBody();
   renderCrumb();
@@ -620,7 +620,11 @@ function render() {
 
 function isContainer(v) { return v !== null && typeof v === 'object'; }
 
-function renderNode(value, path, keyLabel, parent, isRoot) {
+function renderNode(value, path, keyLabel, parent, isRoot, prune) {
+  // prune indica si en este nivel se ocultan los hijos que no coinciden con
+  // la búsqueda. Sólo se poda en la raíz (para listar los ítems/llaves que
+  // coinciden); al entrar en un ítem se muestra su JSON completo resaltando
+  // las coincidencias, en vez de dejar sólo los campos que matchean.
   var row = el('div', 'row');
   var keyStr = isRoot ? '(raíz)' : String(keyLabel);
 
@@ -664,7 +668,7 @@ function renderNode(value, path, keyLabel, parent, isRoot) {
       var children = el('div', 'children');
       if (isArr) {
         var filtered = null;
-        if (state.query && state.mode !== 'text') {
+        if (prune && state.query && state.mode !== 'text') {
           filtered = [];
           value.forEach(function (item, i) {
             if (eqItemMatches(item)) {
@@ -672,7 +676,7 @@ function renderNode(value, path, keyLabel, parent, isRoot) {
               state.matches++;
             }
           });
-        } else if (state.query && state.mode === 'text') {
+        } else if (prune && state.query && state.mode === 'text') {
           filtered = [];
           value.forEach(function (item, i) {
             if (subtreeMatches(i, item)) {
@@ -683,10 +687,10 @@ function renderNode(value, path, keyLabel, parent, isRoot) {
         }
         if (filtered) {
           if (filtered.length === 0) children.appendChild(el('div', 'empty', 'Sin coincidencias'));
-          filtered.forEach(function (f) { renderNode(f.item, path.concat(f.idx), f.idx, children, false); });
+          filtered.forEach(function (f) { renderNode(f.item, path.concat(f.idx), f.idx, children, false, false); });
         } else {
           for (var i = 0; i < value.length; i++) {
-            renderNode(value[i], path.concat(i), i, children, false);
+            renderNode(value[i], path.concat(i), i, children, false, false);
           }
         }
         if (!state.query) {
@@ -700,8 +704,8 @@ function renderNode(value, path, keyLabel, parent, isRoot) {
         }
       } else {
         Object.keys(value).sort().forEach(function (k) {
-          if (state.query && state.mode === 'text' && !subtreeMatches(k, value[k])) return;
-          renderNode(value[k], path.concat(k), k, children, false);
+          if (prune && state.query && state.mode === 'text' && !subtreeMatches(k, value[k])) return;
+          renderNode(value[k], path.concat(k), k, children, false, false);
         });
         if (!state.query) {
           var addFieldBtn = el('button', 'act', '＋ agregar campo');

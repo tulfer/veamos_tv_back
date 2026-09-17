@@ -12,6 +12,7 @@ dependencies:
   html: ^0.15.4
   wakelock_plus: ^1.2.8
   shared_preferences: ^2.3.2
+  flutter_foreground_task: ^10.0.0
 
 dev_dependencies:
   flutter_lints: ^4.0.0

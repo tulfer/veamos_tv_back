@@ -1,19 +1,16 @@
-import 'dart:async';
-
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../config.dart';
-import '../services/gnula_client.dart';
-import '../services/ingest_api.dart';
+import '../services/sync_runner.dart';
+import '../services/sync_task_handler.dart';
 
-enum SyncTask { all, home, movies, series }
-
-/// Pantalla principal de sincronización. Mantiene la pantalla encendida
-/// mientras una tarea corre (los modos de suspensión de Android matan el
-/// scraping en background; con wakelock no se apaga durante la ejecución).
+/// Pantalla principal de sincronización. La sync se ejecuta dentro de un
+/// foreground service (`flutter_foreground_task`) para que Android no mate el
+/// proceso cuando la app pasa a segundo plano; la notificación muestra el
+/// avance y la UI recibe logs/progreso por el puerto de comunicación.
 class SyncScreen extends StatefulWidget {
   final AppConfig config;
 
@@ -27,12 +24,44 @@ class _SyncScreenState extends State<SyncScreen> {
   final List<String> _log = [];
   final ScrollController _scroll = ScrollController();
   bool _running = false;
+  bool _serviceActive = false;
+  bool _keepAlive = false;
+  bool _resumable = false;
   int _done = 0;
   int _total = 0;
   int _saved = 0;
   String _currentStep = '';
-  GnulaClient? _client;
-  IngestApi? _api;
+
+  @override
+  void initState() {
+    super.initState();
+    FlutterForegroundTask.addTaskDataCallback(_onTaskData);
+    _refreshServiceState();
+    _refreshCheckpoint();
+  }
+
+  @override
+  void dispose() {
+    FlutterForegroundTask.removeTaskDataCallback(_onTaskData);
+    WakelockPlus.disable();
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  /// Mientras la sync corre y la app está abierta, mantiene la pantalla
+  /// encendida (el foreground service ya mantiene la CPU, esto evita que se
+  /// apague la pantalla del usuario).
+  Future<void> _updateWakelock(bool keepScreenOn) async {
+    try {
+      if (keepScreenOn) {
+        await WakelockPlus.enable();
+      } else {
+        await WakelockPlus.disable();
+      }
+    } catch (_) {
+      // Sin plataforma (tests): se ignora.
+    }
+  }
 
   void _append(String line) {
     _log.add('${_timeStamp()} $line');
@@ -54,109 +83,237 @@ class _SyncScreenState extends State<SyncScreen> {
     return '$h:$m:$s';
   }
 
-  Future<void> _run(List<SyncTask> tasks) async {
-    if (_running) return;
+  Future<void> _refreshServiceState() async {
+    bool running = false;
+    try {
+      running = await FlutterForegroundTask.isRunningService;
+    } catch (_) {
+      // Sin plataforma (tests) o servicio no inicializado: se asume apagado.
+    }
+    if (mounted) setState(() => _serviceActive = running);
+  }
+
+  Future<void> _refreshCheckpoint() async {
+    final resumable = await hasSyncCheckpoint();
+    if (mounted) setState(() => _resumable = resumable);
+  }
+
+  /// Datos que envía el isolate del [SyncTaskHandler] (log, progreso, fin).
+  void _onTaskData(Object data) {
+    if (data is! Map) return;
+    switch (data['kind']) {
+      case 'log':
+        _append(data['line'] as String? ?? '');
+        break;
+      case 'progress':
+        setState(() {
+          _running = true;
+          _done = data['done'] as int? ?? 0;
+          _total = data['total'] as int? ?? 0;
+          _saved = data['saved'] as int? ?? 0;
+          _currentStep = data['step'] as String? ?? '';
+        });
+        _updateWakelock(true);
+        break;
+      case 'done':
+      case 'idle':
+      case 'error':
+        setState(() {
+          _running = false;
+          _currentStep = '';
+        });
+        _updateWakelock(false);
+        _refreshServiceState();
+        _refreshCheckpoint();
+        break;
+      case 'resumable':
+        setState(() => _resumable = data['value'] == true);
+        break;
+    }
+  }
+
+  Future<bool> _ensureNotificationPermission() async {
+    final current = await FlutterForegroundTask.checkNotificationPermission();
+    if (current == NotificationPermission.granted) return true;
+    final result = await FlutterForegroundTask.requestNotificationPermission();
+    if (result != NotificationPermission.granted) {
+      _append('⚠️ Sin permiso de notificaciones: Android podría detener la sync en segundo plano.');
+      return false;
+    }
+    return true;
+  }
+
+  Future<void> _run(List<SyncTask> tasks, {bool resume = false, SyncOptions? options}) async {
     if (!widget.config.isConfigured) {
       _append('❌ Configura la URL del backend y el token en Ajustes.');
       return;
     }
+    if (_running) return;
+
+    await _ensureNotificationPermission();
+
     setState(() {
       _running = true;
       _done = 0;
       _total = 0;
       _saved = 0;
-      _log.clear();
       _currentStep = 'Iniciando...';
+      if (!resume) _log.clear();
     });
+    _updateWakelock(true);
 
-    try {
-      await WakelockPlus.enable();
-      _client = GnulaClient(staticDomains: widget.config.gnulaDomains, log: _append);
-      _api = IngestApi(baseUrl: widget.config.backendUrl, token: widget.config.syncToken, log: _append);
+    final command = buildSyncCommand(
+      tasks: tasks,
+      backendUrl: widget.config.backendUrl.trim(),
+      token: widget.config.syncToken.trim(),
+      domains: widget.config.gnulaDomains,
+      keepAlive: _keepAlive,
+      resume: resume,
+      options: options ?? const SyncOptions(),
+    );
 
-      bool want(Set<SyncTask> t) =>
-          t.contains(SyncTask.all) || t.contains(SyncTask.home);
-      final all = tasks.contains(SyncTask.all);
+    // Si el servicio ya está vivo (modo "mantener activo"), sólo le mandamos
+    // el comando por el canal de comunicación.
+    if (await FlutterForegroundTask.isRunningService) {
+      FlutterForegroundTask.sendDataToTask(command);
+      setState(() => _serviceActive = true);
+      return;
+    }
 
-      if (want(tasks.toSet())) {
-        _append('═══ Sincronizando HOME ═══');
-        _currentStep = 'Scrapeando home de GNULA...';
-        final home = await _client!.scrapeHome();
-        _append('Home scrapeado: ${home.banners.length} banners, ${home.sections.length} secciones');
-        await _api!.sendHome(home);
-      }
-      if (all || tasks.contains(SyncTask.movies)) {
-        await _syncKind('peliculas', 'movies');
-      }
-      if (all || tasks.contains(SyncTask.series)) {
-        await _syncKind('series', 'series');
-      }
-      _append('✅ Sincronización terminada.');
-    } catch (error, stack) {
-      _append('❌ Error: $error');
-      if (kDebugMode) _append(stack.toString());
-    } finally {
-      await WakelockPlus.disable();
+    await FlutterForegroundTask.saveData(key: syncCommandKey, value: command);
+    final result = await FlutterForegroundTask.startService(
+      serviceId: syncServiceId,
+      serviceTypes: const [ForegroundServiceTypes.dataSync],
+      notificationTitle: 'veamosTVSync — sincronizando',
+      notificationText: 'Iniciando...',
+      callback: syncTaskCallback,
+    );
+    if (result is ServiceRequestFailure) {
+      _append('❌ No se pudo iniciar el servicio: ${result.error}');
       setState(() {
         _running = false;
         _currentStep = '';
       });
-    }
-  }
-
-  Future<void> _syncKind(String kind, String type) async {
-    final label = kind == 'peliculas' ? 'PELÍCULAS' : 'SERIES';
-    _append('═══ Sincronizando $label ═══');
-    _currentStep = 'Listando $kind (página 1)...';
-    final items = await _client!.scrapeList(kind, page: 1);
-    if (items.isEmpty) {
-      _append('⚠️ El listado de $kind quedó vacío (anti-bot?). Abortando.');
+      _updateWakelock(false);
       return;
     }
-    _append('Listado: ${items.length} títulos');
-    setState(() {
-      _total = items.length;
-      _done = 0;
-    });
-
-    const batchSize = 5;
-    final batch = <Map<String, dynamic>>[];
-    var sent = 0;
-    for (var i = 0; i < items.length; i++) {
-      final item = items[i];
-      _currentStep = 'Scrapeando detalle ${i + 1}/${items.length}: "${item.title}"';
-      try {
-        final detail = await _client!.scrapeDetail(item);
-        batch.add({
-          ...item.toCatalogJson(),
-          'content': detail.toJson(),
-          'contentUpdatedAt': DateTime.now().millisecondsSinceEpoch,
-        });
-      } catch (error) {
-        _append('⚠️ ${item.title}: $error');
-      }
-      setState(() {
-        _done = i + 1;
-      });
-
-      if (batch.length >= batchSize || i == items.length - 1) {
-        if (batch.isNotEmpty) {
-          final saved = await _api!.sendItems(type, List.of(batch), enrich: true);
-          sent += saved;
-          setState(() => _saved = sent);
-          batch.clear();
-        }
-      }
-    }
-    _append('$label: $sent/${items.length} guardadas en el backend.');
+    setState(() => _serviceActive = true);
   }
 
-  @override
-  void dispose() {
-    _client?.close();
-    _api?.close();
-    _scroll.dispose();
-    super.dispose();
+  /// Pregunta cuántas páginas listar, si reemplaza el catálogo y si carga el
+  /// `content` de cada ítem. Devuelve `null` si el usuario cancela.
+  Future<SyncOptions?> _askOptions(String label) async {
+    var pages = 1;
+    var replace = false;
+    var fetchContent = true;
+    return showDialog<SyncOptions>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text(label),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Páginas a listar: $pages  (≈ ${pages * 32} ítems)'),
+                Slider(
+                  value: pages.toDouble(),
+                  min: 1,
+                  max: SyncOptions.maxPages.toDouble(),
+                  divisions: SyncOptions.maxPages - 1,
+                  label: '$pages',
+                  onChanged: (value) => setDialogState(() => pages = value.round()),
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  value: replace,
+                  onChanged: (value) => setDialogState(() => replace = value),
+                  title: const Text('Reemplazar el contenido'),
+                  subtitle: const Text('La colección queda solo con lo que venga en el listado'),
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  value: fetchContent,
+                  onChanged: (value) => setDialogState(() => fetchContent = value),
+                  title: const Text('Cargar el content de cada ítem'),
+                  subtitle: const Text('Scrapea el detalle (lento) y lo sube enriquecido'),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Cancelar'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(
+                dialogContext,
+                SyncOptions(pages: pages, replace: replace, fetchContent: fetchContent),
+              ),
+              child: const Text('Iniciar'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _runKind(SyncTask task, String label) async {
+    if (_running) return;
+    final options = await _askOptions(label);
+    if (options == null) return;
+    await _run([task], options: options);
+  }
+
+  /// Mantiene el servicio vivo aunque no haya una sync en curso (evita que el
+  /// sistema mate el proceso). Si se apaga y no hay sync, detiene el servicio.
+  Future<void> _setKeepAlive(bool value) async {
+    setState(() => _keepAlive = value);
+    if (!value) {
+      if (!_running && await FlutterForegroundTask.isRunningService) {
+        await FlutterForegroundTask.stopService();
+        setState(() => _serviceActive = false);
+      }
+      return;
+    }
+
+    await _ensureNotificationPermission();
+    if (await FlutterForegroundTask.isRunningService) return;
+
+    await FlutterForegroundTask.saveData(key: syncCommandKey, value: buildKeepAliveCommand());
+    final result = await FlutterForegroundTask.startService(
+      serviceId: syncServiceId,
+      serviceTypes: const [ForegroundServiceTypes.dataSync],
+      notificationTitle: 'veamosTVSync activo',
+      notificationText: 'En espera de una sincronización',
+      callback: syncTaskCallback,
+    );
+    if (result is ServiceRequestFailure) {
+      _append('❌ No se pudo iniciar el servicio: ${result.error}');
+      setState(() => _keepAlive = false);
+      return;
+    }
+    setState(() => _serviceActive = true);
+  }
+
+  Future<void> _stop() async {
+    if (await FlutterForegroundTask.isRunningService) {
+      FlutterForegroundTask.sendDataToTask(buildStopCommand());
+      await FlutterForegroundTask.stopService();
+    }
+    setState(() {
+      _running = false;
+      _serviceActive = false;
+      _keepAlive = false;
+      _currentStep = '';
+    });
+    _updateWakelock(false);
+    _append('Servicio en segundo plano detenido.');
+    _refreshCheckpoint();
   }
 
   @override
@@ -210,19 +367,51 @@ class _SyncScreenState extends State<SyncScreen> {
                       label: const Text('Solo home'),
                     ),
                     OutlinedButton.icon(
-                      onPressed: _running ? null : () => _run(const [SyncTask.movies]),
+                      onPressed: _running ? null : () => _runKind(SyncTask.movies, 'Películas'),
                       icon: const Icon(Icons.movie),
                       label: const Text('Películas'),
                     ),
                     OutlinedButton.icon(
-                      onPressed: _running ? null : () => _run(const [SyncTask.series]),
+                      onPressed: _running ? null : () => _runKind(SyncTask.series, 'Series'),
                       icon: const Icon(Icons.live_tv),
                       label: const Text('Series'),
                     ),
+                    OutlinedButton.icon(
+                      onPressed: _running ? null : () => _runKind(SyncTask.anime, 'Anime'),
+                      icon: const Icon(Icons.animation),
+                      label: const Text('Anime'),
+                    ),
                   ],
                 ),
-                const SizedBox(height: 12),
+                if (_resumable)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: FilledButton.icon(
+                      onPressed: _running ? null : () => _run(const [], resume: true),
+                      icon: const Icon(Icons.play_arrow),
+                      label: const Text('Continuar donde quedó'),
+                    ),
+                  ),
+                const SizedBox(height: 4),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  value: _keepAlive,
+                  onChanged: _setKeepAlive,
+                  title: const Text('Mantener activo en segundo plano'),
+                  subtitle: const Text('Notificación fija para que Android no mate el proceso'),
+                ),
+                if (_serviceActive)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: _stop,
+                      icon: const Icon(Icons.stop_circle_outlined, size: 18),
+                      label: const Text('Detener servicio'),
+                    ),
+                  ),
                 if (_running) ...[
+                  const SizedBox(height: 8),
                   LinearProgressIndicator(value: _total > 0 ? _done / _total : null),
                   const SizedBox(height: 8),
                   Text(_currentStep, style: theme.textTheme.bodySmall),
