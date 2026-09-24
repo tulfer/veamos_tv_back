@@ -93,6 +93,21 @@ class IngestApi {
     return result['saved'] as int? ?? items.length;
   }
 
+  /// Guarda resultados de una búsqueda scrapeada por la app (push task
+  /// 'search'): `POST /sync/ingest` con `type: 'search'`. El backend los
+  /// mete en las colecciones v2 por prefijo de id e invalida su caché.
+  Future<int> sendSearch(String query, List<Map<String, dynamic>> items) async {
+    if (items.isEmpty) return 0;
+    final result = await _post({
+      'type': 'search',
+      'query': query,
+      'items': items,
+      'enrich': true,
+    });
+    _log?.call('[ingest] search "$query": ${result['saved'] ?? items.length} items guardados');
+    return result['saved'] as int? ?? items.length;
+  }
+
   void close() {
     _client.close(force: true);
   }

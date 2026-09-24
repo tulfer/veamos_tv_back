@@ -491,6 +491,27 @@ class GnulaClient {
     return items;
   }
 
+  // ── Búsqueda ───────────────────────────────────────────────────────────────
+
+  /// Busca en GNULA (`/?s=<query>`) mirando el badge de tipo de cada tarjeta,
+  /// igual que hace `searchGnulahd` en el backend.
+  Future<List<MediaItem>> search(String query) async {
+    final html = await fetchPage('/?s=${Uri.encodeQueryComponent(query)}');
+    final doc = html_parser.parse(html);
+    final items = <MediaItem>[];
+    for (final el in doc.querySelectorAll('.gnrd-grid > a.gnrd-card')) {
+      final badge = el.querySelector('.gnrd-type-badge')?.text.trim().toLowerCase() ?? '';
+      final isAnime = badge.contains('anime');
+      final isSeries = badge.contains('serie') || isAnime;
+      final type = isAnime ? 'anime' : isSeries ? 'series' : 'movie';
+      final prefix = isAnime ? 'gani_' : isSeries ? 'gser_' : 'gmov_';
+      final item = _parseGnrdCard(el, type: type, prefix: prefix);
+      if (item != null) items.add(item);
+    }
+    _info('search "$query": ${items.length} resultados');
+    return items;
+  }
+
   // ── Detalle ───────────────────────────────────────────────────────────────
 
   Future<ContentDetail> scrapeDetail(MediaItem item) async {

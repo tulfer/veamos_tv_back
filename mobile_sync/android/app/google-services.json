@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "755783758234",
+    "project_id": "veamos-tv",
+    "storage_bucket": "veamos-tv.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:755783758234:android:cb01368b2d35c5c8984a23",
+        "android_client_info": {
+          "package_name": "com.veamos.tv.sync"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB8XkG_CgtxKpHepK5CBoOet6EVPhXFdW4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

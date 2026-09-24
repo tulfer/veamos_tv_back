@@ -3679,12 +3679,14 @@ interface IngestItemPayload {
 }
 
 interface IngestRequestBody {
-  type: 'home' | 'movies' | 'series' | 'anime';
+  type: 'home' | 'movies' | 'series' | 'anime' | 'search';
   home?: import('../../providers/gnulahd').GnulahdHomeData;
   items?: IngestItemPayload[];
   enrich?: boolean;
   /** Reemplaza la colección completa en vez de mezclar por id. */
   replace?: boolean;
+  /** Consulta original para type='search' (invalida el caché de búsqueda). */
+  query?: string;
 }
 
 const MAX_INGEST_ITEMS = 500;
@@ -3720,6 +3722,49 @@ export async function ingestSyncHandler(request: FastifyRequest, reply: FastifyR
       await saveGnulahdHomeData(home);
       logger.info({ banners: home.banners.length, sections: home.sections.length }, 'Ingesta móvil: home guardado');
       return reply.send({ ok: true, type, saved: { home: true } });
+    }
+
+    // Resultados de búsqueda scrapeados por la app (push task 'search'): se
+    // guardan en las colecciones v2 (por prefijo de id) y se invalida la caché
+    // de búsqueda para que el próximo /search los mezcle con los proveedores.
+    if (type === 'search') {
+      const query = typeof body.query === 'string' ? body.query.trim() : '';
+      const rawItems = Array.isArray(body.items) ? body.items : [];
+      if (!query || query.length < 2) {
+        return reply.status(422).send({ ok: false, error: 'type search requiere query (mín. 2 caracteres)' });
+      }
+      if (rawItems.length === 0) {
+        return reply.status(422).send({ ok: false, error: 'items vacío' });
+      }
+      if (rawItems.length > MAX_INGEST_ITEMS) {
+        return reply.status(422).send({ ok: false, error: `demasiados ítems (máx ${MAX_INGEST_ITEMS})` });
+      }
+      const bad = rawItems.find((item) => !item.id);
+      if (bad) {
+        return reply.status(422).send({ ok: false, error: 'todos los ítems deben incluir id' });
+      }
+
+      const grouped = new Map<string, IngestItemPayload[]>();
+      const push = (col: string, item: IngestItemPayload) => {
+        const list = grouped.get(col) ?? [];
+        list.push(item);
+        grouped.set(col, list);
+      };
+      for (const item of rawItems) {
+        if (item.id.startsWith('gmov_')) push('gnulahd-movies', item);
+        else if (item.id.startsWith('gser_')) push('gnulahd-series', item);
+        else if (item.id.startsWith('gani_')) push('gnulahd-anime', item);
+      }
+
+      let saved = 0;
+      for (const [col, items] of grouped) {
+        await upsertItemsByCol<IngestItemPayload & { id: string }>(col, items as any);
+        saved += items.length;
+      }
+      memoryCache.del('sync:data');
+      memoryCache.delByPattern('search:all:*');
+      logger.info({ query, saved, collections: grouped.size }, 'Ingesta móvil: resultados de búsqueda guardados');
+      return reply.send({ ok: true, type, saved, collections: grouped.size });
     }
 
     const collection = type === 'movies' ? 'gnulahd-movies' : type === 'series' ? 'gnulahd-series' : type === 'anime' ? 'gnulahd-anime' : null;

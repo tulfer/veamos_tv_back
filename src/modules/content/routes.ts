@@ -7,6 +7,7 @@ import { getCachedOrFetch, memoryCache } from '../../cache';
 import { loadSyncData } from '../../services/data-store';
 import { getMovieDetailContent, getSeriesDetailContent, unwrapDetailProxy } from '../../services/content-detail';
 import { getGnulahdDetailContent } from '../../services/gnulahd-content';
+import { dispatchPushTask } from '../../services/push';
 import { MediaItem, ContentDetail, LiveChannel } from '../../types';
 
 const UNAVAILABLE_MSG = 'Este contenido no está disponible en este momento.';
@@ -107,6 +108,9 @@ export async function contentRoutes(app: FastifyInstance) {
         async () => {
           const scraped = await scrapeGnulahdDetail(id);
           if (scraped) return scraped;
+          // GNULA bloqueado desde el backend: se pide a la app móvil (vía push)
+          // que scrapee este contenido desde la IP residencial y lo suba.
+          dispatchPushTask({ task: 'content', id }).catch(() => {});
           return generateFallbackDetail(id, id.startsWith('gmov_') ? 'movie' : 'series');
         },
         600,

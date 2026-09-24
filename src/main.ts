@@ -22,6 +22,7 @@ import { syncRoutes } from './modules/sync/routes';
 import { dbExplorerRoutes } from './modules/db-explorer/routes';
 import { proxyRoutes } from './modules/proxy/routes';
 import { playerRoutes } from './modules/player/routes';
+import { pushRoutes } from './modules/push/routes';
 import { startAutoRefreshScheduler } from './services/auto-refresh';
 import { startGnulahdAutoSyncScheduler } from './services/auto-sync-gnulahd';
 import { hydrateSyncState } from './services/sync-status';
@@ -113,6 +114,9 @@ async function buildServer() {
 
   process.stderr.write('buildServer: registering playerRoutes...\n');
   await app.register(playerRoutes);
+
+  process.stderr.write('buildServer: registering pushRoutes...\n');
+  await app.register(pushRoutes);
 
   process.stderr.write('buildServer: registering root routes...\n');
 

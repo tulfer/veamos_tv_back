@@ -4,7 +4,7 @@ publish_to: 'none'
 version: 0.1.0
 
 environment:
-  sdk: '>=3.3.0 <4.0.0'
+  sdk: '>=3.6.0 <4.0.0'
 
 dependencies:
   flutter:
@@ -13,6 +13,10 @@ dependencies:
   wakelock_plus: ^1.2.8
   shared_preferences: ^2.3.2
   flutter_foreground_task: ^10.0.0
+  workmanager: ^0.6.4
+  firebase_core: ^3.6.0
+  firebase_messaging: ^15.1.0
+  flutter_local_notifications: ^18.0.1
 
 dev_dependencies:
   flutter_lints: ^4.0.0

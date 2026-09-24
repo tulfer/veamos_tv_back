@@ -4,6 +4,7 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../config.dart';
+import '../services/auto_schedule.dart';
 import '../services/sync_runner.dart';
 import '../services/sync_task_handler.dart';
 
@@ -202,7 +203,7 @@ class _SyncScreenState extends State<SyncScreen> {
 
   /// Pregunta cuántas páginas listar, si reemplaza el catálogo y si carga el
   /// `content` de cada ítem. Devuelve `null` si el usuario cancela.
-  Future<SyncOptions?> _askOptions(String label) async {
+  Future<SyncOptions?> _askOptions(String label, {String confirmLabel = 'Iniciar'}) async {
     var pages = 1;
     var replace = false;
     var fetchContent = true;
@@ -285,7 +286,7 @@ class _SyncScreenState extends State<SyncScreen> {
                   updateExisting: updateExisting,
                 ),
               ),
-              child: const Text('Iniciar'),
+              child: Text(confirmLabel),
             ),
           ],
         ),
@@ -298,6 +299,164 @@ class _SyncScreenState extends State<SyncScreen> {
     final options = await _askOptions(label);
     if (options == null) return;
     await _run([task], options: options);
+  }
+
+  /// Diálogo de programación automática: intervalo + opciones (páginas,
+  /// reemplazo, content). Devuelve `null` si el usuario cancela.
+  Future<({SyncOptions options, int intervalMinutes})?> _scheduleDialog(AutoSchedule schedule) async {
+    var minutes = schedule.intervalMinutes;
+    var pages = schedule.options.pages;
+    var replace = schedule.options.replace;
+    var fetchContent = schedule.options.fetchContent;
+    var updateExisting = schedule.options.updateExisting;
+    const intervals = {15, 30, 60, 120, 240, 360, 720, 1440};
+    if (!intervals.contains(minutes)) minutes = 240;
+
+    return showDialog<({SyncOptions options, int intervalMinutes})>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text('Automático · ${schedule.label}'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Cada cuánto (en segundo plano, con notificaciones):'),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    for (final m in intervals)
+                      ChoiceChip(
+                        label: Text(m < 60 ? '$m min' : m % 1440 == 0 ? '1 día' : '${m ~/ 60} h'),
+                        selected: minutes == m,
+                        onSelected: (_) => setDialogState(() => minutes = m),
+                      ),
+                  ],
+                ),
+                const Divider(height: 16),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  value: updateExisting,
+                  onChanged: (value) => setDialogState(() {
+                    updateExisting = value;
+                    if (value) {
+                      replace = false;
+                      fetchContent = true;
+                    }
+                  }),
+                  title: const Text('Solo actualizar el content de lo ya guardado'),
+                  subtitle: const Text('No lista páginas ni agrega títulos: rescrapea el detalle de lo que ya existe'),
+                ),
+                Text(
+                  updateExisting
+                      ? 'Se actualizarán los ítems existentes en el backend.'
+                      : 'Páginas a listar: $pages  (≈ ${pages * 32} ítems)',
+                ),
+                Slider(
+                  value: pages.toDouble(),
+                  min: 1,
+                  max: SyncOptions.maxPages.toDouble(),
+                  divisions: SyncOptions.maxPages - 1,
+                  label: '$pages',
+                  onChanged: updateExisting
+                      ? null
+                      : (value) => setDialogState(() => pages = value.round()),
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  value: replace,
+                  onChanged: updateExisting
+                      ? null
+                      : (value) => setDialogState(() => replace = value),
+                  title: const Text('Reemplazar el contenido'),
+                  subtitle: const Text('La colección queda solo con lo que venga en el listado'),
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  value: fetchContent,
+                  onChanged: updateExisting
+                      ? null
+                      : (value) => setDialogState(() => fetchContent = value),
+                  title: const Text('Cargar el content de cada ítem'),
+                  subtitle: const Text('Scrapea el detalle (lento) y lo sube enriquecido'),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Cancelar'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(
+                dialogContext,
+                (
+                  options: SyncOptions(
+                    pages: pages,
+                    replace: replace,
+                    fetchContent: updateExisting ? true : fetchContent,
+                    updateExisting: updateExisting,
+                  ),
+                  intervalMinutes: minutes,
+                ),
+              ),
+              child: const Text('Guardar'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openSchedule(AutoSchedule schedule) async {
+    final result = await _scheduleDialog(schedule);
+    if (result == null || !mounted) return;
+    final updated = AutoSchedule(
+      job: schedule.job,
+      enabled: schedule.enabled,
+      intervalMinutes: result.intervalMinutes,
+      options: result.options,
+    );
+    setState(() => widget.config.autoSchedules[schedule.job] = updated);
+    await widget.config.setSchedule(updated);
+    await registerAutoSync();
+    _append('⏰ ${updated.label}: automático cada ${_fmtInterval(updated.intervalMinutes)}.');
+  }
+
+  Future<void> _toggleSchedule(AutoSchedule schedule, bool enabled) async {
+    if (enabled && !_serviceActive) {
+      await _ensureNotificationPermission();
+    }
+    final updated = AutoSchedule(
+      job: schedule.job,
+      enabled: enabled,
+      intervalMinutes: schedule.intervalMinutes,
+      options: schedule.options,
+    );
+    setState(() => widget.config.autoSchedules[schedule.job] = updated);
+    await widget.config.setSchedule(updated);
+    await registerAutoSync();
+    _append(enabled ? '⏰ ${updated.label}: automático activado.' : '⏰ ${updated.label}: automático detenido.');
+  }
+
+  String _fmtInterval(int minutes) =>
+      minutes >= 1440 ? '1 día' : (minutes < 60 ? '$minutes min' : '${minutes ~/ 60} h');
+
+  String _nextIn(AutoSchedule schedule) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final due = (widget.config.lastRuns[schedule.job] ?? 0) + schedule.intervalMinutes * 60000;
+    if (due > now) {
+      final mins = ((due - now) / 60000).ceil();
+      if (mins < 60) return 'en ~$mins min';
+      final h = (mins / 60).ceil();
+      return 'en ~$h h';
+    }
+    return 'pendiente';
   }
 
   /// Mantiene el servicio vivo aunque no haya una sync en curso (evita que el
@@ -432,6 +591,39 @@ class _SyncScreenState extends State<SyncScreen> {
                   title: const Text('Mantener activo en segundo plano'),
                   subtitle: const Text('Notificación fija para que Android no mate el proceso'),
                 ),
+                const SizedBox(height: 8),
+                Text('SINCRONIZACIÓN AUTOMÁTICA', style: theme.textTheme.labelLarge),
+                Text(
+                  'Corre en segundo plano (aunque la app esté cerrada). Con la notificación puesta, Android permite el trabajo; el push del backend también dispara estos scrapeos.',
+                  style: theme.textTheme.bodySmall,
+                ),
+                for (final job in widget.config.autoJobs) ...[
+                  Builder(
+                    builder: (context) {
+                      final schedule = widget.config.autoSchedules[job]!;
+                      final next = schedule.enabled ? '· próxima ${_nextIn(schedule)}' : '';
+                      return SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        dense: true,
+                        value: schedule.enabled,
+                        onChanged: (value) => _toggleSchedule(schedule, value),
+                        title: Text(schedule.label),
+                        subtitle: Text(
+                          'cada ${_fmtInterval(schedule.intervalMinutes)} $next\n'
+                          '${schedule.options.pages} pág · replace ${schedule.options.replace ? 'sí' : 'no'} · content ${schedule.options.fetchContent ? 'sí' : 'no'}',
+                        ),
+                        secondary: SizedBox(
+                          width: 32,
+                          child: TextButton(
+                            onPressed: () => _openSchedule(schedule),
+                            child: const Icon(Icons.settings, size: 18),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ],
+                const Divider(height: 8),
                 if (_serviceActive)
                   Align(
                     alignment: Alignment.centerLeft,

@@ -1,9 +1,17 @@
+import 'dart:async';
+
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'package:workmanager/workmanager.dart';
 
 import 'config.dart';
 import 'screens/settings_screen.dart';
 import 'screens/sync_screen.dart';
+import 'services/auto_schedule.dart';
+import 'services/notifications.dart';
+import 'services/push.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -30,7 +38,44 @@ Future<void> main() async {
     ),
   );
 
+  // Firebase (FCM): la app recibe órdenes push ("content"/"search") del
+  // backend cuando GNULA no responde desde el servidor y hay que scrapear
+  // desde la IP residencial del celular.
+  try {
+    await Firebase.initializeApp();
+    FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+    FirebaseMessaging.onMessage.listen((message) {
+      // App abierta: se ejecuta la tarea igual (el listener no bloquea la UI).
+      unawaited(executePushTask(message.data));
+    });
+  } catch (error) {
+    // Sin google-services.json / config de Firebase la app sigue funcionando
+    // (solo pierde el push); el mate del error se informa en el log. 
+    // ignore: avoid_print
+    print('[fcm] no se pudo inicializar Firebase: $error');
+  }
+
+  // Sincronización automática (WorkManager): corre en segundo plano aunque la
+  // app esté cerrada, con la frecuencia (mín. 15 min) de lo habilitado.
+  try {
+    Workmanager().initialize(autoSyncCallbackDispatcher, isInDebugMode: !kReleaseMode);
+  } catch (error) {
+    // ignore: avoid_print
+    print('[auto-sync] no se pudo inicializar WorkManager: $error');
+  }
+
   final config = await AppConfig.load();
+
+  // Notificaciones locales (avances/resultados de background y push).
+  try {
+    await initNotifications();
+    await registerAutoSync();
+    await registerFcmToken(config);
+  } catch (error) {
+    // ignore: avoid_print
+    print('[setup] $error');
+  }
+
   runApp(VeamosSyncApp(config: config));
 }
 
