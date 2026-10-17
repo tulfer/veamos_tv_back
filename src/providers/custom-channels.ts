@@ -38,7 +38,8 @@ export function isJunkStreamUrl(u?: string): boolean {
     /jsdelivr\.net|unpkg\.com|cdnjs\.cloudflare|c\.jsdelivr/i.test(target) ||
     /\/npm\//.test(target) ||
     /\.js(?:[@?&#]|$)/.test(target) ||
-    /hls\.test|hls\.js/.test(target) && /\.js/.test(target)
+    (/hls\.test|hls\.js/.test(target) && /\.js/.test(target)) ||
+    /\/chat\.php(?:[?#]|$)|\/chat\//i.test(target)
   );
 }
 
@@ -60,21 +61,127 @@ async function captureCookiesFromContext(context: any, url: string): Promise<str
 const CHATYTVGRATIS_BASE = 'https://www.chatytvgratis.net';
 const WSDEPORTES_BASE = 'https://wsdeportes.net';
 const TVPORINTERNET2_BASE = 'https://www.tvporinternet2.com';
+const TVPORINTERNET_ORG_BASE = 'https://www.tvporinternet.org';
 const TVENVIVO2_BASE = 'https://www.tvenvivo2.com';
 const SENALCOLOMBIA_BASE = 'https://www.senalcolombia.tv';
 const SENALCOLOMBIA_STREAM_FALLBACK = 'https://streaming.rtvc.gov.co/TV_Senal_Colombia_live/smil:live.smil/playlist.m3u8';
 
-// Palabras clave para identificar iframes de no-video (comentarios, redes, anuncios)
+// Palabras clave para identificar iframes de no-video (comentarios, chat, redes, anuncios)
 const IFRAME_BLACKLIST = [
   'jetpack', 'wordpress', 'comment', 'disqus', 'facebook', 'twitter',
   'instagram', 'googleads', 'doubleclick', 'ads', 'adserver', 'analytics',
-  'likes-master', 'about:blank', 'pixel', 'quantserve',
+  'likes-master', 'about:blank', 'pixel', 'quantserve', 'chat.php', '/chat/',
+  'chatbox', 'cbox',
 ];
 
 function isBlacklistedIframe(src: string): boolean {
   if (!src || src === 'about:blank') return true;
   const lower = src.toLowerCase();
   return IFRAME_BLACKLIST.some((word) => lower.includes(word));
+}
+
+/**
+ * Extrae el siguiente iframe o botón de opción (`<button class="option" data-src="...">`)
+ * descartando iframes en la lista negra (como `chat.php`, anuncios o comentarios).
+ */
+export function extractNextFrameOrOptionUrl(html: string, pageUrl: string, option?: string): string | undefined {
+  const resolveCandidate = (raw: string): string | undefined => {
+    const cleaned = raw.replace(/&amp;/g, '&').trim();
+    if (!cleaned || isBlacklistedIframe(cleaned)) return undefined;
+    try {
+      const resolved = cleaned.startsWith('http') ? cleaned : new URL(cleaned, pageUrl).href;
+      return isBlacklistedIframe(resolved) ? undefined : resolved;
+    } catch {
+      return undefined;
+    }
+  };
+
+  // 1) Botones de opción con data-src (nuevo layout de tvporinternet.org / tvenvivo2 / cablevisionhd)
+  const buttonMatches = [...html.matchAll(/<button[^>]*data-src=["']([^"']+)["'][^>]*>([\s\S]*?)<\/button>/gi)];
+  if (buttonMatches.length > 0) {
+    if (option) {
+      const optLower = option.toLowerCase();
+      for (const m of buttonMatches) {
+        const text = m[2].replace(/<[^>]+>/g, '').trim().toLowerCase();
+        if (text.includes(optLower)) {
+          const url = resolveCandidate(m[1]);
+          if (url) return url;
+        }
+      }
+    }
+    for (const m of buttonMatches) {
+      const url = resolveCandidate(m[1]);
+      if (url) return url;
+    }
+  }
+
+  // Cualquier otro elemento con class="...option..." y data-src
+  const optionDataSrcMatches = [...html.matchAll(/<[a-z0-9]+[^>]+class=["'][^"']*option[^"']*["'][^>]+data-src=["']([^"']+)["'][^>]*>/gi)];
+  for (const m of optionDataSrcMatches) {
+    const url = resolveCandidate(m[1]);
+    if (url) return url;
+  }
+
+  // 2) Etiquetas <iframe> (evaluadas todas, filtrando blacklist como chat.php)
+  const iframeTags = [...html.matchAll(/<iframe\b[^>]*>/gi)].map((m) => m[0]);
+  const validIframes: { tag: string; url: string }[] = [];
+  for (const tag of iframeTags) {
+    const rawSrc = tag.match(/\b(?:data-src|src)=["']([^"']+)["']/i)?.[1];
+    if (!rawSrc) continue;
+    const url = resolveCandidate(rawSrc);
+    if (url) validIframes.push({ tag, url });
+  }
+
+  if (validIframes.length > 0) {
+    const playerNamed = validIframes.find(({ tag }) => /\b(?:name|id)=["']?(?:player|playerFrame|player-frame)["']?/i.test(tag));
+    if (playerNamed) return playerNamed.url;
+
+    const playerPath = validIframes.find(({ url }) => /(?:player|core\.php|stream\.php|embed)/i.test(url));
+    if (playerPath) return playerPath.url;
+
+    return validIframes[0].url;
+  }
+
+  // 3) <embed> o <video>
+  const embedSrc = html.match(/<embed[^>]+src=["']([^"']+)["']/i)?.[1] ||
+                   html.match(/<video[^>]+src=["']([^"']+)["']/i)?.[1];
+  if (embedSrc) return resolveCandidate(embedSrc);
+
+  return undefined;
+}
+
+const TVPORINTERNET_CANAL_ALIASES: Record<string, string> = {
+  warnerbrostv: 'warnerchannel',
+};
+
+function buildTvPorInternetCandidateUrls(url: string, slug?: string): string[] {
+  const candidates: string[] = [url];
+  let rawSlug = slug;
+  if (!rawSlug) {
+    try {
+      const u = new URL(url);
+      rawSlug = u.pathname.replace(/^\/+|\/+$/g, '').replace(/\.\w+$/, '');
+    } catch {
+      // ignore
+    }
+  }
+  if (rawSlug) {
+    const onlineSlug = rawSlug.replace(/-por-internet$/i, '-online');
+    candidates.push(`${TVPORINTERNET_ORG_BASE}/${onlineSlug}.php`);
+    candidates.push(`${TVPORINTERNET_ORG_BASE}/${rawSlug}.php`);
+    const baseCanal = rawSlug
+      .replace(/-en-vivo-por-internet$/i, '')
+      .replace(/-por-internet$/i, '')
+      .replace(/-en-vivo$/i, '')
+      .replace(/-online$/i, '')
+      .replace(/[-_]/g, '')
+      .toLowerCase();
+    const canal = TVPORINTERNET_CANAL_ALIASES[baseCanal] || baseCanal;
+    if (canal) {
+      candidates.push(`${TVPORINTERNET_ORG_BASE}/live/core.php?canal=${canal}`);
+    }
+  }
+  return [...new Set(candidates)];
 }
 
 export async function getChatytv(channel: string, logType?: string): Promise<LiveChannel | null> {
@@ -755,74 +862,89 @@ export async function getWsDeportes(parameter: string, logType?: string): Promis
   }
 }
 
-async function extractTvPorInternet2Http(url: string, logType?: string): Promise<{ streamUrl?: string; hostPageUrl?: string } | null> {
-  try {
-    let streamUrl: string | undefined;
-    let pageUrl: string = url;
-    let lastIframeUrl: string = '';
-    let hostPageUrl: string | undefined;
-    elog(logType, `  [tvporinternet2] URL canal: ${url}`);
-    for (let depth = 0; depth < 4 && pageUrl && !streamUrl; depth++) {
-      const html = depth === 0 ? await fetchHTML(pageUrl) : await fetchHTMLWithReferer(pageUrl, url);
-      elog(logType, `  Nivel ${depth + 1}: ${pageUrl}`);
-      const streamUrlVar = html.match(/STREAM_URL\s*=\s*["']((?:https?:\\\/\\\/|https:\/\/)[^"']+\.(?:m3u8|m3u)[^"']*?)["']/i);
-      if (streamUrlVar) {
-        streamUrl = streamUrlVar[1].replace(/\\\//g, '/');
-        hostPageUrl = pageUrl;
-        elog(logType, `  ✅ STREAM_URL en JS: ${streamUrl}`);
-        break;
+async function extractTvPorInternet2Http(
+  url: string,
+  logType?: string,
+  slug?: string,
+  option?: string,
+): Promise<{ streamUrl?: string; hostPageUrl?: string } | null> {
+  const candidates = buildTvPorInternetCandidateUrls(url, slug);
+  for (const startUrl of candidates) {
+    try {
+      let streamUrl: string | undefined;
+      let pageUrl: string = startUrl;
+      let lastIframeUrl: string = '';
+      let hostPageUrl: string | undefined;
+      let refererBase = startUrl;
+      try {
+        refererBase = `${new URL(startUrl).origin}/`;
+      } catch {
+        // ignore
       }
-      const escapedM3u8 = html.match(/["']((?:https?:)?\\\/\\\/[^"']+\.(?:m3u8|m3u)[^"']*?)["']/i);
-      if (escapedM3u8) {
-        streamUrl = escapedM3u8[1].replace(/\\\//g, '/');
-        if (!streamUrl.startsWith('http')) streamUrl = 'https:' + streamUrl;
-        hostPageUrl = pageUrl;
-        elog(logType, `  ✅ .m3u8 con slashes escapados: ${streamUrl}`);
-        break;
+      elog(logType, `  [tvporinternet2] URL canal: ${startUrl}`);
+      for (let depth = 0; depth < 4 && pageUrl && !streamUrl; depth++) {
+        const html = depth === 0 && !pageUrl.includes('core.php')
+          ? await fetchHTML(pageUrl)
+          : await fetchHTMLWithReferer(pageUrl, refererBase);
+        elog(logType, `  Nivel ${depth + 1}: ${pageUrl}`);
+        const streamUrlVar = html.match(/STREAM_URL\s*=\s*["']((?:https?:\\\/\\\/|https:\/\/)[^"']+\.(?:m3u8|m3u)[^"']*?)["']/i);
+        if (streamUrlVar) {
+          streamUrl = streamUrlVar[1].replace(/\\\//g, '/');
+          hostPageUrl = pageUrl;
+          elog(logType, `  ✅ STREAM_URL en JS: ${streamUrl}`);
+          break;
+        }
+        const escapedM3u8 = html.match(/["']((?:https?:)?\\\/\\\/[^"']+\.(?:m3u8|m3u)[^"']*?)["']/i);
+        if (escapedM3u8) {
+          streamUrl = escapedM3u8[1].replace(/\\\//g, '/');
+          if (!streamUrl.startsWith('http')) streamUrl = 'https:' + streamUrl;
+          hostPageUrl = pageUrl;
+          elog(logType, `  ✅ .m3u8 con slashes escapados: ${streamUrl}`);
+          break;
+        }
+        // Playlist viva (playlist.php?…&sig=…) del player: los .ts del CDN
+        // caducan en segundos, este es el m3u8 real reproducible
+        const playlistMatch = html.match(/["']((?:https?:)?\\\/\\\/[^"']+playlist\.php[^"']*?)["']/i) ||
+                              html.match(/(https?:\/\/[^\s"'<>]+playlist\.php[^\s"'<>]*)/i);
+        if (playlistMatch) {
+          streamUrl = playlistMatch[1].replace(/\\\//g, '/');
+          if (!streamUrl.startsWith('http')) streamUrl = 'https:' + streamUrl;
+          hostPageUrl = pageUrl;
+          elog(logType, `  ✅ playlist.php: ${streamUrl}`);
+          break;
+        }
+        const m3u8 = html.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|m3u)[^\s"'<>]*/i);
+        if (m3u8) { streamUrl = m3u8[0]; hostPageUrl = pageUrl; elog(logType, `  ✅ .m3u8 nivel ${depth + 1}: ${streamUrl}`); break; }
+        const fileMatch = html.match(/file["']?\s*:\s*["']([^"']+)["']/i);
+        const srcMatch = html.match(/src["']?\s*:\s*["']([^"']+(?:m3u8|ts|mp4)[^"']*)["']/i);
+        const sourceTag = html.match(/<source\s[^>]*src=["']([^"']+)["']/i);
+        if (fileMatch && !isJunkStreamUrl(fileMatch[1])) { streamUrl = fileMatch[1].replace(/\\\//g, '/'); hostPageUrl = pageUrl; elog(logType, `  ✅ file: ${streamUrl}`); break; }
+        if (srcMatch && !isJunkStreamUrl(srcMatch[1])) { streamUrl = srcMatch[1].replace(/\\\//g, '/'); hostPageUrl = pageUrl; elog(logType, `  ✅ src: ${streamUrl}`); break; }
+        if (sourceTag && !isJunkStreamUrl(sourceTag[1])) { streamUrl = sourceTag[1].replace(/\\\//g, '/'); hostPageUrl = pageUrl; elog(logType, `  ✅ <source>: ${streamUrl}`); break; }
+
+        const nextFrameUrl = extractNextFrameOrOptionUrl(html, pageUrl, depth === 0 ? option : undefined);
+        if (nextFrameUrl) {
+          lastIframeUrl = nextFrameUrl;
+          refererBase = pageUrl;
+          pageUrl = lastIframeUrl;
+          elog(logType, `  → iframe/opción: ${lastIframeUrl}`);
+        } else {
+          pageUrl = '';
+        }
       }
-      // Playlist viva (playlist.php?…&sig=…) del player: los .ts del CDN
-      // caducan en segundos, este es el m3u8 real reproducible
-      const playlistMatch = html.match(/["']((?:https?:)?\\\/\\\/[^"']+playlist\.php[^"']*?)["']/i) ||
-                            html.match(/(https?:\/\/[^\s"'<>]+playlist\.php[^\s"'<>]*)/i);
-      if (playlistMatch) {
-        streamUrl = playlistMatch[1].replace(/\\\//g, '/');
-        if (!streamUrl.startsWith('http')) streamUrl = 'https:' + streamUrl;
-        hostPageUrl = pageUrl;
-        elog(logType, `  ✅ playlist.php: ${streamUrl}`);
-        break;
+      if (!streamUrl && lastIframeUrl && (isM3u8Url(lastIframeUrl) || lastIframeUrl.includes('playlist.php'))) {
+        streamUrl = lastIframeUrl;
+        elog(logType, `  ⚠ Usando URL del último iframe: ${streamUrl}`);
       }
-      const m3u8 = html.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|m3u)[^\s"'<>]*/i);
-      if (m3u8) { streamUrl = m3u8[0]; hostPageUrl = pageUrl; elog(logType, `  ✅ .m3u8 nivel ${depth + 1}: ${streamUrl}`); break; }
-      const fileMatch = html.match(/file["']?\s*:\s*["']([^"']+)["']/i);
-      const srcMatch = html.match(/src["']?\s*:\s*["']([^"']+(?:m3u8|ts|mp4)[^"']*)["']/i);
-      const sourceTag = html.match(/<source\s[^>]*src=["']([^"']+)["']/i);
-      if (fileMatch) { streamUrl = fileMatch[1]; hostPageUrl = pageUrl; elog(logType, `  ✅ file: ${streamUrl}`); break; }
-      if (srcMatch) { streamUrl = srcMatch[1]; hostPageUrl = pageUrl; elog(logType, `  ✅ src: ${streamUrl}`); break; }
-      if (sourceTag) { streamUrl = sourceTag[1]; hostPageUrl = pageUrl; elog(logType, `  ✅ <source>: ${streamUrl}`); break; }
-      const iframeSrc = html.match(/<iframe[^>]+(?:name|id)="?player"?[^>]+(?:data-src|src)=["']([^"']+)["']/i)?.[1] ||
-                        html.match(/<iframe[^>]+(?:data-src|src)=["']([^"']+(?:player|core|stream|embed|tv)[^"']*)["']/i)?.[1] ||
-                        html.match(/<iframe[^>]+data-src=["']([^"']+)["']/i)?.[1] ||
-                        html.match(/<embed[^>]+src=["']([^"']+)["']/i)?.[1] ||
-                        html.match(/<video[^>]+src=["']([^"']+)["']/i)?.[1];
-      if (iframeSrc) {
-        lastIframeUrl = iframeSrc.replace(/&amp;/g, '&');
-        if (!lastIframeUrl.startsWith('http')) lastIframeUrl = new URL(lastIframeUrl, pageUrl).href;
-        pageUrl = lastIframeUrl;
-        elog(logType, `  → iframe: ${lastIframeUrl}`);
-      } else {
-        pageUrl = '';
+      if (streamUrl && !isJunkStreamUrl(streamUrl)) {
+        return { streamUrl, hostPageUrl };
       }
+    } catch (fallbackErr: any) {
+      logger.warn({ error: fallbackErr.message, startUrl }, 'HTTP extraction attempt failed for tvporinternet2 candidate');
+      elog(logType, `  ⚠ Intento HTTP falló (${startUrl}): ${fallbackErr.message}`);
     }
-    if (!streamUrl && lastIframeUrl) {
-      streamUrl = lastIframeUrl;
-      elog(logType, `  ⚠ Usando URL del último iframe: ${streamUrl}`);
-    }
-    return { streamUrl, hostPageUrl };
-  } catch (fallbackErr: any) {
-    logger.error({ error: fallbackErr.message }, 'HTTP fallback failed for tvporinternet2');
-    elog(logType, `  ❌ Error extracción HTTP: ${fallbackErr.message}`);
-    return null;
   }
+  return null;
 }
 
 export async function getTvPorInternet2(slug: string, option?: string, logType?: string, siteBase = TVPORINTERNET2_BASE, providerName = 'tvporinternet2'): Promise<LiveChannel | null> {
@@ -837,30 +959,16 @@ export async function getTvPorInternet2(slug: string, option?: string, logType?:
     elog(logType, `=== tvporinternet2: ${slug} ===`);
     elog(logType, `Consultando: ${url}`);
 
-    let playwrightAvailable = true;
-    try {
-      await import('playwright');
-      browser = await launchChromium();
-    } catch (pwErr: any) {
-      playwrightAvailable = false;
-      logger.warn({ error: pwErr?.message, slug }, 'Playwright no disponible, usando fallback HTTP');
-      elog(logType, 'Playwright no disponible, usando fallback HTTP');
-    }
-
-    if (!playwrightAvailable) {
-      const httpResult = await extractTvPorInternet2Http(url, logType);
-      if (!httpResult?.streamUrl) {
-        logger.warn({ slug, url }, 'No valid stream source found on tvporinternet2');
-        elog(logType, '❌ No se encontró stream en tvporinternet2');
-        return null;
-      }
-      let streamUrl = httpResult.streamUrl;
-      const refererUrl = (httpResult.hostPageUrl && httpResult.hostPageUrl.startsWith('http')) ? httpResult.hostPageUrl : url;
+    // Estrategia 1: Extracción rápida por cadena HTTP (sin navegador)
+    const fastHttpResult = await extractTvPorInternet2Http(url, logType, slug, option);
+    if (fastHttpResult?.streamUrl) {
+      let streamUrl = fastHttpResult.streamUrl;
+      const refererUrl = (fastHttpResult.hostPageUrl && fastHttpResult.hostPageUrl.startsWith('http')) ? fastHttpResult.hostPageUrl : url;
       if (streamUrl.includes('playlist.php') || isM3u8Url(streamUrl) || streamUrl.includes('.ts')) {
         elog(logType, `🔒 Stream protegido → proxy con Referer`);
         streamUrl = buildStreamProxyUrl(streamUrl, refererUrl);
       }
-      elog(logType, `✅ URL final: ${streamUrl}`);
+      elog(logType, `✅ URL final (HTTP): ${streamUrl}`);
       const title = slug.replace(/-/g, ' ').replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
       const result: LiveChannel = {
         id: `live_${slug}`,
@@ -874,6 +982,22 @@ export async function getTvPorInternet2(slug: string, option?: string, logType?:
       };
       memoryCache.set(cacheKey, result, 3600000);
       return result;
+    }
+
+    let playwrightAvailable = true;
+    try {
+      await import('playwright');
+      browser = await launchChromium();
+    } catch (pwErr: any) {
+      playwrightAvailable = false;
+      logger.warn({ error: pwErr?.message, slug }, 'Playwright no disponible y extracción HTTP no encontró stream');
+      elog(logType, 'Playwright no disponible');
+    }
+
+    if (!playwrightAvailable) {
+      logger.warn({ slug, url }, 'No valid stream source found on tvporinternet2');
+      elog(logType, '❌ No se encontró stream en tvporinternet2');
+      return null;
     }
 
     const context = await browser.newContext({
@@ -910,7 +1034,7 @@ export async function getTvPorInternet2(slug: string, option?: string, logType?:
       }
     });
 
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
     await page.waitForTimeout(5000);
 
     // Si se especificó una opción, buscar el botón exacto por su texto
@@ -1047,9 +1171,7 @@ export async function getTvPorInternet2(slug: string, option?: string, logType?:
     if (!streamUrl) {
       for (let i = 0; i < allIframes.length; i++) {
         const src = $(allIframes[i]).attr('src');
-        if (!src || src === 'about:blank' || src.includes('jetpack') || src.includes('wordpress') ||
-            src.includes('comment') || src.includes('disqus') || src.includes('facebook') ||
-            src.includes('googleads') || src.includes('doubleclick') || src.includes('ads')) continue;
+        if (!src || isBlacklistedIframe(src)) continue;
 
         const allow = $(allIframes[i]).attr('allow') || '';
         const allowfullscreen = $(allIframes[i]).attr('allowfullscreen') !== undefined;
@@ -1058,7 +1180,7 @@ export async function getTvPorInternet2(slug: string, option?: string, logType?:
           allow.includes('encrypted-media') ||
           allow.includes('picture-in-picture');
 
-        if (src.startsWith('http') && src.length > 10 && (hasVideoFeatures || src.includes('embed') || src.includes('player') || src.includes('tv'))) {
+        if (src.startsWith('http') && src.length > 10 && (hasVideoFeatures || src.includes('embed') || src.includes('player') || src.includes('core.php'))) {
           streamUrl = src;
           elog(logType, `✅ iframe de video: ${src}`);
           logger.info({ src: src.substring(0, 250), allow }, 'Found video iframe');
@@ -1071,8 +1193,7 @@ export async function getTvPorInternet2(slug: string, option?: string, logType?:
     if (!streamUrl) {
       for (let i = 0; i < allIframes.length; i++) {
         const src = $(allIframes[i]).attr('src');
-        if (src && src.startsWith('http') && src.length > 10 && !src.includes('jetpack') &&
-            !src.includes('wordpress') && !src.includes('comment') && !src.includes('googleads')) {
+        if (src && src.startsWith('http') && src.length > 10 && !isBlacklistedIframe(src)) {
           streamUrl = src;
           elog(logType, `✅ iframe fallback: ${src}`);
           logger.info({ src: src.substring(0, 250) }, 'Found fallback iframe');
@@ -1102,7 +1223,7 @@ export async function getTvPorInternet2(slug: string, option?: string, logType?:
             content.match(/["']((?:https?:)?\\\/\\\/[^"']+playlist\.php[^"']*?)["']/i)?.[1] ||
             content.match(/https?:\/\/[^\s"'<>]+playlist\.php[^\s"'<>]*/i)?.[0] ||
             content.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|ts|mp4|m3u)[^\s"'<>]*/i)?.[0];
-          if (urlMatch) {
+          if (urlMatch && !isJunkStreamUrl(urlMatch)) {
             streamUrl = urlMatch.replace(/\\\//g, '/');
             if (streamUrl.startsWith('//')) streamUrl = 'https:' + streamUrl;
             elog(logType, `✅ URL en script: ${streamUrl}`);
@@ -1114,9 +1235,10 @@ export async function getTvPorInternet2(slug: string, option?: string, logType?:
     }
 
     if (!streamUrl) {
-      const httpResult = await extractTvPorInternet2Http(url, logType);
+      const httpResult = await extractTvPorInternet2Http(url, logType, slug, option);
       if (httpResult?.streamUrl) {
         streamUrl = httpResult.streamUrl;
+        if (httpResult.hostPageUrl) streamHostFrameUrl = httpResult.hostPageUrl;
       } else {
         logger.warn({ slug, url }, 'No valid stream source found on tvporinternet2');
         elog(logType, '❌ No se encontró stream en tvporinternet2');
@@ -1182,7 +1304,7 @@ function buildStreamProxyUrl(streamUrl: string, referer?: string, cookies?: stri
   return `${base}/proxy/stream?${params.toString()}`;
 }
 
-async function extractCablevisionHdHttp(url: string, logType?: string): Promise<{ streamUrl?: string; m3u8HostFrameUrl?: string } | null> {
+async function extractCablevisionHdHttp(url: string, logType?: string, option?: string): Promise<{ streamUrl?: string; m3u8HostFrameUrl?: string } | null> {
   try {
     let streamUrl: string | undefined;
     let m3u8HostFrameUrl: string | undefined;
@@ -1215,24 +1337,19 @@ async function extractCablevisionHdHttp(url: string, logType?: string): Promise<
       const fileMatch = html.match(/file["']?\s*:\s*["']([^"']+)["']/i);
       const srcMatch = html.match(/src["']?\s*:\s*["']([^"']+(?:m3u8|ts|mp4)[^"']*)["']/i);
       const sourceTag = html.match(/<source\s[^>]*src=["']([^"']+)["']/i);
-      if (fileMatch) { streamUrl = fileMatch[1]; fallbackHostUrl = pageUrl; elog(logType, `  ✅ file: ${streamUrl}`); logger.info({}, 'Found file: via HTTP fallback'); break; }
-      if (srcMatch) { streamUrl = srcMatch[1]; fallbackHostUrl = pageUrl; elog(logType, `  ✅ src: ${streamUrl}`); logger.info({}, 'Found src: via HTTP fallback'); break; }
-      if (sourceTag) { streamUrl = sourceTag[1]; fallbackHostUrl = pageUrl; elog(logType, `  ✅ <source>: ${streamUrl}`); logger.info({}, 'Found source tag via HTTP fallback'); break; }
-      const iframeSrc = html.match(/<iframe[^>]+(?:name|id)="?player"?[^>]+(?:data-src|src)=["']([^"']+)["']/i)?.[1] ||
-                        html.match(/<iframe[^>]+(?:data-src|src)=["']([^"']+(?:player|core|stream|embed|tv)[^"']*)["']/i)?.[1] ||
-                        html.match(/<iframe[^>]+data-src=["']([^"']+)["']/i)?.[1] ||
-                        html.match(/<embed[^>]+src=["']([^"']+)["']/i)?.[1] ||
-                        html.match(/<video[^>]+src=["']([^"']+)["']/i)?.[1];
-      if (iframeSrc) {
-        lastIframeUrl = iframeSrc.replace(/&amp;/g, '&');
-        if (!lastIframeUrl.startsWith('http')) lastIframeUrl = new URL(lastIframeUrl, pageUrl).href;
+      if (fileMatch && !isJunkStreamUrl(fileMatch[1])) { streamUrl = fileMatch[1].replace(/\\\//g, '/'); fallbackHostUrl = pageUrl; elog(logType, `  ✅ file: ${streamUrl}`); logger.info({}, 'Found file: via HTTP fallback'); break; }
+      if (srcMatch && !isJunkStreamUrl(srcMatch[1])) { streamUrl = srcMatch[1].replace(/\\\//g, '/'); fallbackHostUrl = pageUrl; elog(logType, `  ✅ src: ${streamUrl}`); logger.info({}, 'Found src: via HTTP fallback'); break; }
+      if (sourceTag && !isJunkStreamUrl(sourceTag[1])) { streamUrl = sourceTag[1].replace(/\\\//g, '/'); fallbackHostUrl = pageUrl; elog(logType, `  ✅ <source>: ${streamUrl}`); logger.info({}, 'Found source tag via HTTP fallback'); break; }
+      const nextFrameUrl = extractNextFrameOrOptionUrl(html, pageUrl, depth === 0 ? option : undefined);
+      if (nextFrameUrl) {
+        lastIframeUrl = nextFrameUrl;
         pageUrl = lastIframeUrl;
-        elog(logType, `  → iframe: ${lastIframeUrl}`);
+        elog(logType, `  → iframe/opción: ${lastIframeUrl}`);
       } else {
         pageUrl = '';
       }
     }
-    if (!streamUrl && lastIframeUrl) {
+    if (!streamUrl && lastIframeUrl && (isM3u8Url(lastIframeUrl) || lastIframeUrl.includes('playlist.php'))) {
       streamUrl = lastIframeUrl;
       elog(logType, `  ⚠ Usando URL del último iframe: ${streamUrl}`);
     }
@@ -1257,25 +1374,11 @@ export async function getCablevisionHd(slug: string, option?: string, logType?: 
     elog(logType, `=== cablevisionhd: ${slug} ===`);
     elog(logType, `Consultando: ${url}`);
 
-    let playwrightAvailable = true;
-    try {
-      await import('playwright');
-      browser = await launchChromium();
-    } catch (pwErr: any) {
-      playwrightAvailable = false;
-      logger.warn({ error: pwErr?.message, slug }, 'Playwright no disponible, usando fallback HTTP');
-      elog(logType, 'Playwright no disponible, usando fallback HTTP');
-    }
-
-    if (!playwrightAvailable) {
-      const httpResult = await extractCablevisionHdHttp(url, logType);
-      if (!httpResult?.streamUrl) {
-        logger.warn({ slug, url }, 'No valid stream source found on cablevisionhd');
-        elog(logType, '❌ No se encontró stream en cablevisionhd');
-        return null;
-      }
-      const proxyUrl = buildStreamProxyUrl(httpResult.streamUrl, httpResult.m3u8HostFrameUrl || url);
-      elog(logType, `✅ URL final: ${proxyUrl}`);
+    // Estrategia 1: Extracción rápida por cadena HTTP (sin navegador)
+    const fastHttpResult = await extractCablevisionHdHttp(url, logType, option);
+    if (fastHttpResult?.streamUrl) {
+      const proxyUrl = buildStreamProxyUrl(fastHttpResult.streamUrl, fastHttpResult.m3u8HostFrameUrl || url);
+      elog(logType, `✅ URL final (HTTP): ${proxyUrl}`);
       const result: LiveChannel = {
         id: `live_${slug}`,
         title: slug.replace(/-/g, ' ').replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase()),
@@ -1288,6 +1391,22 @@ export async function getCablevisionHd(slug: string, option?: string, logType?: 
       };
       memoryCache.set(cacheKey, result, 3600000);
       return result;
+    }
+
+    let playwrightAvailable = true;
+    try {
+      await import('playwright');
+      browser = await launchChromium();
+    } catch (pwErr: any) {
+      playwrightAvailable = false;
+      logger.warn({ error: pwErr?.message, slug }, 'Playwright no disponible y extracción HTTP no encontró stream');
+      elog(logType, 'Playwright no disponible');
+    }
+
+    if (!playwrightAvailable) {
+      logger.warn({ slug, url }, 'No valid stream source found on cablevisionhd');
+      elog(logType, '❌ No se encontró stream en cablevisionhd');
+      return null;
     }
 
     const context = await browser.newContext({
@@ -1436,9 +1555,7 @@ export async function getCablevisionHd(slug: string, option?: string, logType?: 
       logger.info({ iframeCount: allIframes.length }, 'Buscando iframe con características de video');
       for (let i = 0; i < allIframes.length; i++) {
         const src = $(allIframes[i]).attr('src');
-        if (!src || src === 'about:blank' || src.includes('jetpack') || src.includes('wordpress') ||
-            src.includes('comment') || src.includes('disqus') || src.includes('facebook') ||
-            src.includes('googleads') || src.includes('doubleclick') || src.includes('ads')) {
+        if (!src || isBlacklistedIframe(src)) {
           logger.info({ i, src: src?.substring(0, 100) }, '  iframe saltado (blacklist)');
           continue;
         }
@@ -1452,7 +1569,7 @@ export async function getCablevisionHd(slug: string, option?: string, logType?: 
 
         logger.info({ i, src: src?.substring(0, 150), allow: allow?.substring(0, 80), hasVideoFeatures }, '  iframe evaluado');
 
-        if (src.startsWith('http') && src.length > 10 && (hasVideoFeatures || src.includes('embed') || src.includes('player') || src.includes('tv'))) {
+        if (src.startsWith('http') && src.length > 10 && (hasVideoFeatures || src.includes('embed') || src.includes('player') || src.includes('core.php'))) {
           streamUrl = src;
           logger.info({ src: src.substring(0, 250), allow }, '✅ Iframe con video encontrado');
           break;
@@ -1466,8 +1583,7 @@ export async function getCablevisionHd(slug: string, option?: string, logType?: 
       logger.info({}, 'Buscando cualquier iframe no-blacklisted');
       for (let i = 0; i < allIframes.length; i++) {
         const src = $(allIframes[i]).attr('src');
-        if (src && src.startsWith('http') && src.length > 10 && !src.includes('jetpack') &&
-            !src.includes('wordpress') && !src.includes('comment') && !src.includes('googleads')) {
+        if (src && src.startsWith('http') && src.length > 10 && !isBlacklistedIframe(src)) {
           streamUrl = src;
           logger.info({ src: src.substring(0, 250) }, '✅ Fallback iframe encontrado');
           break;

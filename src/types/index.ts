@@ -48,6 +48,7 @@ export interface VideoLanguage {
 
 export interface VideoInfo {
   stream_url: string;
+  url?: string;
   type: 'hls' | 'dash' | 'mp4';
   quality?: string;
 }
@@ -94,6 +95,7 @@ export interface ContentDetail {
   country?: string;
   genres: string[];
   cast: CastMember[];
+  url?: string;
   video?: VideoInfo;
   videos?: VideoLanguage[];
   downloads?: DownloadLink[];

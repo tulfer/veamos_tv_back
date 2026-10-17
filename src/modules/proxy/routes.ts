@@ -29,12 +29,28 @@ function isDash(url: string, contentType: string): boolean {
     contentType.toLowerCase().includes('application/dash+xml');
 }
 
-/** True si la URL interna trae `expires=` en el pasado (token ya vencido). */
+/** True si la URL interna trae `expires=`, `exp=` o `token=...-<exp>-<iat>` en el pasado. */
 function innerUrlExpired(target: string): boolean {
   try {
-    const exp = parseInt(new URL(target).searchParams.get('expires') || '', 10);
-    if (!isFinite(exp)) return false;
-    return exp * 1000 < Date.now();
+    const sp = new URL(target).searchParams;
+    const rawExp = sp.get('expires') || sp.get('exp');
+    if (rawExp) {
+      const exp = parseInt(rawExp, 10);
+      if (isFinite(exp) && exp > 1000000000) {
+        return exp * 1000 < Date.now();
+      }
+    }
+    const token = sp.get('token');
+    if (token) {
+      const parts = token.split('-');
+      if (parts.length >= 4) {
+        const exp = parseInt(parts[parts.length - 2], 10);
+        if (isFinite(exp) && exp > 1000000000) {
+          return exp * 1000 < Date.now();
+        }
+      }
+    }
+    return false;
   } catch {
     return false;
   }
@@ -220,15 +236,47 @@ input.addEventListener('keydown',e=>{if(e.key==='Enter')go.click()});
     // Streams directos .ts con token (p.ej. tvporinternet2) también caducan,
     // y sus playlists vivos (playlist.php) pueden vencer (403) → refrescar
     const requestedLooksStreaming = requestedIsPlaylist || url.toLowerCase().includes('.ts') || url.toLowerCase().includes('playlist.php') || url.toLowerCase().includes('.mpd');
+    const requestedIsCorruptedChat = url.toLowerCase().includes('chat.php');
 
     try {
       let upstream = await fetchUpstream(target, effectiveReferer, effectiveCookies);
+
+      // Si el stream en vivo expiró — token vencido (expires/token en el pasado),
+      // el upstream devolvió 4xx/5xx, o el CDN devolvió una página HTML de error
+      // sobre una URL de streaming —, refrescar el canal ANTES de intentar
+      // tratarlo como embed de película.
+      if (
+        (requestedLooksStreaming || requestedIsCorruptedChat) &&
+        (upstream.res.status >= 400 || innerUrlExpired(url) || upstream.contentType.toLowerCase().includes('text/html'))
+      ) {
+        const refreshed = await refreshExpiredChannelUrl(url);
+        if (refreshed) {
+          const parsed = parseProxiedUrl(refreshed);
+          const refreshedTarget = parsed.url || (refreshed.startsWith('http') && !refreshed.includes('/proxy/stream') ? refreshed : undefined);
+          if (refreshedTarget) {
+            try {
+              upstream.res.data.resume();
+              upstream = await fetchUpstream(
+                refreshedTarget,
+                parsed.referer || effectiveReferer,
+                parsed.cookies ? verifyCookies(parsed.cookies) : effectiveCookies,
+              );
+              target = refreshedTarget;
+              effectiveReferer = parsed.referer || effectiveReferer;
+              effectiveCookies = parsed.cookies ? verifyCookies(parsed.cookies) : effectiveCookies;
+              logger.info({ url: target.substring(0, 200) }, 'Proxy: stream re-extracted after expiry');
+            } catch {
+              // Si falla la re-extracción, se responde el error original
+            }
+          }
+        }
+      }
 
       // Netu: la página embed carga el stream vía JS (no hay m3u8 en el HTML
       // estático) y sus URLs HLS llevan token por IP + expiración. Si el
       // upstream devolvió HTML, resolver el stream real con Playwright
       // (Cloud Run) y servirlo desde la misma IP que lo resolvió.
-      if (isNetuHost(target) && upstream.contentType.toLowerCase().includes('text/html')) {
+      if (!requestedLooksStreaming && isNetuHost(target) && upstream.contentType.toLowerCase().includes('text/html')) {
         const resolved = await resolveNetuStream(target);
         if (resolved.url) {
           upstream.res.data.resume();
@@ -243,7 +291,7 @@ input.addEventListener('keydown',e=>{if(e.key==='Enter')go.click()});
       // Los servidores de películas suelen ser páginas embed (RPMPlay, Voe,
       // OK.ru, etc.), no manifiestos. Abrirlos en Chromium permite capturar
       // el manifiesto real que luego se sirve por este mismo proxy.
-      if (upstream.contentType.toLowerCase().includes('text/html')) {
+      if (!requestedLooksStreaming && upstream.res.status < 400 && upstream.contentType.toLowerCase().includes('text/html')) {
         const resolved = await resolveEmbeddedStream(target);
         if (resolved?.url) {
           upstream.res.data.resume();
@@ -256,32 +304,6 @@ input.addEventListener('keydown',e=>{if(e.key==='Enter')go.click()});
         if (upstream.contentType.toLowerCase().includes('text/html')) {
           upstream.res.data.resume();
           return reply.status(422).send({ error: 'El servidor embed no expuso un stream reproducible' });
-        }
-      }
-
-      // Si el stream expiró — token vencido (expires en el pasado) o el
-      // upstream devolvió 4xx (m3u8 vencido o .ts con token muerto) —,
-      // refrescar el canal y servir la URL nueva vigente.
-      if (requestedLooksStreaming && (upstream.res.status >= 400 || innerUrlExpired(url))) {
-        const refreshed = await refreshExpiredChannelUrl(url);
-        if (refreshed) {
-          const parsed = parseProxiedUrl(refreshed);
-          if (parsed.url) {
-            try {
-              upstream.res.data.resume();
-              upstream = await fetchUpstream(
-                parsed.url,
-                parsed.referer || effectiveReferer,
-                parsed.cookies ? verifyCookies(parsed.cookies) : effectiveCookies,
-              );
-              target = parsed.url;
-              effectiveReferer = parsed.referer || effectiveReferer;
-              effectiveCookies = parsed.cookies ? verifyCookies(parsed.cookies) : effectiveCookies;
-              logger.info({ url: target.substring(0, 200) }, 'Proxy: stream re-extracted after expiry');
-            } catch {
-              // Si falla la re-extracción, se responde el error original
-            }
-          }
         }
       }
 
@@ -319,8 +341,6 @@ input.addEventListener('keydown',e=>{if(e.key==='Enter')go.click()});
         reply.header('Content-Type', 'application/dash+xml');
         // Los MPD en vivo también se actualizan periódicamente: nunca cachear
         // (un manifest viejo congela la reproducción en vivo).
-        reply.header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
-        reply.header('Pragma', 'no-cache');
         reply.header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
         reply.header('Pragma', 'no-cache');
         return reply.send(rewritten);

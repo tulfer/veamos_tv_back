@@ -4,7 +4,7 @@ import { scrapeSeriesDetail } from '../../providers/series';
 import { scrapeGnulahdDetail } from '../../providers/gnulahd';
 import { fetchLiveChannels } from '../../providers/live-tv';
 import { getCachedOrFetch, memoryCache } from '../../cache';
-import { loadSyncData } from '../../services/data-store';
+import { loadChannels } from '../../services/data-store';
 import { getMovieDetailContent, getSeriesDetailContent, unwrapDetailProxy } from '../../services/content-detail';
 import { getGnulahdDetailContent } from '../../services/gnulahd-content';
 import { dispatchPushTask } from '../../services/push';
@@ -20,7 +20,7 @@ function idToTitle(id: string): string {
     .join(' ');
 }
 
-function channelToDetail(ch: LiveChannel): ContentDetail {
+export function channelToDetail(ch: LiveChannel): ContentDetail {
   return {
     id: ch.id,
     title: ch.title,
@@ -32,7 +32,9 @@ function channelToDetail(ch: LiveChannel): ContentDetail {
     genres: ch.group ? [ch.group] : ['TV'],
     cast: [],
     type: 'live',
-    video: ch.url ? { stream_url: ch.url, type: 'hls', quality: 'live' } : undefined,
+    url: ch.url,
+    video: ch.url ? { stream_url: ch.url, url: ch.url, type: 'hls', quality: 'live' } : undefined,
+    videos: ch.url ? [{ language: 'En Vivo', servers: [{ name: 'Directo', url: ch.url }] }] : undefined,
   };
 }
 
@@ -77,8 +79,7 @@ export async function contentRoutes(app: FastifyInstance) {
 
     if (id.startsWith('live_')) {
       // Intentar obtener el canal desde los datos sincronizados primero
-      const synced = await loadSyncData();
-      const syncedChannels = synced?.channels;
+      const syncedChannels = await loadChannels();
       let channel: LiveChannel | undefined;
 
       if (syncedChannels && syncedChannels.length > 0) {

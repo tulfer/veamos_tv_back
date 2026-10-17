@@ -1,9 +1,9 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
 import { env } from '../../config/env';
 import { fetchLiveChannels, getChannelsByGroup, getChannelsByCountry, getChannelGroups } from '../../providers/live-tv';
-import { getChannelStream, isJunkStreamUrl } from '../../providers/custom-channels';
+import { getChannelStream, isJunkStreamUrl, extractNextFrameOrOptionUrl } from '../../providers/custom-channels';
 import { getCachedOrFetch, memoryCache } from '../../cache';
-import { loadSyncData, saveSyncData, loadChannels, getCollectionCount, getProviderChannelId } from '../../services/data-store';
+import { loadSyncData, saveSyncData, loadChannels, listCollection, replaceCollection, getCollectionCount, getProviderChannelId } from '../../services/data-store';
 import { LiveChannel, SyncData } from '../../types';
 import { logger } from '../../utils/logger';
 import { startSync, completeSync, failSync, updateSyncProgress, pushLog, clearLogs, clearLogsByPrefix, getSyncStatus, runWithSyncContext, emitSyncEvent } from '../../services/sync-status';
@@ -15,7 +15,7 @@ const CACHE_KEY = 'live:channels';
 const PAGE_SIZE = 10;
 
 /**
- * Extrae el parámetro `expires` de la URL del stream (tokens de m3u8).
+ * Extrae el parámetro `expires`, `exp` o `token=...-<exp>-<iat>` de la URL del stream.
  * Acepta tanto la URL directa como la URL del proxy (donde el m3u8 está
  * codificado en el query param `url`).
  */
@@ -31,9 +31,19 @@ function extractExpiration(url?: string): { expires?: number; expiresDate?: stri
   } catch {
     // ignore
   }
+  let ts = NaN;
   const match = target.match(/[?&](?:expires|exp)=(\d+)/i);
-  if (!match) return {};
-  const ts = Number(match[1]);
+  if (match) {
+    ts = Number(match[1]);
+  } else {
+    const tokenMatch = target.match(/[?&]token=([^&]+)/i);
+    if (tokenMatch) {
+      const parts = decodeURIComponent(tokenMatch[1]).split('-');
+      if (parts.length >= 4) {
+        ts = Number(parts[parts.length - 2]);
+      }
+    }
+  }
   if (!Number.isFinite(ts) || ts < 1000000000) return {};
   const date = new Date(ts * 1000);
   if (Number.isNaN(date.getTime())) return {};
@@ -48,6 +58,14 @@ function applyExpiration(ch: LiveChannel): void {
   const exp = extractExpiration(ch.url);
   ch.expires = exp.expires;
   ch.expiresDate = exp.expiresDate;
+}
+
+function isChannelExpiredOrCorrupted(ch: LiveChannel): boolean {
+  if (!ch.url) return true;
+  if (isJunkStreamUrl(ch.url)) return true;
+  const exp = ch.expires || extractExpiration(ch.url).expires;
+  if (exp && exp * 1000 < Date.now()) return true;
+  return false;
 }
 
 /**
@@ -92,9 +110,17 @@ function proxyWrapIfNeeded(url?: string): string | undefined {
 }
 
 async function verifyRefreshedUrl(url: string, logKey: string): Promise<boolean> {
+  if (isJunkStreamUrl(url)) {
+    pushLog(logKey, '  ❌ URL descartada (chat.php / script / junk)');
+    return false;
+  }
   // Si es una URL del proxy, verificar el destino interno con su referer/cookies
   // (es lo que el reproductor hará realmente; el proxy con token sin contexto da 403/410)
   const { target, referer, cookies } = unwrapProxyUrl(url);
+  if (isJunkStreamUrl(target)) {
+    pushLog(logKey, '  ❌ URL interna descartada (chat.php / script / junk)');
+    return false;
+  }
   const headers: Record<string, string> = {
     // Algunos CDNs (p.ej. regionales.saohgdasregions.fun playlist.php) exigen
     // un User-Agent específico: sin él (o con otra versión) devuelven 403
@@ -108,9 +134,10 @@ async function verifyRefreshedUrl(url: string, logKey: string): Promise<boolean>
     let headInfo = '';
     try {
       const res = await httpClient.head(target, { timeout: 10000, headers });
+      const ct = String(res.headers['content-type'] || '').toLowerCase();
       headInfo = `HEAD ${res.status}`;
       pushLog(logKey, `  Verificación HEAD: ${res.status}`);
-      if (res.status === 200) return true;
+      if (res.status === 200 && !ct.includes('text/html')) return true;
     } catch (e: any) {
       headInfo = `HEAD ${(e.response?.status || e.code || 'error').toString()}`;
       pushLog(logKey, `  HEAD falló: ${(e.response?.status || e.code || e.message || '').toString().substring(0, 80)}`);
@@ -122,7 +149,12 @@ async function verifyRefreshedUrl(url: string, logKey: string): Promise<boolean>
         responseType: 'arraybuffer',
         maxContentLength: 3 * 1024 * 1024,
       });
+      const ct = String(res.headers['content-type'] || '').toLowerCase();
       pushLog(logKey, `  Verificación GET (range): ${res.status} (${headInfo})`);
+      if (ct.includes('text/html')) {
+        pushLog(logKey, `  ❌ GET devolvió text/html en lugar de stream`);
+        return false;
+      }
       return res.status === 200 || res.status === 206;
     } catch (e: any) {
       const status = (e.response?.status as number | undefined);
@@ -178,11 +210,23 @@ export async function refreshExpiredChannelUrl(targetUrl: string): Promise<strin
 
 async function doRefreshExpiredChannel(targetUrl: string): Promise<string | null> {
   try {
-    const synced = await loadSyncData();
-    if (!synced || !Array.isArray(synced.channels)) return null;
+    const channels = await listCollection<LiveChannel>('channels');
+    if (!Array.isArray(channels) || channels.length === 0) return null;
 
-    const ch = synced.channels.find((c) => {
-      if (!c?.url || !c.url.includes('/proxy/stream')) return false;
+    let targetOriginPath = '';
+    try {
+      const tu = new URL(targetUrl);
+      if (tu.pathname && tu.pathname !== '/' && !tu.pathname.endsWith('/playlist.php') && !tu.pathname.endsWith('/chat.php')) {
+        targetOriginPath = `${tu.origin}${tu.pathname}`;
+      }
+    } catch {
+      // ignore
+    }
+
+    let ch = channels.find((c) => {
+      if (!c?.url) return false;
+      if (c.url === targetUrl) return true;
+      if (!c.url.includes('/proxy/stream')) return false;
       try {
         const u = new URL(c.url, 'http://localhost');
         return u.searchParams.get('url') === targetUrl;
@@ -191,9 +235,30 @@ async function doRefreshExpiredChannel(targetUrl: string): Promise<string | null
       }
     });
 
+    if (!ch && targetOriginPath) {
+      ch = channels.find((c) => {
+        if (!c?.url) return false;
+        const inner = unwrapProxyUrl(c.url).target;
+        try {
+          const cu = new URL(inner);
+          return `${cu.origin}${cu.pathname}` === targetOriginPath;
+        } catch {
+          return false;
+        }
+      });
+    }
+
     if (!ch) {
       logger.warn({ url: targetUrl.substring(0, 120) }, 'Stream expirado sin canal correspondiente, no se puede refrescar');
       return null;
+    }
+
+    // Si el canal en BD ya fue refrescado previamente y su token está vigente
+    // (p.ej. el cliente tenía en caché un token viejo para la misma ruta),
+    // devolver directamente la URL vigente de la BD sin re-scrapear.
+    const currentInner = ch.url ? unwrapProxyUrl(ch.url).target : '';
+    if (ch.url && currentInner !== targetUrl && !isChannelExpiredOrCorrupted(ch)) {
+      return ch.url;
     }
 
     const source = (ch.proveedor as any) || extractRefreshSource(ch.refreshUrl);
@@ -227,7 +292,7 @@ async function doRefreshExpiredChannel(targetUrl: string): Promise<string | null
 
     ch.url = result.url;
     applyExpiration(ch);
-    await saveSyncData({ ...synced, channels: synced.channels, updatedAt: Date.now() });
+    await saveMergedRefreshUpdates(null, [ch], 'addChannel');
     memoryCache.del('live:channels');
     pushLog('addChannel', `✅ Canal refrescado por proxy: ${ch.id} ${ch.expiresDate || ''}`);
     return result.url;
@@ -310,11 +375,13 @@ export async function getChannelDetailHandler(request: FastifyRequest, reply: Fa
 
 /** Guarda únicamente los cambios de stream sobre la versión más reciente de la colección.
  * Así un refresh iniciado antes de un alta no puede sobrescribir ese canal nuevo. */
-async function saveMergedRefreshUpdates(base: SyncData, updates: LiveChannel[], logKey: string): Promise<void> {
+async function saveMergedRefreshUpdates(base: SyncData | null, updates: LiveChannel[], logKey: string): Promise<void> {
   if (updates.length === 0) return;
-  const latest = await loadSyncData() || base;
+  const liveChannels = await listCollection<LiveChannel>('channels');
+  const baseChannels = liveChannels.length > 0 ? liveChannels : (base?.channels || []);
+  if (baseChannels.length === 0) return;
   const updatesById = new Map(updates.map((channel) => [channel.id, channel]));
-  const channels = latest.channels.map((channel) => {
+  const channels = baseChannels.map((channel) => {
     const update = updatesById.get(channel.id);
     if (!update) return channel;
     return {
@@ -327,7 +394,7 @@ async function saveMergedRefreshUpdates(base: SyncData, updates: LiveChannel[], 
     };
   });
   pushLog(logKey, `Guardando ${updates.length} streams actualizados sin reemplazar canales nuevos...`);
-  await saveSyncData({ ...latest, channels, updatedAt: Date.now() });
+  await replaceCollection('channels', channels);
   memoryCache.del('live:channels');
   pushLog(logKey, '✅ Guardado fusionado exitoso');
 }
@@ -422,7 +489,7 @@ export async function getChatytvChannelHandler(request: FastifyRequest, reply: F
 function extractRefreshSource(refreshUrl?: string): 'wsdeportes' | 'tvporinternet2' | 'tvenvivo2' | 'cablevisionhd' | 'chatytv' | 'senalcolombia' | 'vertvcable' | null {
   if (!refreshUrl) return null;
   if (refreshUrl.includes('wsdeportes.net')) return 'wsdeportes';
-  if (refreshUrl.includes('tvporinternet2.com')) return 'tvporinternet2';
+  if (refreshUrl.includes('tvporinternet2.com') || refreshUrl.includes('tvporinternet.org')) return 'tvporinternet2';
   if (refreshUrl.includes('tvenvivo2.com')) return 'tvenvivo2';
   if (refreshUrl.includes('cablevisionhd.com')) return 'cablevisionhd';
   if (refreshUrl.includes('chatytvgratis.net')) return 'chatytv';
@@ -467,19 +534,14 @@ async function manualExtractStream(
     const fileMatch = html.match(/file["']?\s*:\s*["']([^"']+)["']/i);
     const srcMatch = html.match(/src["']?\s*:\s*["']([^"']+(?:m3u8|ts|mp4)[^"']*)["']/i);
     const sourceTag = html.match(/<source\s[^>]*src=["']([^"']+)["']/i);
-    if (fileMatch) { foundStream = fileMatch[1]; hostPageUrl = pageUrl; break; }
-    if (srcMatch) { foundStream = srcMatch[1]; hostPageUrl = pageUrl; break; }
-    if (sourceTag) { foundStream = sourceTag[1]; hostPageUrl = pageUrl; break; }
+    if (fileMatch && !isJunkStreamUrl(fileMatch[1])) { foundStream = fileMatch[1].replace(/\\\//g, '/'); hostPageUrl = pageUrl; break; }
+    if (srcMatch && !isJunkStreamUrl(srcMatch[1])) { foundStream = srcMatch[1].replace(/\\\//g, '/'); hostPageUrl = pageUrl; break; }
+    if (sourceTag && !isJunkStreamUrl(sourceTag[1])) { foundStream = sourceTag[1].replace(/\\\//g, '/'); hostPageUrl = pageUrl; break; }
 
-    // Buscar iframe con src O data-src
-    const iframeSrc = html.match(/<iframe[^>]+(?:name|id)="?player"?[^>]+(?:data-src|src)=["']([^"']+)["']/i)?.[1] ||
-                      html.match(/<iframe[^>]+(?:data-src|src)=["']([^"']+(?:player|core|stream|embed|tv)[^"']*)["']/i)?.[1] ||
-                      html.match(/<iframe[^>]+data-src=["']([^"']+)["']/i)?.[1] ||
-                      html.match(/<embed[^>]+src=["']([^"']+)["']/i)?.[1] ||
-                      html.match(/<video[^>]+src=["']([^"']+)["']/i)?.[1];
-    if (iframeSrc) {
-      const cleaned = iframeSrc.replace(/&amp;/g, '&');
-      lastIframeUrl = cleaned.startsWith('http') ? cleaned : new URL(cleaned, pageUrl).href;
+    // Buscar iframe o botón con data-src (descartando chat.php y blacklist)
+    const nextFrameUrl = extractNextFrameOrOptionUrl(html, pageUrl);
+    if (nextFrameUrl) {
+      lastIframeUrl = nextFrameUrl;
       pageUrl = lastIframeUrl;
     } else {
       pushLog(logPrefix, `  No más iframes player en este nivel`);
@@ -502,7 +564,7 @@ async function manualExtractStream(
       pageUrl = '';
     }
   }
-  if (!foundStream && lastIframeUrl) {
+  if (!foundStream && lastIframeUrl && !isJunkStreamUrl(lastIframeUrl) && (lastIframeUrl.includes('.m3u8') || lastIframeUrl.includes('playlist.php'))) {
     pushLog(logPrefix, `  ⚠ Usando URL del último iframe como stream`);
     foundStream = lastIframeUrl;
   }
@@ -629,8 +691,8 @@ export async function internalExtractHandler(request: FastifyRequest, reply: Fas
 }
 
 export async function refreshExpiredChannelsHandler(_request: FastifyRequest, reply: FastifyReply) {
-  const synced = await loadSyncData();
-  if (!synced || !Array.isArray(synced.channels)) {
+  const channels = await listCollection<LiveChannel>('channels');
+  if (!Array.isArray(channels) || channels.length === 0) {
     return reply.status(400).send({ error: 'No sync data found' });
   }
 
@@ -642,24 +704,19 @@ export async function refreshExpiredChannelsHandler(_request: FastifyRequest, re
   pushLog('refreshExpired', '=== Iniciando refresh de canales expirados ===');
   reply.send({ ok: true, message: 'Refresh expired channels started' });
 
-  const channels = synced.channels;
-  const expiredChannels = channels.filter(ch => ch.url?.includes('expires=') && ch.refreshUrl);
+  const expiredChannels = channels.filter(ch => ch.refreshUrl && isChannelExpiredOrCorrupted(ch));
   const totalToProcess = expiredChannels.length;
   pushLog('refreshExpired', `Canales totales en BD: ${channels.length}`);
-  pushLog('refreshExpired', `Canales con URL expirada y refreshUrl: ${totalToProcess}`);
+  pushLog('refreshExpired', `Canales con URL expirada/corrupta y refreshUrl: ${totalToProcess}`);
 
   const updatedChannels: LiveChannel[] = [];
   const failedChannels: { id: string; title: string; error: string }[] = [];
   let processed = 0;
 
-  for (const ch of channels) {
-    if (!ch.url || !ch.url.includes('expires=') || !ch.refreshUrl) {
-      continue;
-    }
-
+  for (const ch of expiredChannels) {
     pushLog('refreshExpired', `→ [${processed + 1}/${totalToProcess}] Procesando: ${ch.title || ch.id}`);
 
-    const source = extractRefreshSource(ch.refreshUrl);
+    const source = (ch.proveedor as any) || extractRefreshSource(ch.refreshUrl);
     if (!source) {
       pushLog('refreshExpired', `  ❌ Fuente no detectada en refreshUrl: ${ch.refreshUrl}`);
       failedChannels.push({ id: ch.id, title: ch.title || ch.id, error: 'Fuente no detectada' });
@@ -754,7 +811,7 @@ export async function refreshExpiredChannelsHandler(_request: FastifyRequest, re
     updateSyncProgress('refreshExpired', processed, `[${processed}/${totalToProcess}] ✅ ${ch.title || ch.id}`, totalToProcess);
   }
 
-  await saveMergedRefreshUpdates(synced, updatedChannels, 'refreshExpired');
+  await saveMergedRefreshUpdates(null, updatedChannels, 'refreshExpired');
   const count = updatedChannels.length;
   if (failedChannels.length > 0) {
     const errorGroups: Record<string, number> = {};

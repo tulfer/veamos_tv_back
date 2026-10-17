@@ -1,12 +1,21 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import path from 'node:path';
-import { Section } from '../../types';
-import { loadSyncData } from '../../services/data-store';
+import { LiveChannel, Section } from '../../types';
+import { loadChannels, loadSyncData } from '../../services/data-store';
 import { loadGnulahdHomeData, normalizeGnulahdItemId, scrapeGnulahdList } from '../../providers/gnulahd';
 import { loadAnimeHomeData } from '../../providers/anime';
+import { fetchLiveChannels } from '../../providers/live-tv';
+import { getCachedOrFetch } from '../../cache';
 import { getGnulahdDetailContent } from '../../services/gnulahd-content';
 import { unwrapDetailProxy } from '../../services/content-detail';
-import { getChannelsHandler } from '../live-tv/controller';
+import { channelToDetail } from '../content/routes';
+import {
+  getChannelsHandler,
+  getChannelsCountHandler,
+  getChannelDetailHandler,
+  getGroupsHandler,
+  getCountriesHandler,
+} from '../live-tv/controller';
 import { verifyDeviceCode } from '../../services/device-codes';
 import { searchAll, searchByType } from '../search/service';
 
@@ -89,10 +98,27 @@ function registerGnulahdPrefix(app: FastifyInstance, prefix: '/v2/:code') {
   });
 
   app.get(`${prefix}/live/channels`, getChannelsHandler);
+  app.get(`${prefix}/live/channels/count`, getChannelsCountHandler);
+  app.get(`${prefix}/live/channels/:id`, getChannelDetailHandler);
+  app.get(`${prefix}/live/groups`, getGroupsHandler);
+  app.get(`${prefix}/live/countries`, getCountriesHandler);
 
   app.get(`${prefix}/content/:id`, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id?: string };
     if (!id) return reply.status(400).send({ error: 'Missing or invalid content ID' });
+    if (id.startsWith('live_')) {
+      const syncedChannels = await loadChannels();
+      let channel: LiveChannel | undefined;
+      if (syncedChannels && syncedChannels.length > 0) {
+        channel = syncedChannels.find((ch) => ch.id === id);
+      }
+      if (!channel) {
+        const channels = await getCachedOrFetch('live:channels', () => fetchLiveChannels(), 300);
+        channel = channels.find((ch: LiveChannel) => ch.id === id);
+      }
+      if (!channel) return reply.status(404).send({ error: 'Channel not found', id });
+      return reply.send(channelToDetail(channel));
+    }
     const detail = await getGnulahdDetailContent(id);
     if (!detail) return reply.status(404).send({ error: 'Content not found', id });
     return reply.send(unwrapDetailProxy(detail));
