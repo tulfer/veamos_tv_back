@@ -7,6 +7,8 @@ import '../config.dart';
 import '../services/auto_schedule.dart';
 import '../services/sync_runner.dart';
 import '../services/sync_task_handler.dart';
+import '../services/ingest_api.dart';
+import '../services/jkanime_client.dart';
 
 /// Pantalla principal de sincronización. La sync se ejecuta dentro de un
 /// foreground service (`flutter_foreground_task`) para que Android no mate el
@@ -506,6 +508,40 @@ class _SyncScreenState extends State<SyncScreen> {
     _refreshCheckpoint();
   }
 
+  Future<void> _syncAnimeHome() async {
+    if (_running) return;
+    if (!widget.config.isConfigured) {
+      _append('⚠️ Configura la URL y el token en Ajustes primero.');
+      return;
+    }
+    setState(() {
+      _running = true;
+      _currentStep = 'Sincronizando Home Anime (JKAnime)...';
+    });
+    _updateWakelock(true);
+    _append('═══ Sincronizando Home Anime (JKAnime) ═══');
+    try {
+      final client = JkanimeClient(log: _append);
+      final api = IngestApi(
+        baseUrl: widget.config.backendUrl,
+        token: widget.config.syncToken,
+        log: _append,
+      );
+      final data = await client.scrapeAnimeHome(pages: 5);
+      _append('Subiendo Home Anime al servidor...');
+      await api.sendAnimeHome(data);
+      _append('✔ Home Anime sincronizado con éxito desde JKAnime (${data.banners.length} banners, ${data.todos.length} animes en catálogo).');
+    } catch (e) {
+      _append('❌ Error al sincronizar Home Anime: $e');
+    } finally {
+      setState(() {
+        _running = false;
+        _currentStep = '';
+      });
+      _updateWakelock(false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -570,6 +606,11 @@ class _SyncScreenState extends State<SyncScreen> {
                       onPressed: _running ? null : () => _runKind(SyncTask.anime, 'Anime'),
                       icon: const Icon(Icons.animation),
                       label: const Text('Anime'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: _running ? null : _syncAnimeHome,
+                      icon: const Icon(Icons.movie_filter),
+                      label: const Text('Home Anime (JKAnime)'),
                     ),
                   ],
                 ),

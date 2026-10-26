@@ -271,3 +271,35 @@ class GnulahdHomeData {
         'updatedAt': updatedAt,
       };
 }
+class AnimeHomeData {
+  final List<BannerItem> banners;
+  final Map<String, dynamic>? calendario;
+  final List<MediaItem> ultimosEpisodios;
+  final List<MediaItem> ultimasTemporadas;
+  final List<MediaItem> topAnime;
+  final List<MediaItem> todos;
+  final int totalTodos;
+  final int updatedAt;
+
+  AnimeHomeData({
+    required this.banners,
+    this.calendario,
+    required this.ultimosEpisodios,
+    required this.ultimasTemporadas,
+    required this.topAnime,
+    required this.todos,
+    required this.totalTodos,
+    required this.updatedAt,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'banners': banners.map((b) => b.toJson()).toList(),
+        if (calendario != null) 'calendario': calendario,
+        'ultimosEpisodios': ultimosEpisodios.map((m) => m.toCatalogJson()).toList(),
+        'ultimasTemporadas': ultimasTemporadas.map((m) => m.toCatalogJson()).toList(),
+        'topAnime': topAnime.map((m) => m.toCatalogJson()).toList(),
+        'todos': todos.map((m) => m.toCatalogJson()).toList(),
+        'totalTodos': totalTodos,
+        'updatedAt': updatedAt,
+      };
+}

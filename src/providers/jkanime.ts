@@ -264,23 +264,59 @@ export async function searchJkanimeResults(query: string): Promise<MediaItem[]> 
 let jkanimeSessionCookies = '';
 
 async function fetchJkanimeHTML(url: string): Promise<string> {
-  const res = await httpClient.get(url, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-      'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
-      'Referer': `${BASE_URL}/`,
-      ...(jkanimeSessionCookies ? { Cookie: jkanimeSessionCookies } : {}),
-    },
-    timeout: 20000,
-  });
-  const setCookie = res.headers['set-cookie'];
-  if (setCookie) {
-    const list = Array.isArray(setCookie) ? setCookie : [setCookie];
-    const newCookies = list.map((c: string) => c.split(';')[0]).join('; ');
-    if (newCookies) jkanimeSessionCookies = newCookies;
+  try {
+    const res = await httpClient.get(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
+        'Referer': `${BASE_URL}/`,
+        ...(jkanimeSessionCookies ? { Cookie: jkanimeSessionCookies } : {}),
+      },
+      timeout: 20000,
+    });
+    const setCookie = res.headers['set-cookie'];
+    if (setCookie) {
+      const list = Array.isArray(setCookie) ? setCookie : [setCookie];
+      const newCookies = list.map((c: string) => c.split(';')[0]).join('; ');
+      if (newCookies) jkanimeSessionCookies = newCookies;
+    }
+    return typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
+  } catch (err: unknown) {
+    const axiosErr = err as { response?: { status?: number } };
+    // Si Axios es bloqueado por Cloudflare (403 o sin respuesta en la IP de VPS):
+    // Intentar resolver con Playwright / Chromium (disponible en Docker / Dokploy)
+    if (axiosErr?.response?.status === 403 || !axiosErr?.response) {
+      try {
+        await import('playwright');
+        const { launchChromium } = await import('./launch');
+        const browser = await launchChromium();
+        try {
+          const context = await browser.newContext({
+            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            locale: 'es-ES',
+          });
+          await context.addInitScript('Object.defineProperty(navigator, "webdriver", { get: () => undefined });');
+          const page = await context.newPage();
+          await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+          try {
+            await page.waitForFunction('!document.title.includes("Just a moment") && !document.title.includes("Cloudflare") && document.title.length > 0', { timeout: 10000 });
+          } catch { /* continuar si no cambió título */ }
+          const html = await page.content();
+          const cookies = await context.cookies();
+          if (cookies?.length) {
+            jkanimeSessionCookies = cookies.map((c) => `${c.name}=${c.value}`).join('; ');
+          }
+          return html;
+        } finally {
+          await browser.close().catch(() => {});
+        }
+      } catch {
+        // Fallback de Playwright no disponible o falló
+      }
+    }
+    throw err;
   }
-  return typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
 }
 
 export async function scrapeJkanimeTopAnime(onLog?: (msg: string) => void): Promise<MediaItem[]> {

@@ -3719,8 +3719,10 @@ interface IngestItemPayload {
 }
 
 interface IngestRequestBody {
-  type: 'home' | 'movies' | 'series' | 'anime' | 'search';
+  type: 'home' | 'movies' | 'series' | 'anime' | 'search' | 'animeHome' | 'anime_home';
   home?: import('../../providers/gnulahd').GnulahdHomeData;
+  animeHome?: import('../../providers/anime').AnimeHomeData;
+  anime_home?: import('../../providers/anime').AnimeHomeData;
   items?: IngestItemPayload[];
   enrich?: boolean;
   /** Reemplaza la colección completa en vez de mezclar por id. */
@@ -3762,6 +3764,41 @@ export async function ingestSyncHandler(request: FastifyRequest, reply: FastifyR
       await saveGnulahdHomeData(home);
       logger.info({ banners: home.banners.length, sections: home.sections.length }, 'Ingesta móvil: home guardado');
       return reply.send({ ok: true, type, saved: { home: true } });
+    }
+
+    if (type === 'animeHome' || type === 'anime_home') {
+      const animeHome = body.animeHome || body.anime_home;
+      if (!animeHome || (!Array.isArray(animeHome.banners) && !Array.isArray(animeHome.todos))) {
+        return reply.status(422).send({ ok: false, error: 'type animeHome requiere estructura animeHome' });
+      }
+      const { saveAnimeHomeData } = await import('../../providers/anime');
+      await saveAnimeHomeData({
+        banners: Array.isArray(animeHome.banners) ? animeHome.banners : [],
+        calendario: animeHome.calendario ?? null,
+        ultimosEpisodios: Array.isArray(animeHome.ultimosEpisodios) ? animeHome.ultimosEpisodios : [],
+        ultimasTemporadas: Array.isArray(animeHome.ultimasTemporadas) ? animeHome.ultimasTemporadas : [],
+        topAnime: Array.isArray(animeHome.topAnime) ? animeHome.topAnime : [],
+        todos: Array.isArray(animeHome.todos) ? animeHome.todos : [],
+        totalTodos: animeHome.totalTodos || animeHome.todos?.length || 0,
+        updatedAt: Date.now(),
+      });
+
+      let savedTodos = 0;
+      if (Array.isArray(animeHome.todos) && animeHome.todos.length > 0) {
+        await upsertItemsByCol('gnulahd-anime', animeHome.todos);
+        savedTodos = animeHome.todos.length;
+      }
+      memoryCache.del('sync:data');
+      logger.info(
+        {
+          banners: animeHome.banners?.length,
+          schedule: animeHome.ultimosEpisodios?.length,
+          top: animeHome.topAnime?.length,
+          todos: savedTodos,
+        },
+        'Ingesta móvil: anime home guardado',
+      );
+      return reply.send({ ok: true, type, saved: { animeHome: true, todos: savedTodos } });
     }
 
     // Resultados de búsqueda scrapeados por la app (push task 'search'): se

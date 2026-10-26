@@ -73,6 +73,11 @@ class IngestApi {
     _log?.call('[ingest] home subido (${home.banners.length} banners, ${home.sections.length} secciones)');
   }
 
+  Future<void> sendAnimeHome(AnimeHomeData animeHome) async {
+    await _post({'type': 'animeHome', 'animeHome': animeHome.toJson()});
+    _log?.call('[ingest] animeHome subido (${animeHome.banners.length} banners, ${animeHome.todos.length} animes en catálogo)');
+  }
+
   /// Envía un lote de ítems del catálogo (con su `content` de GNULA ya
   /// scrapeado). Con `replace` el backend reemplaza la colección completa.
   /// Devuelve cuántos guardó el backend.
