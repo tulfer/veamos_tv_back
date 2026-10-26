@@ -261,9 +261,31 @@ export async function searchJkanimeResults(query: string): Promise<MediaItem[]> 
   }
 }
 
-export async function scrapeJkanimeTopAnime(): Promise<MediaItem[]> {
+let jkanimeSessionCookies = '';
+
+async function fetchJkanimeHTML(url: string): Promise<string> {
+  const res = await httpClient.get(url, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+      'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
+      'Referer': `${BASE_URL}/`,
+      ...(jkanimeSessionCookies ? { Cookie: jkanimeSessionCookies } : {}),
+    },
+    timeout: 20000,
+  });
+  const setCookie = res.headers['set-cookie'];
+  if (setCookie) {
+    const list = Array.isArray(setCookie) ? setCookie : [setCookie];
+    const newCookies = list.map((c: string) => c.split(';')[0]).join('; ');
+    if (newCookies) jkanimeSessionCookies = newCookies;
+  }
+  return typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
+}
+
+export async function scrapeJkanimeTopAnime(onLog?: (msg: string) => void): Promise<MediaItem[]> {
   try {
-    const html = await fetchHTML(`${BASE_URL}/`);
+    const html = await fetchJkanimeHTML(`${BASE_URL}/`);
     const $ = cheerio.load(html);
     const items: MediaItem[] = [];
     const seen = new Set<string>();
@@ -288,7 +310,9 @@ export async function scrapeJkanimeTopAnime(): Promise<MediaItem[]> {
     logger.info({ topAnime: items.length }, 'JKAnime top anime scraped');
     return items;
   } catch (error) {
-    logger.error({ error: (error as Error).message }, 'JKAnime: fallo al scrapear el top anime');
+    const msg = (error as Error).message;
+    logger.error({ error: msg }, 'JKAnime: fallo al scrapear el top anime');
+    onLog?.(`JKAnime top anime aviso: ${msg}`);
     return [];
   }
 }
@@ -296,9 +320,9 @@ export async function scrapeJkanimeTopAnime(): Promise<MediaItem[]> {
 /** Últimos episodios desde la sección "Programación" del home de jkanime:
  *  los 32 ítems de la pestaña "Animes" (el último episodio emitido de cada
  *  anime, con su poster de la serie). */
-export async function scrapeJkanimeSchedule(): Promise<MediaItem[]> {
+export async function scrapeJkanimeSchedule(onLog?: (msg: string) => void): Promise<MediaItem[]> {
   try {
-    const html = await fetchHTML(`${BASE_URL}/`);
+    const html = await fetchJkanimeHTML(`${BASE_URL}/`);
     const $ = cheerio.load(html);
     const items: MediaItem[] = [];
     $('#animes .dir1 > .card > a').each((_, el) => {
@@ -316,16 +340,18 @@ export async function scrapeJkanimeSchedule(): Promise<MediaItem[]> {
     logger.info({ schedule: items.length }, 'JKAnime programación scraped');
     return items;
   } catch (error) {
-    logger.error({ error: (error as Error).message }, 'JKAnime: fallo al scrapear la programación');
+    const msg = (error as Error).message;
+    logger.error({ error: msg }, 'JKAnime: fallo al scrapear la programación');
+    onLog?.(`JKAnime programación aviso: ${msg}`);
     return [];
   }
 }
 
 /** Banner desde el home de jkanime: los slides del hero (.hero__slider), con
  *  su imagen de fondo (data-setbg), título (h2), descripción (p) y slug. */
-export async function scrapeJkanimeBanner(): Promise<BannerItem[]> {
+export async function scrapeJkanimeBanner(onLog?: (msg: string) => void): Promise<BannerItem[]> {
   try {
-    const html = await fetchHTML(`${BASE_URL}/`);
+    const html = await fetchJkanimeHTML(`${BASE_URL}/`);
     const $ = cheerio.load(html);
     const items: BannerItem[] = [];
     $('.hero__slider .hero__items').each((_, el) => {
@@ -351,7 +377,9 @@ export async function scrapeJkanimeBanner(): Promise<BannerItem[]> {
     logger.info({ banner: items.length }, 'JKAnime banner scraped');
     return items;
   } catch (error) {
-    logger.error({ error: (error as Error).message }, 'JKAnime: fallo al scrapear el banner');
+    const msg = (error as Error).message;
+    logger.error({ error: msg }, 'JKAnime: fallo al scrapear el banner');
+    onLog?.(`JKAnime banner aviso: ${msg}`);
     return [];
   }
 }
@@ -359,11 +387,14 @@ export async function scrapeJkanimeBanner(): Promise<BannerItem[]> {
 /** Catálogo de jkanime desde el directorio: https://jkanime.net/directorio?p={n}.
  *  El listado viaja como JSON embebido en `var animes = {...}` (paginación de
  *  Laravel: data[], total y last_page). */
-export async function scrapeJkanimeDirectorPage(page: number): Promise<{ items: MediaItem[]; total: number; totalPages: number }> {
+export async function scrapeJkanimeDirectorPage(page: number, onLog?: (msg: string) => void): Promise<{ items: MediaItem[]; total: number; totalPages: number }> {
   try {
-    const html = await fetchHTML(`${BASE_URL}/directorio?p=${page}`);
+    const html = await fetchJkanimeHTML(`${BASE_URL}/directorio?p=${page}`);
     const match = html.match(/var animes = (\{[\s\S]*?\});/);
-    if (!match) return { items: [], total: 0, totalPages: 0 };
+    if (!match) {
+      onLog?.(`JKAnime directorio p${page}: no se encontró variable var animes en HTML`);
+      return { items: [], total: 0, totalPages: 0 };
+    }
     const json = JSON.parse(match[1]) as { data?: Array<{ slug?: string; title?: string; synopsis?: string; image?: string; tipo?: string }>; total?: number; last_page?: number };
     const items: MediaItem[] = (json.data || [])
       .filter((item) => item.tipo !== 'Pelicula' && item.slug)
@@ -377,7 +408,9 @@ export async function scrapeJkanimeDirectorPage(page: number): Promise<{ items: 
     logger.info({ page, items: items.length, total: json.total, lastPage: json.last_page }, 'JKAnime directorio scraped');
     return { items, total: json.total || items.length, totalPages: json.last_page || 1 };
   } catch (error) {
-    logger.error({ error: (error as Error).message, page }, 'JKAnime: fallo al scrapear el directorio');
+    const msg = (error as Error).message;
+    logger.error({ error: msg, page }, 'JKAnime: fallo al scrapear el directorio');
+    onLog?.(`JKAnime directorio p${page} aviso: ${msg}`);
     return { items: [], total: 0, totalPages: 0 };
   }
 }

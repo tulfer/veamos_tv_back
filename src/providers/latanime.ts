@@ -246,3 +246,54 @@ export async function scrapeLatanimeCalendarDay(day: string): Promise<{ day: str
     return { day: day.charAt(0).toUpperCase() + day.slice(1), items: [] };
   }
 }
+
+
+/** Directorio de latanime desde https://latanime.org/animes?page={n} (30 animes por página). */
+export async function scrapeLatanimeDirectoryPage(page: number): Promise<{ items: MediaItem[]; total: number; totalPages: number }> {
+  try {
+    const html = await fetchHTML(`${BASE_URL}/animes?page=${page}`);
+    const $ = cheerio.load(html);
+    const items = parseAnimeCards($, $.root());
+    let totalPages = page;
+    $('a[href*="page="]').each((_, el) => {
+      const m = $(el).attr('href')?.match(/page=(\d+)/);
+      if (m) {
+        const p = parseInt(m[1], 10);
+        if (p > totalPages) totalPages = p;
+      }
+    });
+    const total = totalPages * 30;
+    logger.info({ page, items: items.length, total, totalPages }, 'Latanime directorio scraped');
+    return { items, total, totalPages };
+  } catch (error) {
+    logger.error({ error: (error as Error).message, page }, 'Latanime: fallo al scrapear el directorio');
+    return { items: [], total: 0, totalPages: 0 };
+  }
+}
+
+/** Últimos episodios desde https://latanime.org/ (home) */
+export async function scrapeLatanimeLatestEpisodes(): Promise<MediaItem[]> {
+  try {
+    const html = await fetchHTML(`${BASE_URL}/`);
+    const $ = cheerio.load(html);
+    const items: MediaItem[] = [];
+    const seen = new Set<string>();
+    $('a[href*="/ver/"]').each((_, el) => {
+      const $el = $(el);
+      const href = $el.attr('href') || '';
+      const slugPart = href.split('/').filter(Boolean).pop() || '';
+      const animeSlug = slugPart.replace(/-episodio-\d+.*$/i, '').replace(/-capitulo-\d+.*$/i, '');
+      if (!animeSlug || seen.has(animeSlug)) return;
+      seen.add(animeSlug);
+      const title = $el.find('h3').first().text().trim() || $el.text().trim();
+      const img = $el.find('img').first();
+      const poster = img.attr('data-src') || img.attr('src') || undefined;
+      items.push({ id: `gani_${animeSlug}`, title, poster, type: 'anime' });
+    });
+    logger.info({ episodes: items.length }, 'Latanime últimos episodios scraped');
+    return items;
+  } catch (error) {
+    logger.error({ error: (error as Error).message }, 'Latanime: fallo al scrapear últimos episodios');
+    return [];
+  }
+}

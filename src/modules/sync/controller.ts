@@ -783,7 +783,7 @@ export async function runAnimeSync(pages: number[], shouldReplace = false): Prom
   }
   runBackgroundSync(type, async () => {
     const { scrapeJkanimeBanner, scrapeJkanimeSchedule, scrapeJkanimeTopAnime, scrapeJkanimeDirectorPage } = await import('../../providers/jkanime');
-    const { scrapeLatanimeEmision, scrapeLatanimeCalendarDay } = await import('../../providers/latanime');
+    const { scrapeLatanimeEmision, scrapeLatanimeCalendarDay, scrapeLatanimeDirectoryPage, scrapeLatanimeLatestEpisodes } = await import('../../providers/latanime');
     const { saveAnimeHomeData } = await import('../../providers/anime');
     const collection = 'gnulahd-anime';
 
@@ -793,7 +793,7 @@ export async function runAnimeSync(pages: number[], shouldReplace = false): Prom
     }
 
     updateSyncProgress(type, 0, 'Scrapeando banner de jkanime.net...');
-    const banners = await scrapeJkanimeBanner();
+    let banners = await scrapeJkanimeBanner((msg) => pushLog(type, msg));
     pushLog(type, `JKAnime banner: ${banners.length} banners`);
 
     const dayNames = ['domingo', 'lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado'];
@@ -806,18 +806,54 @@ export async function runAnimeSync(pages: number[], shouldReplace = false): Prom
     const ultimasTemporadas = await scrapeLatanimeEmision();
     pushLog(type, `Latanime emisión: ${ultimasTemporadas.length} animes`);
 
+    // Respaldo de banners si JKAnime no devolvió ninguno
+    if (banners.length === 0 && ultimasTemporadas.length > 0) {
+      banners = ultimasTemporadas.slice(0, 8).map((item) => ({
+        id: item.id,
+        title: item.title,
+        image: item.poster || '',
+        backdrop: item.poster || '',
+        poster: item.poster || '',
+        type: 'anime',
+      }));
+      pushLog(type, `Fallback: ${banners.length} banners tomados de últimas temporadas`);
+    }
+
     updateSyncProgress(type, 0, 'Scrapeando programación (últimos episodios) de jkanime.net...');
-    const schedule = await scrapeJkanimeSchedule();
+    let schedule = await scrapeJkanimeSchedule((msg) => pushLog(type, msg));
     pushLog(type, `JKAnime programación: ${schedule.length} últimos episodios`);
+    if (schedule.length === 0) {
+      const latSchedule = await scrapeLatanimeLatestEpisodes();
+      if (latSchedule.length > 0) {
+        schedule = latSchedule;
+        pushLog(type, `Fallback programación: ${schedule.length} últimos episodios desde Latanime`);
+      } else if (ultimasTemporadas.length > 0) {
+        schedule = ultimasTemporadas.slice(0, 20);
+        pushLog(type, `Fallback programación: ${schedule.length} episodios desde emisión`);
+      }
+    }
 
     updateSyncProgress(type, 0, 'Scrapeando Top Anime de jkanime.net...');
-    const topAnime = await scrapeJkanimeTopAnime();
+    let topAnime = await scrapeJkanimeTopAnime((msg) => pushLog(type, msg));
     pushLog(type, `JKAnime top: ${topAnime.length} animes`);
+    if (topAnime.length === 0 && ultimasTemporadas.length > 0) {
+      topAnime = ultimasTemporadas.slice(0, 10).map((item, idx) => ({
+        ...item,
+        order: idx + 1,
+      }));
+      pushLog(type, `Fallback top anime: ${topAnime.length} animes tomados de emisión`);
+    }
 
-    const firstPage = await scrapeJkanimeDirectorPage(1);
+    let firstPage = await scrapeJkanimeDirectorPage(1, (msg) => pushLog(type, msg));
+    let useLatanimeDir = false;
+    if (firstPage.items.length === 0) {
+      pushLog(type, 'Directorio JKAnime no disponible o vacío; recurriendo al directorio de Latanime...');
+      firstPage = await scrapeLatanimeDirectoryPage(1);
+      useLatanimeDir = true;
+    }
     const totalPages = Math.max(1, firstPage.totalPages);
     const pageList = pages.length > 0 ? pages : Array.from({ length: Math.min(totalPages, 10) }, (_, i) => i + 1);
-    pushLog(type, `Directorio jkanime: ${firstPage.total || '?'} animes, ${pageList.length} páginas a escanear`);
+    pushLog(type, `Directorio ${useLatanimeDir ? 'latanime' : 'jkanime'}: ${firstPage.total || '?'} animes, ${pageList.length} páginas a escanear`);
 
     // Contenidos ya persistidos: se reutilizan mientras estén vigentes (<24h)
     // y se re-resuelven los faltantes o vencidos (o todos si replace).
@@ -828,7 +864,7 @@ export async function runAnimeSync(pages: number[], shouldReplace = false): Prom
     const addItems = (items: typeof firstPage.items) => {
       const added: typeof firstPage.items = [];
       for (const item of items) {
-        if (seen.has(item.id)) continue;
+        if (!item || !item.id || seen.has(item.id)) continue;
         seen.add(item.id);
         todos.push(item);
         added.push(item);
@@ -836,12 +872,16 @@ export async function runAnimeSync(pages: number[], shouldReplace = false): Prom
       return added;
     };
     addItems(firstPage.items);
+    addItems(ultimasTemporadas);
+    if (calendario.items?.length) addItems(calendario.items);
 
     let persistQueue = Promise.resolve();
     for (const page of pageList) {
       let pageItems = page === 1 ? firstPage.items : [];
       if (page !== 1) {
-        const pageData = await scrapeJkanimeDirectorPage(page);
+        const pageData = useLatanimeDir
+          ? await scrapeLatanimeDirectoryPage(page)
+          : await scrapeJkanimeDirectorPage(page, (msg) => pushLog(type, msg));
         pageItems = addItems(pageData.items);
       }
       updateSyncProgress(type, todos.length, `Escaneando página ${page}/${pageList.length} del directorio (${todos.length} animes)...`);
