@@ -67,13 +67,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
             style: TextStyle(fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 8),
-          TextField(
-            controller: _backend,
-            keyboardType: TextInputType.url,
-            decoration: const InputDecoration(
-              labelText: 'URL del backend',
-              hintText: 'https://veamos.example.com',
-              border: OutlineInputBorder(),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _backend,
+                  keyboardType: TextInputType.url,
+                  decoration: const InputDecoration(
+                    labelText: 'URL del backend',
+                    hintText: 'https://sincronizarveamostv.86.48.23.214.nip.io',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: ActionChip(
+              avatar: const Icon(Icons.cloud_queue, size: 16),
+              label: const Text('Usar Dokploy (86.48.23.214)'),
+              onPressed: () {
+                _backend.text = 'https://sincronizarveamostv.86.48.23.214.nip.io';
+              },
             ),
           ),
           const SizedBox(height: 16),
@@ -105,12 +122,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           const SizedBox(height: 20),
-          Builder(
-            builder: (context) => FilledButton.icon(
-              onPressed: () => _save(context.findAncestorStateOfType<ScaffoldMessengerState>()!),
-              icon: const Icon(Icons.save),
-              label: const Text('Guardar'),
-            ),
+          FilledButton.icon(
+            onPressed: () => _save(ScaffoldMessenger.of(context)),
+            icon: const Icon(Icons.save),
+            label: const Text('Guardar'),
           ),
           if (_message.isNotEmpty) ...[
             const SizedBox(height: 12),

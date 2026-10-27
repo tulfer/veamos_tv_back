@@ -61,7 +61,7 @@ void syncTaskCallback() {
 
 /// Punto de control persistido con `flutter_foreground_task` (SharedPreferences),
 /// accesible desde el isolate del servicio y desde la UI.
-class _TaskSyncCheckpointStore implements SyncCheckpointStore {
+class TaskSyncCheckpointStore implements SyncCheckpointStore {
   @override
   Future<Map<String, dynamic>?> load() async {
     final raw = await FlutterForegroundTask.getData<String>(key: syncCheckpointKey);
@@ -146,7 +146,7 @@ class SyncTaskHandler extends TaskHandler {
       domains: (cmd['domains'] as List?)?.cast<String>() ?? const [],
       log: _log,
       onProgress: _progress,
-      store: _TaskSyncCheckpointStore(),
+      store: TaskSyncCheckpointStore(),
       shouldStop: () => _stopRequested,
     );
     _runner = runner;

@@ -58,7 +58,7 @@ Future<void> main() async {
   // Sincronización automática (WorkManager): corre en segundo plano aunque la
   // app esté cerrada, con la frecuencia (mín. 15 min) de lo habilitado.
   try {
-    Workmanager().initialize(autoSyncCallbackDispatcher, isInDebugMode: !kReleaseMode);
+    Workmanager().initialize(autoSyncCallbackDispatcher);
   } catch (error) {
     // ignore: avoid_print
     print('[auto-sync] no se pudo inicializar WorkManager: $error');
@@ -112,7 +112,10 @@ class _HomeState extends State<Home> {
       body: IndexedStack(
         index: _tab,
         children: [
-          SyncScreen(config: widget.config),
+          SyncScreen(
+            config: widget.config,
+            onOpenSettings: () => setState(() => _tab = 1),
+          ),
           SettingsScreen(config: widget.config),
         ],
       ),

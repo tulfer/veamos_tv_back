@@ -3762,8 +3762,34 @@ export async function ingestSyncHandler(request: FastifyRequest, reply: FastifyR
       }
       const { saveGnulahdHomeData } = await import('../../providers/gnulahd');
       await saveGnulahdHomeData(home);
-      logger.info({ banners: home.banners.length, sections: home.sections.length }, 'Ingesta móvil: home guardado');
-      return reply.send({ ok: true, type, saved: { home: true } });
+
+      const allItems: Array<Record<string, unknown> & { id: string }> = [];
+      const seen = new Set<string>();
+      for (const b of home.banners) {
+        if (b?.id && !seen.has(b.id)) {
+          seen.add(b.id);
+          allItems.push(b as unknown as Record<string, unknown> & { id: string });
+        }
+      }
+      for (const s of home.sections) {
+        for (const item of s.items || []) {
+          if (item?.id && !seen.has(item.id)) {
+            seen.add(item.id);
+            allItems.push(item as unknown as Record<string, unknown> & { id: string });
+          }
+        }
+      }
+
+      const movies = allItems.filter((i) => i.id.startsWith('gmov_'));
+      const series = allItems.filter((i) => i.id.startsWith('gser_'));
+      const anime = allItems.filter((i) => i.id.startsWith('gani_'));
+      if (movies.length > 0) await upsertItemsByCol('gnulahd-movies', movies);
+      if (series.length > 0) await upsertItemsByCol('gnulahd-series', series);
+      if (anime.length > 0) await upsertItemsByCol('gnulahd-anime', anime);
+      memoryCache.del('sync:data');
+
+      logger.info({ banners: home.banners.length, sections: home.sections.length, items: allItems.length }, 'Ingesta móvil: home guardado');
+      return reply.send({ ok: true, type, saved: { home: true, items: allItems.length } });
     }
 
     if (type === 'animeHome' || type === 'anime_home') {
@@ -3783,10 +3809,28 @@ export async function ingestSyncHandler(request: FastifyRequest, reply: FastifyR
         updatedAt: Date.now(),
       });
 
+      const allAnime: Array<Record<string, unknown> & { id: string }> = [];
+      const seen = new Set<string>();
+      const addAnime = (arr?: unknown[]) => {
+        if (!Array.isArray(arr)) return;
+        for (const it of arr) {
+          const item = it as (Record<string, unknown> & { id?: string }) | undefined;
+          if (item?.id && !seen.has(item.id)) {
+            seen.add(item.id);
+            allAnime.push(item as Record<string, unknown> & { id: string });
+          }
+        }
+      };
+      addAnime(animeHome.todos);
+      addAnime(animeHome.banners);
+      addAnime(animeHome.ultimosEpisodios);
+      addAnime(animeHome.topAnime);
+      addAnime(animeHome.ultimasTemporadas);
+
       let savedTodos = 0;
-      if (Array.isArray(animeHome.todos) && animeHome.todos.length > 0) {
-        await upsertItemsByCol('gnulahd-anime', animeHome.todos);
-        savedTodos = animeHome.todos.length;
+      if (allAnime.length > 0) {
+        await upsertItemsByCol('gnulahd-anime', allAnime);
+        savedTodos = allAnime.length;
       }
       memoryCache.del('sync:data');
       logger.info(

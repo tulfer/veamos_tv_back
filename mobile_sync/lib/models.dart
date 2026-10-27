@@ -121,6 +121,7 @@ class ContentDetail {
   List<DownloadLink>? downloads;
   final String type; // movie | series | anime
   List<Season>? seasons;
+  final String? url;
 
   ContentDetail({
     required this.id,
@@ -138,6 +139,7 @@ class ContentDetail {
     this.downloads,
     required this.type,
     this.seasons,
+    this.url,
   });
 
   Map<String, dynamic> toJson() => {
@@ -156,6 +158,7 @@ class ContentDetail {
         if (downloads != null) 'downloads': downloads!.map((d) => d.toJson()).toList(),
         'type': type,
         if (seasons != null) 'seasons': seasons!.map((s) => s.toJson()).toList(),
+        if (url != null) 'url': url,
       };
 }
 
@@ -169,6 +172,7 @@ class MediaItem {
   final String type; // movie | series | anime
   List<String>? genres;
   final String? description;
+  final String? url;
 
   MediaItem({
     required this.id,
@@ -180,6 +184,7 @@ class MediaItem {
     required this.type,
     this.genres,
     this.description,
+    this.url,
   });
 
   /// Reconstruye un ítem desde el listado ligero del backend
@@ -194,16 +199,19 @@ class MediaItem {
         type: json['type'] as String? ?? 'movie',
         genres: (json['genres'] as List?)?.cast<String>(),
         description: json['description'] as String?,
+        url: json['url'] as String?,
       );
 
   Map<String, dynamic> toCatalogJson() => {
         'id': id,
         'title': title,
         if (poster != null) 'poster': poster,
+        if (backdrop != null) 'backdrop': backdrop,
         if (rating != null) 'rating': rating,
         if (year != null) 'year': year,
         if (description != null) 'description': description,
         if (genres != null) 'genres': genres,
+        if (url != null) 'url': url,
         'type': type,
       };
 }
@@ -222,6 +230,7 @@ class BannerItem extends MediaItem {
     required super.type,
     super.genres,
     super.description,
+    super.url,
   });
 
   Map<String, dynamic> toJson() => {

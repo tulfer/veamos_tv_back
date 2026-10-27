@@ -25,10 +25,11 @@ class AutoSchedule {
   }) : options = options ?? const SyncOptions();
 
   String get label => switch (job) {
-        'home' => 'Solo home',
+        'home' => 'Home GNULA',
+        'anime' => 'Home Anime',
         'movies' => 'Películas',
         'series' => 'Series',
-        _ => 'Anime',
+        _ => job,
       };
 
   Map<String, dynamic> toJson() => {
@@ -59,11 +60,17 @@ class AppConfig {
   static const _kDeviceId = 'device_id';
   static const _kAutoPrefix = 'auto_schedule_';
   static const _kLastPrefix = 'auto_last_';
-  static const List<String> autoJobs = ['home', 'movies', 'series', 'anime'];
+  static const List<String> autoJobs = ['home', 'anime', 'movies', 'series'];
+  static const List<String> defaultGnulaDomains = [
+    'https://ww3.gnulahd.nu',
+    'https://gnulahd.click',
+    'https://gnulahd.bid',
+    'https://gnulahd.nu',
+  ];
 
   String backendUrl = '';
   String syncToken = '';
-  List<String> gnulaDomains = const ['https://ww3.gnulahd.nu', 'https://gnulahd.nu', 'https://gnulahd.click'];
+  List<String> gnulaDomains = defaultGnulaDomains;
   String deviceId = '';
   final Map<String, AutoSchedule> autoSchedules = {};
   final Map<String, int> lastRuns = {};
@@ -79,7 +86,7 @@ class AppConfig {
       gnulaDomains = domains.split('\n').map((d) => d.trim()).where((d) => d.isNotEmpty).toList();
     }
     if (gnulaDomains.isEmpty) {
-      gnulaDomains = const ['https://ww3.gnulahd.nu', 'https://gnulahd.nu', 'https://gnulahd.click'];
+      gnulaDomains = defaultGnulaDomains;
     }
     for (final job in autoJobs) {
       final raw = _prefs.getString('$_kAutoPrefix$job');

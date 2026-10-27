@@ -3,6 +3,7 @@ import 'dart:async';
 import '../models.dart';
 import 'gnula_client.dart';
 import 'ingest_api.dart';
+import 'jkanime_client.dart';
 
 /// Tarea de sincronización solicitada desde la UI.
 enum SyncTask { all, home, movies, series, anime }
@@ -293,7 +294,69 @@ class SyncRunner {
       var start = resuming ? (_currentJob!['doneCount'] as num?)?.toInt() ?? 0 : 0;
 
       List<MediaItem> items;
-      if (job.items != null) {
+      if (job.kind == 'anime') {
+        _log('═══ Sincronizando ANIME (JKAnime + Latanime) ═══');
+        _progress('Scrapeando portada y catálogo de Anime...');
+        final animeClient = JkanimeClient(log: _log);
+        final animeData = await animeClient.scrapeAnimeHome(pages: job.pages);
+
+        _log('Guardando datos de la sección Anime en el servidor...');
+        await _api.sendAnimeHome(animeData);
+
+        // Recolectar todos los ítems únicos del home de anime
+        final uniqueAnime = <String, MediaItem>{};
+        for (final b in animeData.banners) {
+          uniqueAnime[b.id] = MediaItem(
+            id: b.id,
+            title: b.title,
+            poster: b.poster ?? b.image,
+            backdrop: b.backdrop ?? b.image,
+            type: 'anime',
+          );
+        }
+        for (final item in animeData.topAnime) {
+          uniqueAnime.putIfAbsent(item.id, () => item);
+        }
+        for (final item in animeData.ultimosEpisodios) {
+          uniqueAnime.putIfAbsent(item.id, () => item);
+        }
+        for (final item in animeData.ultimasTemporadas) {
+          uniqueAnime.putIfAbsent(item.id, () => item);
+        }
+        for (final item in animeData.todos) {
+          uniqueAnime.putIfAbsent(item.id, () => item);
+        }
+
+        items = uniqueAnime.values.toList();
+        if (items.isEmpty) {
+          _log('⚠️ El catálogo de anime quedó vacío. Se omite.');
+          _doneJobs.add(job.id);
+          await _saveCheckpoint();
+          continue;
+        }
+
+        _log('Listado Anime: ${items.length} títulos detectados en portada y catálogo.');
+        if (!catalogDone) {
+          await _sendCatalog(job, items);
+          catalogDone = true;
+          _currentJob = {'jobId': job.id, 'doneCount': 0, 'catalogDone': true};
+          await _saveCheckpoint();
+        }
+
+        if (job.fetchContent) {
+          if (start > 0) _log('↩️ Reanudando Anime en el ítem ${start + 1}/${items.length}.');
+          _log('Resolviendo contenidos de servidores y episodios para Anime...');
+          await _scrapeAndSendAnime(animeClient, job, items, start: start, catalogDone: catalogDone);
+        } else {
+          _log('Anime: catálogo guardado sin content (${items.length} ítems).');
+        }
+
+        animeClient.close();
+        _doneJobs.add(job.id);
+        _currentJob = null;
+        await _saveCheckpoint();
+        continue;
+      } else if (job.items != null) {
         items = job.items!;
       } else if (job.updateExisting) {
         // Modo "solo content": los ítems salen del backend (no se listean
@@ -319,10 +382,9 @@ class SyncRunner {
         _log('Listado: ${items.length} títulos (${job.pages} página(s))');
       }
 
-      // Catálogo sin detalle: reemplaza o sube los ítems tal cual (rápido).
-      // Aplica a los listados, no a los ítems del home (siempre con content)
-      // ni al modo "solo content" (no debe tocar el catálogo).
-      if (job.items == null && !job.updateExisting && (job.replace || !job.fetchContent) && !catalogDone) {
+      // Catálogo: sube los ítems (rápido).
+      // Aplica tanto a ítems del home como a listados; no aplica al modo "solo content".
+      if (!job.updateExisting && (job.items != null || job.replace || !job.fetchContent) && !catalogDone) {
         await _sendCatalog(job, items);
         catalogDone = true;
         _currentJob = {'jobId': job.id, 'doneCount': 0, 'catalogDone': true};
@@ -449,6 +511,7 @@ class SyncRunner {
         type: type,
         label: syncTypeLabels[type] ?? type,
         items: typed,
+        fetchContent: _options.fetchContent,
       ));
     }
     return jobs;
@@ -465,17 +528,28 @@ class SyncRunner {
     const batchSize = 5;
     final batch = <Map<String, dynamic>>[];
     var sent = start;
+    JkanimeClient? animeClient;
+
     for (var i = start; i < items.length; i++) {
       if (_cancelled) break;
       final item = items[i];
       _progress('Scrapeando detalle ${i + 1}/${items.length}: "${item.title}"');
       try {
-        final detail = await _client.scrapeDetail(item);
-        batch.add({
-          ...item.toCatalogJson(),
-          'content': detail.toJson(),
-          'contentUpdatedAt': DateTime.now().millisecondsSinceEpoch,
-        });
+        final isAnime = job.type == 'anime' || item.type == 'anime' || item.id.startsWith('gani_');
+        ContentDetail? detail;
+        if (isAnime) {
+          animeClient ??= JkanimeClient(log: _log);
+          detail = await animeClient.scrapeAnimeDetail(item);
+        } else {
+          detail = await _client.scrapeDetail(item);
+        }
+        if (detail != null) {
+          batch.add({
+            ...item.toCatalogJson(),
+            'content': detail.toJson(),
+            'contentUpdatedAt': DateTime.now().millisecondsSinceEpoch,
+          });
+        }
       } catch (error) {
         _log('⚠️ ${item.title}: $error');
       }
@@ -496,7 +570,61 @@ class SyncRunner {
         }
       }
     }
+    animeClient?.close();
     _log('${job.label} (${job.type}): $sent/${items.length} ítems ${job.updateExisting ? 'actualizados' : 'guardadas'} en el backend.');
+  }
+
+  /// Scrapea el detalle de servidores y episodios de anime y los sube en lotes
+  /// de 3 con `enrich`.
+  Future<void> _scrapeAndSendAnime(
+    JkanimeClient animeClient,
+    _DetailJob job,
+    List<MediaItem> items, {
+    int start = 0,
+    bool catalogDone = false,
+  }) async {
+    _total = items.length;
+    _done = start;
+    _saved = start;
+    _progress('Scrapeando contenidos de anime...');
+
+    const batchSize = 3;
+    final batch = <Map<String, dynamic>>[];
+    var sent = start;
+
+    for (var i = start; i < items.length; i++) {
+      if (_cancelled) break;
+      final item = items[i];
+      _progress('Anime [${i + 1}/${items.length}]: "${item.title}"...');
+      try {
+        final detail = await animeClient.scrapeAnimeDetail(item);
+        if (detail != null && (detail.seasons?.isNotEmpty == true)) {
+          batch.add({
+            ...item.toCatalogJson(),
+            'content': detail.toJson(),
+            'contentUpdatedAt': DateTime.now().millisecondsSinceEpoch,
+          });
+        } else {
+          _log('ℹ️ ${item.title}: sin servidores de streaming encontrados.');
+        }
+      } catch (error) {
+        _log('⚠️ ${item.title}: $error');
+      }
+      _done = i + 1;
+
+      if (batch.length >= batchSize || i == items.length - 1) {
+        if (batch.isNotEmpty) {
+          final saved = await _api.sendItems('anime', List.of(batch), enrich: true);
+          sent += saved;
+          _saved = sent;
+          batch.clear();
+          _currentJob = {'jobId': job.id, 'doneCount': i + 1, 'catalogDone': catalogDone};
+          await _saveCheckpoint();
+          _progress('Guardando anime ($sent/${items.length} con contenido)...');
+        }
+      }
+    }
+    _log('Anime: $sent animes con contenido guardados en el backend.');
   }
 
   Future<void> close() async {

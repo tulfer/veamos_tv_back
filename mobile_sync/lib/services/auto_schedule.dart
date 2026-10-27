@@ -65,7 +65,7 @@ Future<void> runDueSchedules() async {
   var done = 0;
   var failed = 0;
 
-  for (final job in config.autoJobs) {
+  for (final job in AppConfig.autoJobs) {
     final schedule = config.autoSchedules[job];
     if (schedule == null || !schedule.enabled) continue;
 
@@ -80,7 +80,7 @@ Future<void> runDueSchedules() async {
       done++;
       if (summary != null) {
         await showNotification(
-          id: 300 + config.autoJobs.indexOf(job),
+          id: 300 + AppConfig.autoJobs.indexOf(job),
           title: 'veamosTVSync',
           body: summary,
         );
@@ -90,7 +90,7 @@ Future<void> runDueSchedules() async {
       // ignore: avoid_print
       print('[auto-sync] $job falló: $error');
       await showNotification(
-        id: 310 + config.autoJobs.indexOf(job),
+        id: 310 + AppConfig.autoJobs.indexOf(job),
         title: 'veamosTVSync',
         body: '$job: falló la sincronización automática ($error)',
       );
@@ -108,9 +108,10 @@ Future<void> runDueSchedules() async {
 Future<String?> _runJob(AppConfig config, AutoSchedule schedule) async {
   final tasks = switch (schedule.job) {
     'home' => const [SyncTask.home],
+    'anime' => const [SyncTask.anime],
     'movies' => const [SyncTask.movies],
     'series' => const [SyncTask.series],
-    _ => const [SyncTask.anime],
+    _ => const [SyncTask.home],
   };
 
   final runner = SyncRunner(

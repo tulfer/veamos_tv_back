@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
@@ -7,17 +8,20 @@ import '../config.dart';
 import '../services/auto_schedule.dart';
 import '../services/sync_runner.dart';
 import '../services/sync_task_handler.dart';
-import '../services/ingest_api.dart';
-import '../services/jkanime_client.dart';
 
-/// Pantalla principal de sincronización. La sync se ejecuta dentro de un
-/// foreground service (`flutter_foreground_task`) para que Android no mate el
-/// proceso cuando la app pasa a segundo plano; la notificación muestra el
-/// avance y la UI recibe logs/progreso por el puerto de comunicación.
+/// Pantalla principal de sincronización de Veamos TV.
+/// Ejecuta la sincronización de GNULA y Anime (JKAnime + Latanime)
+/// mostrando los registros en tiempo real en pantalla y manteniendo
+/// el proceso vivo mediante un Foreground Service de Android.
 class SyncScreen extends StatefulWidget {
   final AppConfig config;
+  final VoidCallback? onOpenSettings;
 
-  const SyncScreen({super.key, required this.config});
+  const SyncScreen({
+    super.key,
+    required this.config,
+    this.onOpenSettings,
+  });
 
   @override
   State<SyncScreen> createState() => _SyncScreenState();
@@ -30,30 +34,57 @@ class _SyncScreenState extends State<SyncScreen> {
   bool _serviceActive = false;
   bool _keepAlive = false;
   bool _resumable = false;
+  bool _stopRequested = false;
+  SyncRunner? _activeRunner;
   int _done = 0;
   int _total = 0;
   int _saved = 0;
   String _currentStep = '';
+  Timer? _autoCheckTimer;
 
   @override
   void initState() {
     super.initState();
-    FlutterForegroundTask.addTaskDataCallback(_onTaskData);
     _refreshServiceState();
     _refreshCheckpoint();
+    _autoCheckTimer = Timer.periodic(const Duration(seconds: 30), (_) => _checkAutoDueSchedules());
   }
 
   @override
   void dispose() {
-    FlutterForegroundTask.removeTaskDataCallback(_onTaskData);
+    _autoCheckTimer?.cancel();
+    _autoCheckTimer = null;
+    _stopRequested = true;
+    _activeRunner?.close();
+    _activeRunner = null;
     WakelockPlus.disable();
     _scroll.dispose();
     super.dispose();
   }
 
-  /// Mientras la sync corre y la app está abierta, mantiene la pantalla
-  /// encendida (el foreground service ya mantiene la CPU, esto evita que se
-  /// apague la pantalla del usuario).
+  Future<void> _checkAutoDueSchedules() async {
+    if (_running || !widget.config.isConfigured) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    for (final job in AppConfig.autoJobs) {
+      final schedule = widget.config.autoSchedules[job];
+      if (schedule == null || !schedule.enabled) continue;
+      final lastRun = widget.config.lastRuns[job] ?? 0;
+      if (now - lastRun >= schedule.intervalMinutes * 60000) {
+        _append('⏰ [Automático] Iniciando sincronización de ${schedule.label}...');
+        await widget.config.setLastRun(job, now);
+        final tasks = switch (schedule.job) {
+          'home' => const [SyncTask.home],
+          'anime' => const [SyncTask.anime],
+          'movies' => const [SyncTask.movies],
+          'series' => const [SyncTask.series],
+          _ => const [SyncTask.home],
+        };
+        await _run(tasks, options: schedule.options);
+        break; // Ejecutar una tarea a la vez
+      }
+    }
+  }
+
   Future<void> _updateWakelock(bool keepScreenOn) async {
     try {
       if (keepScreenOn) {
@@ -62,18 +93,24 @@ class _SyncScreenState extends State<SyncScreen> {
         await WakelockPlus.disable();
       }
     } catch (_) {
-      // Sin plataforma (tests): se ignora.
+      // Ignorado si la plataforma no soporta wakelock
     }
   }
 
   void _append(String line) {
-    _log.add('${_timeStamp()} $line');
-    if (_log.length > 500) _log.removeRange(0, _log.length - 500);
+    final formatted = '${_timeStamp()} $line';
+    // ignore: avoid_print
+    print('[_SyncScreen] $formatted');
+    _log.add(formatted);
+    if (_log.length > 1000) _log.removeRange(0, _log.length - 1000);
     if (mounted) setState(() {});
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scroll.hasClients) {
-        _scroll.animateTo(_scroll.position.maxScrollExtent,
-            duration: const Duration(milliseconds: 150), curve: Curves.easeOut);
+        _scroll.animateTo(
+          _scroll.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 120),
+          curve: Curves.easeOut,
+        );
       }
     });
   }
@@ -90,9 +127,7 @@ class _SyncScreenState extends State<SyncScreen> {
     bool running = false;
     try {
       running = await FlutterForegroundTask.isRunningService;
-    } catch (_) {
-      // Sin plataforma (tests) o servicio no inicializado: se asume apagado.
-    }
+    } catch (_) {}
     if (mounted) setState(() => _serviceActive = running);
   }
 
@@ -101,54 +136,38 @@ class _SyncScreenState extends State<SyncScreen> {
     if (mounted) setState(() => _resumable = resumable);
   }
 
-  /// Datos que envía el isolate del [SyncTaskHandler] (log, progreso, fin).
-  void _onTaskData(Object data) {
-    if (data is! Map) return;
-    switch (data['kind']) {
-      case 'log':
-        _append(data['line'] as String? ?? '');
-        break;
-      case 'progress':
-        setState(() {
-          _running = true;
-          _done = data['done'] as int? ?? 0;
-          _total = data['total'] as int? ?? 0;
-          _saved = data['saved'] as int? ?? 0;
-          _currentStep = data['step'] as String? ?? '';
-        });
-        _updateWakelock(true);
-        break;
-      case 'done':
-      case 'idle':
-      case 'error':
-        setState(() {
-          _running = false;
-          _currentStep = '';
-        });
-        _updateWakelock(false);
-        _refreshServiceState();
-        _refreshCheckpoint();
-        break;
-      case 'resumable':
-        setState(() => _resumable = data['value'] == true);
-        break;
-    }
-  }
-
   Future<bool> _ensureNotificationPermission() async {
-    final current = await FlutterForegroundTask.checkNotificationPermission();
-    if (current == NotificationPermission.granted) return true;
-    final result = await FlutterForegroundTask.requestNotificationPermission();
-    if (result != NotificationPermission.granted) {
-      _append('⚠️ Sin permiso de notificaciones: Android podría detener la sync en segundo plano.');
-      return false;
+    try {
+      final current = await FlutterForegroundTask.checkNotificationPermission();
+      if (current == NotificationPermission.granted) return true;
+      final result = await FlutterForegroundTask.requestNotificationPermission();
+      if (result != NotificationPermission.granted) {
+        _append('⚠️ Sin permiso de notificaciones: Android podría suspender la app en segundo plano.');
+        return false;
+      }
+      return true;
+    } catch (_) {
+      return true;
     }
-    return true;
   }
 
   Future<void> _run(List<SyncTask> tasks, {bool resume = false, SyncOptions? options}) async {
     if (!widget.config.isConfigured) {
-      _append('❌ Configura la URL del backend y el token en Ajustes.');
+      _append('❌ Configura la URL del backend y el token en la pestaña Ajustes.');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('⚠️ Configura la URL del backend y el token en Ajustes.'),
+            action: widget.onOpenSettings != null
+                ? SnackBarAction(
+                    label: 'Ir a Ajustes',
+                    onPressed: widget.onOpenSettings!,
+                  )
+                : null,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
       return;
     }
     if (_running) return;
@@ -157,54 +176,124 @@ class _SyncScreenState extends State<SyncScreen> {
 
     setState(() {
       _running = true;
+      _stopRequested = false;
       _done = 0;
       _total = 0;
       _saved = 0;
-      _currentStep = 'Iniciando...';
+      _currentStep = 'Iniciando sincronización...';
       if (!resume) _log.clear();
     });
     _updateWakelock(true);
 
-    final command = buildSyncCommand(
-      tasks: tasks,
+    final isAnime = tasks.contains(SyncTask.anime);
+    final taskName = isAnime
+        ? 'Anime (JKAnime + Latanime)'
+        : tasks.map((t) => t.name).join(', ');
+    _append('▶ Sincronización iniciada: $taskName');
+
+    // Iniciar Foreground Service de Android para mantener el proceso vivo
+    // y mostrar el progreso en la barra de notificaciones del sistema.
+    try {
+      if (!await FlutterForegroundTask.isRunningService) {
+        await FlutterForegroundTask.startService(
+          serviceId: syncServiceId,
+          serviceTypes: const [ForegroundServiceTypes.dataSync],
+          notificationTitle: 'veamosTVSync — sincronizando',
+          notificationText: 'Iniciando $taskName...',
+        );
+      } else {
+        await FlutterForegroundTask.updateService(
+          notificationTitle: 'veamosTVSync — sincronizando',
+          notificationText: 'Iniciando $taskName...',
+        );
+      }
+      setState(() => _serviceActive = true);
+    } catch (e) {
+      _append('⚠️ Aviso del servicio en segundo plano: $e');
+    }
+
+    final effectiveOptions = options ?? const SyncOptions(pages: 5);
+
+    final runner = SyncRunner(
       backendUrl: widget.config.backendUrl.trim(),
       token: widget.config.syncToken.trim(),
       domains: widget.config.gnulaDomains,
-      keepAlive: _keepAlive,
-      resume: resume,
-      options: options ?? const SyncOptions(),
+      log: (line) => _append(line),
+      onProgress: (done, total, saved, step) {
+        if (!mounted) return;
+        setState(() {
+          _done = done;
+          _total = total;
+          _saved = saved;
+          _currentStep = step;
+        });
+        final pct = total > 0 ? (done * 100 ~/ total) : 0;
+        FlutterForegroundTask.updateService(
+          notificationTitle: 'veamosTVSync — sincronizando',
+          notificationText: total > 0 ? '$step ($pct%)' : step,
+        );
+      },
+      store: TaskSyncCheckpointStore(),
+      shouldStop: () => _stopRequested,
     );
+    _activeRunner = runner;
 
-    // Si el servicio ya está vivo (modo "mantener activo"), sólo le mandamos
-    // el comando por el canal de comunicación.
-    if (await FlutterForegroundTask.isRunningService) {
-      FlutterForegroundTask.sendDataToTask(command);
-      setState(() => _serviceActive = true);
-      return;
-    }
-
-    await FlutterForegroundTask.saveData(key: syncCommandKey, value: command);
-    final result = await FlutterForegroundTask.startService(
-      serviceId: syncServiceId,
-      serviceTypes: const [ForegroundServiceTypes.dataSync],
-      notificationTitle: 'veamosTVSync — sincronizando',
-      notificationText: 'Iniciando...',
-      callback: syncTaskCallback,
-    );
-    if (result is ServiceRequestFailure) {
-      _append('❌ No se pudo iniciar el servicio: ${result.error}');
-      setState(() {
-        _running = false;
-        _currentStep = '';
-      });
+    try {
+      await runner.run(tasks, resume: resume, options: effectiveOptions);
+      _append('✅ Sincronización completada exitosamente.');
+    } on TimeoutException {
+      _append('❌ Timeout de conexión: puedes reintentar con el botón «Continuar».');
+    } catch (error, stack) {
+      _append('❌ Error: $error');
+      // ignore: avoid_print
+      print('[_SyncScreen] Detalle del error: $error\n$stack');
+    } finally {
+      await runner.close();
+      _activeRunner = null;
+      _stopRequested = false;
+      if (mounted) {
+        setState(() {
+          _running = false;
+          _currentStep = '';
+        });
+      }
       _updateWakelock(false);
-      return;
+      await _refreshCheckpoint();
+
+      if (!_keepAlive) {
+        try {
+          await FlutterForegroundTask.stopService();
+          if (mounted) setState(() => _serviceActive = false);
+        } catch (_) {}
+      } else {
+        FlutterForegroundTask.updateService(
+          notificationTitle: 'veamosTVSync activo',
+          notificationText: 'En espera de una sincronización',
+        );
+      }
     }
-    setState(() => _serviceActive = true);
   }
 
-  /// Pregunta cuántas páginas listar, si reemplaza el catálogo y si carga el
-  /// `content` de cada ítem. Devuelve `null` si el usuario cancela.
+  Future<void> _stop() async {
+    _stopRequested = true;
+    _append('⏹️ Cancelando sincronización...');
+    if (_activeRunner != null) {
+      await _activeRunner!.close();
+      _activeRunner = null;
+    }
+    if (await FlutterForegroundTask.isRunningService) {
+      await FlutterForegroundTask.stopService();
+    }
+    setState(() {
+      _running = false;
+      _serviceActive = false;
+      _keepAlive = false;
+      _currentStep = '';
+    });
+    _updateWakelock(false);
+    _refreshCheckpoint();
+  }
+
   Future<SyncOptions?> _askOptions(String label, {String confirmLabel = 'Iniciar'}) async {
     var pages = 1;
     var replace = false;
@@ -232,7 +321,7 @@ class _SyncScreenState extends State<SyncScreen> {
                     }
                   }),
                   title: const Text('Solo actualizar el content de lo ya guardado'),
-                  subtitle: const Text('No lista páginas ni agrega títulos: rescrapea el detalle de lo que ya existe'),
+                  subtitle: const Text('No lista páginas ni agrega títulos: rescrapea el detalle de lo existente'),
                 ),
                 const Divider(height: 12),
                 Text(
@@ -268,7 +357,7 @@ class _SyncScreenState extends State<SyncScreen> {
                       ? null
                       : (value) => setDialogState(() => fetchContent = value),
                   title: const Text('Cargar el content de cada ítem'),
-                  subtitle: const Text('Scrapea el detalle (lento) y lo sube enriquecido'),
+                  subtitle: const Text('Scrapea el detalle de cada título'),
                 ),
               ],
             ),
@@ -303,8 +392,6 @@ class _SyncScreenState extends State<SyncScreen> {
     await _run([task], options: options);
   }
 
-  /// Diálogo de programación automática: intervalo + opciones (páginas,
-  /// reemplazo, content). Devuelve `null` si el usuario cancela.
   Future<({SyncOptions options, int intervalMinutes})?> _scheduleDialog(AutoSchedule schedule) async {
     var minutes = schedule.intervalMinutes;
     var pages = schedule.options.pages;
@@ -313,6 +400,9 @@ class _SyncScreenState extends State<SyncScreen> {
     var updateExisting = schedule.options.updateExisting;
     const intervals = {15, 30, 60, 120, 240, 360, 720, 1440};
     if (!intervals.contains(minutes)) minutes = 240;
+
+    final isAnime = schedule.job == 'anime';
+    final isHome = schedule.job == 'home';
 
     return showDialog<({SyncOptions options, int intervalMinutes})>(
       context: context,
@@ -324,9 +414,11 @@ class _SyncScreenState extends State<SyncScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Cada cuánto (en segundo plano, con notificaciones):'),
+                const Text('Frecuencia en segundo plano:'),
+                const SizedBox(height: 8),
                 Wrap(
                   spacing: 8,
+                  runSpacing: 4,
                   children: [
                     for (final m in intervals)
                       ChoiceChip(
@@ -337,55 +429,86 @@ class _SyncScreenState extends State<SyncScreen> {
                   ],
                 ),
                 const Divider(height: 16),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  dense: true,
-                  value: updateExisting,
-                  onChanged: (value) => setDialogState(() {
-                    updateExisting = value;
-                    if (value) {
-                      replace = false;
-                      fetchContent = true;
-                    }
-                  }),
-                  title: const Text('Solo actualizar el content de lo ya guardado'),
-                  subtitle: const Text('No lista páginas ni agrega títulos: rescrapea el detalle de lo que ya existe'),
-                ),
-                Text(
-                  updateExisting
-                      ? 'Se actualizarán los ítems existentes en el backend.'
-                      : 'Páginas a listar: $pages  (≈ ${pages * 32} ítems)',
-                ),
-                Slider(
-                  value: pages.toDouble(),
-                  min: 1,
-                  max: SyncOptions.maxPages.toDouble(),
-                  divisions: SyncOptions.maxPages - 1,
-                  label: '$pages',
-                  onChanged: updateExisting
-                      ? null
-                      : (value) => setDialogState(() => pages = value.round()),
-                ),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  dense: true,
-                  value: replace,
-                  onChanged: updateExisting
-                      ? null
-                      : (value) => setDialogState(() => replace = value),
-                  title: const Text('Reemplazar el contenido'),
-                  subtitle: const Text('La colección queda solo con lo que venga en el listado'),
-                ),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  dense: true,
-                  value: fetchContent,
-                  onChanged: updateExisting
-                      ? null
-                      : (value) => setDialogState(() => fetchContent = value),
-                  title: const Text('Cargar el content de cada ítem'),
-                  subtitle: const Text('Scrapea el detalle (lento) y lo sube enriquecido'),
-                ),
+                if (isAnime) ...[
+                  Text('Páginas del directorio a escanear: $pages'),
+                  Slider(
+                    value: pages.toDouble(),
+                    min: 1,
+                    max: 20,
+                    divisions: 19,
+                    label: '$pages',
+                    onChanged: (value) => setDialogState(() => pages = value.round()),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'ℹ️ Sincroniza portada de JKAnime (banners, programación, top) y Latanime (calendario, emisión) junto con el catálogo.',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Theme.of(context).colorScheme.outline),
+                  ),
+                ] else if (isHome) ...[
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                    value: fetchContent,
+                    onChanged: (value) => setDialogState(() => fetchContent = value),
+                    title: const Text('Cargar el detalle de cada ítem (content)'),
+                    subtitle: const Text('Scrapea reproductores y detalles de los títulos del home'),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'ℹ️ Sincroniza la portada de GNULA HD (banners destacados y todas las secciones de novedades y estrenos).',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Theme.of(context).colorScheme.outline),
+                  ),
+                ] else ...[
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                    value: updateExisting,
+                    onChanged: (value) => setDialogState(() {
+                      updateExisting = value;
+                      if (value) {
+                        replace = false;
+                        fetchContent = true;
+                      }
+                    }),
+                    title: const Text('Solo actualizar el content'),
+                    subtitle: const Text('Rescrapea el detalle de lo que ya existe'),
+                  ),
+                  Text(
+                    updateExisting
+                        ? 'Se actualizarán los ítems existentes en el backend.'
+                        : 'Páginas a listar: $pages  (≈ ${pages * 32} ítems)',
+                  ),
+                  Slider(
+                    value: pages.toDouble(),
+                    min: 1,
+                    max: SyncOptions.maxPages.toDouble(),
+                    divisions: SyncOptions.maxPages - 1,
+                    label: '$pages',
+                    onChanged: updateExisting
+                        ? null
+                        : (value) => setDialogState(() => pages = value.round()),
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                    value: replace,
+                    onChanged: updateExisting
+                        ? null
+                        : (value) => setDialogState(() => replace = value),
+                    title: const Text('Reemplazar el contenido'),
+                    subtitle: const Text('La colección queda solo con lo que venga en el listado'),
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                    value: fetchContent,
+                    onChanged: updateExisting
+                        ? null
+                        : (value) => setDialogState(() => fetchContent = value),
+                    title: const Text('Cargar el content de cada ítem'),
+                    subtitle: const Text('Scrapea el detalle de cada título'),
+                  ),
+                ],
               ],
             ),
           ),
@@ -461,8 +584,6 @@ class _SyncScreenState extends State<SyncScreen> {
     return 'pendiente';
   }
 
-  /// Mantiene el servicio vivo aunque no haya una sync en curso (evita que el
-  /// sistema mate el proceso). Si se apaga y no hay sync, detiene el servicio.
   Future<void> _setKeepAlive(bool value) async {
     setState(() => _keepAlive = value);
     if (!value) {
@@ -476,13 +597,11 @@ class _SyncScreenState extends State<SyncScreen> {
     await _ensureNotificationPermission();
     if (await FlutterForegroundTask.isRunningService) return;
 
-    await FlutterForegroundTask.saveData(key: syncCommandKey, value: buildKeepAliveCommand());
     final result = await FlutterForegroundTask.startService(
       serviceId: syncServiceId,
       serviceTypes: const [ForegroundServiceTypes.dataSync],
       notificationTitle: 'veamosTVSync activo',
       notificationText: 'En espera de una sincronización',
-      callback: syncTaskCallback,
     );
     if (result is ServiceRequestFailure) {
       _append('❌ No se pudo iniciar el servicio: ${result.error}');
@@ -492,59 +611,12 @@ class _SyncScreenState extends State<SyncScreen> {
     setState(() => _serviceActive = true);
   }
 
-  Future<void> _stop() async {
-    if (await FlutterForegroundTask.isRunningService) {
-      FlutterForegroundTask.sendDataToTask(buildStopCommand());
-      await FlutterForegroundTask.stopService();
-    }
-    setState(() {
-      _running = false;
-      _serviceActive = false;
-      _keepAlive = false;
-      _currentStep = '';
-    });
-    _updateWakelock(false);
-    _append('Servicio en segundo plano detenido.');
-    _refreshCheckpoint();
-  }
-
-  Future<void> _syncAnimeHome() async {
-    if (_running) return;
-    if (!widget.config.isConfigured) {
-      _append('⚠️ Configura la URL y el token en Ajustes primero.');
-      return;
-    }
-    setState(() {
-      _running = true;
-      _currentStep = 'Sincronizando Home Anime (JKAnime)...';
-    });
-    _updateWakelock(true);
-    _append('═══ Sincronizando Home Anime (JKAnime) ═══');
-    try {
-      final client = JkanimeClient(log: _append);
-      final api = IngestApi(
-        baseUrl: widget.config.backendUrl,
-        token: widget.config.syncToken,
-        log: _append,
-      );
-      final data = await client.scrapeAnimeHome(pages: 5);
-      _append('Subiendo Home Anime al servidor...');
-      await api.sendAnimeHome(data);
-      _append('✔ Home Anime sincronizado con éxito desde JKAnime (${data.banners.length} banners, ${data.todos.length} animes en catálogo).');
-    } catch (e) {
-      _append('❌ Error al sincronizar Home Anime: $e');
-    } finally {
-      setState(() {
-        _running = false;
-        _currentStep = '';
-      });
-      _updateWakelock(false);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final activeSchedulesCount =
+        widget.config.autoSchedules.values.where((s) => s.enabled).length;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('veamosTVSync'),
@@ -552,181 +624,289 @@ class _SyncScreenState extends State<SyncScreen> {
           padding: const EdgeInsets.fromLTRB(12, 8, 0, 8),
           child: Image.asset('assets/icons/app_icon.png'),
         ),
+        actions: [
+          if (_running)
+            IconButton(
+              icon: const Icon(Icons.stop_circle_outlined, color: Colors.redAccent),
+              tooltip: 'Detener',
+              onPressed: _stop,
+            ),
+        ],
       ),
       body: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(
-                  'Esta app scrapea GNULA HD desde la IP residencial de tu celular y sube los datos al backend de Veamos TV.',
-                  style: theme.textTheme.bodyMedium,
-                ),
-                const SizedBox(height: 8),
                 if (!widget.config.isConfigured)
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: theme.colorScheme.errorContainer,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text(
-                      '⚠️ Configura la URL y el token del backend en Ajustes.',
-                      style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onErrorContainer),
+                  InkWell(
+                    onTap: widget.onOpenSettings,
+                    borderRadius: BorderRadius.circular(8),
+                    child: Container(
+                      margin: const EdgeInsets.only(bottom: 12),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.errorContainer,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.warning_amber_rounded, color: theme.colorScheme.error),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              '⚠️ Configura la URL del backend y el token en Ajustes.',
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                color: theme.colorScheme.onErrorContainer,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                          const Icon(Icons.chevron_right, size: 20),
+                        ],
+                      ),
                     ),
                   ),
-                const SizedBox(height: 12),
+
+                // Botones principales de sincronización
                 Wrap(
                   spacing: 8,
                   runSpacing: 8,
                   children: [
                     FilledButton.icon(
                       onPressed: _running ? null : () => _run(const [SyncTask.all]),
-                      icon: const Icon(Icons.sync),
+                      icon: const Icon(Icons.sync, size: 18),
                       label: const Text('Sync completo'),
                     ),
                     OutlinedButton.icon(
                       onPressed: _running ? null : () => _run(const [SyncTask.home]),
-                      icon: const Icon(Icons.home),
-                      label: const Text('Solo home'),
+                      icon: const Icon(Icons.home, size: 18),
+                      label: const Text('Home GNULA'),
                     ),
                     OutlinedButton.icon(
                       onPressed: _running ? null : () => _runKind(SyncTask.movies, 'Películas'),
-                      icon: const Icon(Icons.movie),
+                      icon: const Icon(Icons.movie, size: 18),
                       label: const Text('Películas'),
                     ),
                     OutlinedButton.icon(
                       onPressed: _running ? null : () => _runKind(SyncTask.series, 'Series'),
-                      icon: const Icon(Icons.live_tv),
+                      icon: const Icon(Icons.live_tv, size: 18),
                       label: const Text('Series'),
                     ),
+                    // Botón único para Anime: sincroniza el Home Anime (JKAnime + Latanime) directamente
                     OutlinedButton.icon(
-                      onPressed: _running ? null : () => _runKind(SyncTask.anime, 'Anime'),
-                      icon: const Icon(Icons.animation),
+                      onPressed: _running ? null : () => _run(const [SyncTask.anime]),
+                      icon: const Icon(Icons.animation, size: 18),
                       label: const Text('Anime'),
                     ),
-                    OutlinedButton.icon(
-                      onPressed: _running ? null : _syncAnimeHome,
-                      icon: const Icon(Icons.movie_filter),
-                      label: const Text('Home Anime (JKAnime)'),
-                    ),
+                    if (_resumable)
+                      FilledButton.tonalIcon(
+                        onPressed: _running ? null : () => _run(const [], resume: true),
+                        icon: const Icon(Icons.play_arrow, size: 18),
+                        label: const Text('Continuar'),
+                      ),
                   ],
                 ),
-                if (_resumable)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 8),
-                    child: FilledButton.icon(
-                      onPressed: _running ? null : () => _run(const [], resume: true),
-                      icon: const Icon(Icons.play_arrow),
-                      label: const Text('Continuar donde quedó'),
-                    ),
-                  ),
-                const SizedBox(height: 4),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  dense: true,
-                  value: _keepAlive,
-                  onChanged: _setKeepAlive,
-                  title: const Text('Mantener activo en segundo plano'),
-                  subtitle: const Text('Notificación fija para que Android no mate el proceso'),
-                ),
-                const SizedBox(height: 8),
-                Text('SINCRONIZACIÓN AUTOMÁTICA', style: theme.textTheme.labelLarge),
-                Text(
-                  'Corre en segundo plano (aunque la app esté cerrada). Con la notificación puesta, Android permite el trabajo; el push del backend también dispara estos scrapeos.',
-                  style: theme.textTheme.bodySmall,
-                ),
-                for (final job in widget.config.autoJobs) ...[
-                  Builder(
-                    builder: (context) {
-                      final schedule = widget.config.autoSchedules[job]!;
-                      final next = schedule.enabled ? '· próxima ${_nextIn(schedule)}' : '';
-                      return SwitchListTile(
-                        contentPadding: EdgeInsets.zero,
-                        dense: true,
-                        value: schedule.enabled,
-                        onChanged: (value) => _toggleSchedule(schedule, value),
-                        title: Text(schedule.label),
-                        subtitle: Text(
-                          'cada ${_fmtInterval(schedule.intervalMinutes)} $next\n'
-                          '${schedule.options.pages} pág · replace ${schedule.options.replace ? 'sí' : 'no'} · content ${schedule.options.fetchContent ? 'sí' : 'no'}',
+
+                // Indicador de progreso activo
+                if (_running) ...[
+                  const SizedBox(height: 12),
+                  LinearProgressIndicator(value: _total > 0 ? _done / _total : null),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          _currentStep.isNotEmpty ? _currentStep : 'Procesando...',
+                          style: theme.textTheme.bodySmall?.copyWith(fontWeight: FontWeight.bold),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
-                        secondary: SizedBox(
-                          width: 32,
-                          child: TextButton(
-                            onPressed: () => _openSchedule(schedule),
-                            child: const Icon(Icons.settings, size: 18),
-                          ),
-                        ),
-                      );
-                    },
+                      ),
+                      if (_total > 0)
+                        Text('$_done/$_total  ·  $_saved guardados', style: theme.textTheme.bodySmall),
+                    ],
                   ),
                 ],
-                const Divider(height: 8),
-                if (_serviceActive)
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: TextButton.icon(
-                      onPressed: _stop,
-                      icon: const Icon(Icons.stop_circle_outlined, size: 18),
-                      label: const Text('Detener servicio'),
+
+                const SizedBox(height: 4),
+
+                // Sección desplegable para automatización y segundo plano
+                Theme(
+                  data: theme.copyWith(dividerColor: Colors.transparent),
+                  child: ExpansionTile(
+                    tilePadding: EdgeInsets.zero,
+                    dense: true,
+                    title: Text(
+                      'Sincronización automática ($activeSchedulesCount activas)',
+                      style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+                    ),
+                    subtitle: Text(
+                      _keepAlive ? 'Servicio persistente activo' : 'Toca para programar intervalos automáticos',
+                      style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+                    ),
+                    children: [
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        dense: true,
+                        value: _keepAlive,
+                        onChanged: _setKeepAlive,
+                        title: const Text('Mantener activo en segundo plano'),
+                        subtitle: const Text('Notificación fija para que Android no detenga la CPU'),
+                      ),
+                      for (final job in AppConfig.autoJobs) ...[
+                        Builder(
+                          builder: (context) {
+                            final schedule = widget.config.autoSchedules[job]!;
+                            final next = schedule.enabled ? '· próxima ${_nextIn(schedule)}' : '';
+                            return SwitchListTile(
+                              contentPadding: EdgeInsets.zero,
+                              dense: true,
+                              value: schedule.enabled,
+                              onChanged: (value) => _toggleSchedule(schedule, value),
+                              title: Text(schedule.label),
+                              subtitle: Text('cada ${_fmtInterval(schedule.intervalMinutes)} $next'),
+                              secondary: IconButton(
+                                icon: const Icon(Icons.settings, size: 20),
+                                onPressed: () => _openSchedule(schedule),
+                              ),
+                            );
+                          },
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          const Divider(height: 1),
+
+          // Encabezado de la barra de logs
+          Container(
+            color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+            child: Row(
+              children: [
+                const Icon(Icons.terminal, size: 18),
+                const SizedBox(width: 8),
+                Text(
+                  'LOG DE EJECUCIÓN',
+                  style: theme.textTheme.labelMedium?.copyWith(fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.primaryContainer,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    '${_log.length}',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.onPrimaryContainer,
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
-                if (_running) ...[
-                  const SizedBox(height: 8),
-                  LinearProgressIndicator(value: _total > 0 ? _done / _total : null),
-                  const SizedBox(height: 8),
-                  Text(_currentStep, style: theme.textTheme.bodySmall),
-                  Text('$_done/$_total detalles · $_saved guardados', style: theme.textTheme.bodySmall),
+                ),
+                const Spacer(),
+                if (_log.isNotEmpty) ...[
+                  TextButton.icon(
+                    style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+                    onPressed: () => setState(() => _log.clear()),
+                    icon: const Icon(Icons.clear_all, size: 16),
+                    label: const Text('Limpiar'),
+                  ),
+                  const SizedBox(width: 4),
+                  Builder(
+                    builder: (btnContext) => TextButton.icon(
+                      style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+                      onPressed: () async {
+                        final messenger = ScaffoldMessenger.of(btnContext);
+                        await Clipboard.setData(ClipboardData(text: _log.join('\n')));
+                        messenger.showSnackBar(
+                          const SnackBar(content: Text('Log copiado al portapapeles')),
+                        );
+                      },
+                      icon: const Icon(Icons.copy, size: 16),
+                      label: const Text('Copiar'),
+                    ),
+                  ),
                 ],
               ],
             ),
           ),
-          const Divider(height: 1),
-          Expanded(child: _buildLog(theme)),
+
+          // Área de registros (Log View)
+          Expanded(child: _buildLogView(theme)),
         ],
       ),
     );
   }
 
-  Widget _buildLog(ThemeData theme) {
+  Widget _buildLogView(ThemeData theme) {
     if (_log.isEmpty) {
       return Center(
-        child: Text('El log aparecerá aquí.',
-            style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline)),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.receipt_long_outlined, size: 48, color: theme.colorScheme.outline),
+              const SizedBox(height: 12),
+              Text(
+                'Los registros de sincronización aparecerán aquí.',
+                style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.outline),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Presiona «Anime» o cualquier botón superior para iniciar.',
+                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline.withValues(alpha: 0.7)),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
       );
     }
-    return Column(
-      children: [
-        Align(
-          alignment: Alignment.centerRight,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            child: TextButton.icon(
-              onPressed: () async {
-                await Clipboard.setData(ClipboardData(text: _log.join('\n')));
-                if (mounted) {
-                  ScaffoldMessenger.of(context)
-                      .showSnackBar(const SnackBar(content: Text('Log copiado al portapapeles')));
-                }
-              },
-              icon: const Icon(Icons.copy, size: 18),
-              label: const Text('Copiar log'),
+
+    return Container(
+      color: Colors.black.withValues(alpha: 0.2),
+      child: ListView.builder(
+        controller: _scroll,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        itemCount: _log.length,
+        itemBuilder: (context, index) {
+          final line = _log[index];
+          Color? textColor;
+          if (line.contains('❌') || line.contains('Error') || line.contains('falló')) {
+            textColor = Colors.redAccent.shade100;
+          } else if (line.contains('✅') || line.contains('completad') || line.contains('guardado')) {
+            textColor = Colors.greenAccent.shade200;
+          } else if (line.contains('⚠️') || line.contains('aviso')) {
+            textColor = Colors.amberAccent.shade100;
+          } else if (line.contains('═══') || line.contains('▶')) {
+            textColor = Colors.cyanAccent.shade100;
+          }
+
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2),
+            child: SelectableText(
+              line,
+              style: TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 12.5,
+                color: textColor ?? theme.textTheme.bodySmall?.color,
+                height: 1.35,
+              ),
             ),
-          ),
-        ),
-        Expanded(
-          child: ListView.builder(
-            controller: _scroll,
-            padding: const EdgeInsets.all(12),
-            itemCount: _log.length,
-            itemBuilder: (context, index) => SelectableText(_log[index],
-                style: theme.textTheme.bodySmall),
-          ),
-        ),
-      ],
+          );
+        },
+      ),
     );
   }
 }

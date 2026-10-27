@@ -22,7 +22,7 @@ typedef LogFn = void Function(String message);
 const List<int> _gnrdXorKey = [103, 78, 55, 100]; // 'gN7d'
 const String _defaultUa =
     'Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36';
-const int maxEpisodesScrape = 60;
+const int maxEpisodesScrape = 15;
 
 class GnulaClient {
   static const String _discoverUrl = 'https://dominiosgnulahd.com';
@@ -144,6 +144,17 @@ class GnulaClient {
 
     final response = await request.close().timeout(const Duration(seconds: 20));
     _storeCookies(uri.host, response.headers[HttpHeaders.setCookieHeader] ?? const []);
+    if (response.isRedirect || (response.statusCode >= 301 && response.statusCode <= 308)) {
+      final location = response.headers.value(HttpHeaders.locationHeader);
+      if (location != null && location.isNotEmpty) {
+        final redirectUri = uri.resolve(location);
+        if (redirectUri.host != uri.host && redirectUri.host.contains('gnulahd.')) {
+          _activeBase = '${redirectUri.scheme}://${redirectUri.host}';
+          _info('redirección detectada, base actualizada a: $_activeBase');
+        }
+        return _get(redirectUri.toString(), referer: url);
+      }
+    }
     final body = await response.transform(utf8.decoder).join().timeout(const Duration(seconds: 20));
     if (response.statusCode != 200) {
       throw HttpException('HTTP ${response.statusCode} para $url');
@@ -153,8 +164,8 @@ class GnulaClient {
 
   bool isUsable(String html) {
     final text = html.trim();
-    if (text.length < 10000) return false;
-    return RegExp(r'gnrd-card|gnrdHero|gnrd-grid|gnrd-pg-seo|wp-content', caseSensitive: false).hasMatch(text);
+    if (text.length < 5000) return false;
+    return RegExp(r'gnrd-card|gnrdHero|gnrd-row|gnrd-grid|gnrd-pg-seo|wp-content|gnrd-fi-|gnrdPid', caseSensitive: false).hasMatch(text);
   }
 
   Future<String> _fetchFromHost(String base, String pathAndQuery, {String? referer}) async {
@@ -218,6 +229,15 @@ class GnulaClient {
 
   Future<String> fetchPage(String pathAndQuery) async {
     await ensureBase();
+    String cleanPath = pathAndQuery;
+    if (cleanPath.startsWith('http://') || cleanPath.startsWith('https://')) {
+      final uri = Uri.tryParse(cleanPath);
+      if (uri != null) {
+        cleanPath = uri.hasQuery ? '${uri.path}?${uri.query}' : uri.path;
+      }
+    }
+    if (!cleanPath.startsWith('/')) cleanPath = '/$cleanPath';
+
     var candidates = await _candidateDomains();
     if (candidates.isEmpty) {
       // Puede ocurrir si el host principal (y todos) se marcaron muertos en la
@@ -227,7 +247,7 @@ class GnulaClient {
     Object? lastError;
     for (final base in candidates) {
       try {
-        final html = await _fetchFromHost(base, pathAndQuery, referer: base);
+        final html = await _fetchFromHost(base, cleanPath, referer: base);
         if (base != _activeBase) {
           _info('promovido tras fallo del principal: $base');
           _activeBase = base;
@@ -267,7 +287,13 @@ class GnulaClient {
   Future<List<String>> _candidateDomains({bool includeDead = false}) async {
     final discovered = await _discoverDomains();
     final list = <String>[];
-    for (final raw in [_activeBase, ...staticDomains, ...discovered]) {
+    const defaultFallbacks = [
+      'https://ww3.gnulahd.nu',
+      'https://gnulahd.click',
+      'https://gnulahd.bid',
+      'https://gnulahd.nu',
+    ];
+    for (final raw in [_activeBase, ...staticDomains, ...defaultFallbacks, ...discovered]) {
       final domain = raw.trim().replaceAll(RegExp(r'/+$'), '');
       if (domain.isEmpty || domain.contains('dominiosgnulahd.com') || list.contains(domain)) continue;
       try {
@@ -325,31 +351,33 @@ class GnulaClient {
 
   List<VideoLanguage> _toVideoLanguages(Map<String, dynamic> data) {
     final raw = data['langs'];
-    if (raw is! Map) return const [];
+    final list = raw is Map ? raw.values : (raw is List ? raw : const []);
+    if (list.isEmpty) return const [];
     final result = <VideoLanguage>[];
-    for (final lang in raw.values) {
+    for (final lang in list) {
       if (lang is! Map) continue;
       final label = lang['label'];
       final servers = lang['servers'];
       if (label is! String || label.isEmpty || servers is! List) continue;
-      final list = <VideoServer>[];
+      final serverList = <VideoServer>[];
       for (final server in servers) {
         if (server is! Map) continue;
         final src = server['src'];
         final title = server['title'];
         if (src is! String || src.isEmpty || _isUnsupportedVideoHost(src)) continue;
-        list.add(VideoServer(name: title is String && title.isNotEmpty ? title : 'Servidor', url: src));
+        serverList.add(VideoServer(name: title is String && title.isNotEmpty ? title : 'Servidor', url: src));
       }
-      if (list.isNotEmpty) result.add(VideoLanguage(language: label, servers: list));
+      if (serverList.isNotEmpty) result.add(VideoLanguage(language: label, servers: serverList));
     }
     return result;
   }
 
   List<DownloadLink> _toDownloadLinks(Map<String, dynamic> data) {
     final dl = data['dl'];
-    if (dl is! List) return const [];
+    final list = dl is List ? dl : (dl is Map ? dl.values : const []);
+    if (list.isEmpty) return const [];
     final result = <DownloadLink>[];
-    for (final entry in dl) {
+    for (final entry in list) {
       if (entry is! Map) continue;
       final name = entry['name'];
       final url = entry['url'];
@@ -418,10 +446,14 @@ class GnulaClient {
     final type = isAnime ? 'anime' : isSeries ? 'series' : 'movie';
 
     final logoImg = el.querySelector('.gnrd-hero-logo');
-    final title = logoImg?.attributes['alt']?.trim() ?? el.querySelector('.gnrd-hero-title')?.text.trim() ?? '';
+    final title = (logoImg?.attributes['alt']?.trim().isNotEmpty == true)
+        ? logoImg!.attributes['alt']!.trim()
+        : (el.querySelector('.gnrd-hero-title')?.text.trim() ??
+            el.querySelector('h1, h2, h3')?.text.trim() ??
+            '');
     if (title.isEmpty) return null;
 
-    final href = el.querySelector('a.gnrd-btn-play')?.attributes['href'] ?? '';
+    final href = el.querySelector('a.gnrd-btn-play, a[href*="/ver/"], a[href*="/pelicula/"], a[href*="/serie/"]')?.attributes['href'] ?? '';
     final slug = _extractSlug(href).isNotEmpty ? _extractSlug(href) : _slugify(title);
     final prefix = type == 'anime' ? 'gani_' : type == 'movie' ? 'gmov_' : 'gser_';
 
@@ -433,7 +465,8 @@ class GnulaClient {
     final year = int.tryParse(metaSpans.isNotEmpty ? metaSpans.first : '') ?? 0;
     final genres = el.querySelectorAll('.gnrd-hero-meta .gnrd-genre').map((g) => g.text.trim()).toList();
     final synopsis = el.querySelector('.gnrd-hero-syn')?.text.trim() ?? '';
-    final poster = logoImg?.attributes['src'];
+    var poster = logoImg?.attributes['src'];
+    if (poster != null && poster.startsWith('//')) poster = 'https:$poster';
 
     return BannerItem(
       id: '$prefix$slug',
@@ -446,6 +479,7 @@ class GnulaClient {
       type: type,
       genres: genres.isNotEmpty ? genres : null,
       description: synopsis.isNotEmpty ? synopsis : null,
+      url: href.isNotEmpty ? href : null,
     );
   }
 
@@ -458,7 +492,7 @@ class GnulaClient {
     final prefix = titleType == 'anime' ? 'gani_' : titleType == 'series' ? 'gser_' : 'gmov_';
 
     final items = <MediaItem>[];
-    for (final card in el.querySelectorAll('.gnrd-rail > a.gnrd-card')) {
+    for (final card in el.querySelectorAll('.gnrd-rail > a.gnrd-card, .gnrd-grid > a.gnrd-card, a.gnrd-card')) {
       final item = _parseGnrdCard(card, type: titleType, prefix: prefix);
       if (item != null) items.add(item);
     }
@@ -468,7 +502,7 @@ class GnulaClient {
       title: title,
       type: sectionType,
       items: items,
-      seeAllRoute: el.querySelector('.gnrd-row-head a.gnrd-viewall')?.attributes['href'] ?? '',
+      seeAllRoute: el.querySelector('.gnrd-row-head a.gnrd-viewall, a.gnrd-viewall')?.attributes['href'] ?? '',
       totalItems: items.length,
     );
   }
@@ -519,7 +553,34 @@ class GnulaClient {
     final isSeries = prefix != 'gmov_';
     final slug = item.id.substring(prefix.length);
 
-    final html = await fetchPage('/ver/$slug/');
+    String? html;
+    String actualPath = '/ver/$slug/';
+    if (item.url != null && item.url!.isNotEmpty) {
+      try {
+        final res = await fetchPage(item.url!);
+        if (res.length > 500) {
+          html = res;
+          actualPath = item.url!;
+        }
+      } catch (_) {}
+    }
+    if (html == null) {
+      final candidates = ['/ver/$slug/', '/pelicula/$slug/', '/serie/$slug/', '/anime/$slug/'];
+      for (final p in candidates) {
+        try {
+          final res = await fetchPage(p);
+          if (res.length > 500) {
+            html = res;
+            actualPath = p;
+            break;
+          }
+        } catch (_) {}
+      }
+    }
+    if (html == null) {
+      throw Exception('Detalle no encontrado para ${item.id}');
+    }
+
     final doc = html_parser.parse(html);
     if ((doc.body?.text ?? '').trim().length < 200) {
       throw Exception('Detalle inválido para ${item.id}');
@@ -564,11 +625,13 @@ class GnulaClient {
       genres: genres.isNotEmpty ? genres : const ['Acción'],
       cast: cast.isNotEmpty ? cast : const [CastMember(name: 'Reparto Principal')],
       type: item.type,
+      url: actualPath,
     );
 
     final vars = extractPlayerVars(html);
     if (vars != null && vars.pid != null && vars.tok != null) {
-      final player = await _fetchRawPlayer(vars.pid!, vars.tok!, '$_activeBase/ver/$slug/');
+      final referer = actualPath.startsWith('http') ? actualPath : '$_activeBase$actualPath';
+      final player = await _fetchRawPlayer(vars.pid!, vars.tok!, referer);
       final videos = _toVideoLanguages(player);
       if (videos.isNotEmpty) detail.videos = videos;
       final downloads = _toDownloadLinks(player);
@@ -636,7 +699,8 @@ class GnulaClient {
           final html = await fetchPage(entry.url);
           final vars = extractPlayerVars(html);
           if (vars == null || vars.pid == null || vars.tok == null) return;
-          final videos = await fetchPlayerVideos(pid: vars.pid!, tok: vars.tok!, referer: entry.url);
+          final epReferer = entry.url.startsWith('http') ? entry.url : '$_activeBase${entry.url}';
+          final videos = await fetchPlayerVideos(pid: vars.pid!, tok: vars.tok!, referer: epReferer);
           if (videos.isNotEmpty) entry.episode.videos = videos;
         } catch (_) {
           // episodio sin player: se omite
@@ -674,12 +738,19 @@ class GnulaClient {
       cardType = badge.contains('anime') ? 'anime' : badge.contains('serie') ? 'series' : 'movie';
     }
 
-    final title = el.attributes['title']?.trim() ?? el.querySelector('.gnrd-card-title')?.text.trim() ?? '';
-    if (title.isEmpty) return null;
+    final title = el.attributes['title']?.trim() ??
+        el.querySelector('.gnrd-card-title, h2, h3, h4')?.text.trim() ??
+        slug;
 
-    final poster = el.querySelector('.gnrd-card-art img')?.attributes['src'] ?? el.querySelector('img')?.attributes['src'];
-    final rating = _parseRating(el.querySelector('.gnrd-rating')?.text ?? '');
-    final yearText = el.querySelector('.gnrd-card-metaline span:last-child')?.text.trim() ?? '';
+    var poster = el.querySelector('.gnrd-card-art img, img')?.attributes['data-src'] ??
+        el.querySelector('.gnrd-card-art img, img')?.attributes['data-lazy-src'] ??
+        el.querySelector('.gnrd-card-art img, img')?.attributes['data-original'] ??
+        el.querySelector('.gnrd-card-art img, img')?.attributes['src'];
+    if (poster != null && poster.startsWith('//')) poster = 'https:$poster';
+    if (poster != null && poster.startsWith('/')) poster = '$_activeBase$poster';
+
+    final rating = _parseRating(el.querySelector('.gnrd-rating, .gnrd-m-rating')?.text ?? '');
+    final yearText = el.querySelector('.gnrd-card-metaline span:last-child, .gnrd-m-year')?.text.trim() ?? '';
     final year = int.tryParse(yearText) ?? 0;
     final genresText = el.querySelector('.gnrd-card-genres')?.text.trim() ?? '';
 
@@ -690,6 +761,7 @@ class GnulaClient {
       rating: rating == 0 ? null : rating,
       year: year == 0 ? null : year,
       type: cardType,
+      url: href.isNotEmpty ? href : null,
     );
     if (genresText.isNotEmpty) {
       item.genres = genresText.split(RegExp(r'[•·|]')).map((g) => g.trim()).where((g) => g.isNotEmpty).toList();
@@ -740,8 +812,16 @@ class GnulaClient {
   }
 
   String _extractSlug(String href) {
-    final match = RegExp(r'/ver/([^/]+)/?$').firstMatch(href);
-    return match == null ? '' : match.group(1)!;
+    if (href.isEmpty) return '';
+    try {
+      final clean = href.split('?').first.split('#').first.replaceAll(RegExp(r'/+$'), '');
+      final match = RegExp(r'/(?:ver|pelicula|serie|series|anime)/([^/]+)$', caseSensitive: false).firstMatch(clean);
+      if (match != null) return match.group(1)!;
+      final parts = clean.split('/').where((s) => s.isNotEmpty).toList();
+      return parts.isNotEmpty ? parts.last : '';
+    } catch (_) {
+      return '';
+    }
   }
 
   String _slugify(String text) {
